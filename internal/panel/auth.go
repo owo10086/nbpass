@@ -96,8 +96,8 @@ func (p *Panel) login(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &body) {
 		return
 	}
-	if len(body.Password) > 72 {
-		problem(w, 401, "密码错误")
+	source, ok := p.admitLogin(w, r)
+	if !ok {
 		return
 	}
 	if !p.passwordSlot(w) {
@@ -109,20 +109,26 @@ func (p *Panel) login(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "存储暂不可用")
 		return
 	}
-	if !p.deps.Passwords.Verify(hash, body.Password) {
-		problem(w, 401, "密码错误")
-		return
-	}
+	valid := len(body.Password) <= 72 && p.deps.Passwords.Verify(hash, body.Password)
 	token := make([]byte, 32)
-	if _, err := io.ReadFull(p.deps.Random, token); err != nil {
-		problem(w, 500, "无法创建会话")
-		return
+	if valid {
+		if _, err := io.ReadFull(p.deps.Random, token); err != nil {
+			problem(w, 500, "无法创建会话")
+			return
+		}
 	}
 	value := base64.RawURLEncoding.EncodeToString(token)
-	digest := sha256.Sum256([]byte(value))
 	now := p.deps.Clock.Now()
-	if _, err := p.db.ExecContext(r.Context(), "INSERT INTO sessions(token_hash, created_at, last_seen_at) VALUES(?, ?, ?)", digest[:], now.Unix(), now.Unix()); err != nil {
+	authenticated, until, err := p.finishLogin(r.Context(), source, hash, value, valid)
+	if err != nil {
 		problem(w, 503, "存储暂不可用")
+		return
+	}
+	if p.lockedLogin(w, until) {
+		return
+	}
+	if !authenticated {
+		problem(w, 401, "密码错误或密码已变更")
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: 7 * 24 * 60 * 60, Expires: now.Add(7 * 24 * time.Hour)})
