@@ -6,18 +6,20 @@ import (
 	"time"
 )
 
-// ResourceLimits 为直连路径的节点级预算；零值使用默认值，不表示无限制。
+// ResourceLimits 为直连与隧道共享的节点级预算；零值使用默认值，不表示无限制。
 type ResourceLimits struct {
-	MaxConnections        int
-	MaxConnectionsPerRule int
-	MaxPendingDials       int
-	DialTimeout           time.Duration
-	IdleTimeout           time.Duration
+	MaxConnections         int
+	MaxConnectionsPerRule  int
+	MaxPendingDials        int
+	DialTimeout            time.Duration
+	IdleTimeout            time.Duration
+	MaxTunnelStreams       int
+	TunnelHandshakeTimeout time.Duration
 }
 
 func (l ResourceLimits) Validate() error {
-	if l.MaxConnections < 0 || l.MaxConnectionsPerRule < 0 || l.MaxPendingDials < 0 || l.DialTimeout < 0 || l.IdleTimeout < 0 {
-		return errors.New("直连资源上限和超时不能为负数；零值使用默认值")
+	if l.MaxConnections < 0 || l.MaxConnectionsPerRule < 0 || l.MaxPendingDials < 0 || l.DialTimeout < 0 || l.IdleTimeout < 0 || l.MaxTunnelStreams < 0 || uint64(l.MaxTunnelStreams) > uint64(^uint32(0)) || l.TunnelHandshakeTimeout < 0 {
+		return errors.New("资源上限和超时不能为负数，隧道流上限不能超出 uint32；零值使用默认值")
 	}
 	return nil
 }
@@ -38,10 +40,16 @@ func (l ResourceLimits) defaults() ResourceLimits {
 	if l.IdleTimeout <= 0 {
 		l.IdleTimeout = 2 * time.Hour
 	}
+	if l.MaxTunnelStreams <= 0 {
+		l.MaxTunnelStreams = 1024
+	}
+	if l.TunnelHandshakeTimeout <= 0 {
+		l.TunnelHandshakeTimeout = 3 * time.Second
+	}
 	return l
 }
 
-// resourceLimiter 与具体传输、探针计量分离，票 11 可复用同一预算管理器。
+// resourceLimiter 与具体传输、探针计量分离。
 // 准入同时预占业务和待拨号槽，不排队、不为被拒连接创建协程。
 type resourceLimiter struct {
 	mu                   sync.Mutex
@@ -91,8 +99,10 @@ func (l *resourceLease) release() {
 		l.pending = false
 	}
 	l.owner.connections--
-	l.owner.rules[l.rule]--
-	if l.owner.rules[l.rule] == 0 {
-		delete(l.owner.rules, l.rule)
+	if l.rule != "" {
+		l.owner.rules[l.rule]--
+		if l.owner.rules[l.rule] == 0 {
+			delete(l.owner.rules, l.rule)
+		}
 	}
 }

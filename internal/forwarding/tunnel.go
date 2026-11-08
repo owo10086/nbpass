@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/hashicorp/yamux"
+	yamux "github.com/libp2p/go-yamux/v5"
 	"google.golang.org/protobuf/proto"
 	"nbpass/internal/controlpb"
 )
@@ -70,17 +70,11 @@ func readTunnelMessage(r io.Reader, v any) error {
 	}
 	return json.Unmarshal(data, v)
 }
-func yamuxConfig() *yamux.Config {
-	c := yamux.DefaultConfig()
-	c.LogOutput = io.Discard
-	c.StreamOpenTimeout = 3 * time.Second
-	c.ConnectionWriteTimeout = 3 * time.Second
-	return c
-}
 
 // 每个入口—出口复用一个 WSS/yamux 会话。变更只淘汰对应出口会话。
 type tunnelClient struct {
 	mu       sync.Mutex
+	openMu   sync.Mutex
 	endpoint *controlpb.TunnelEndpoint
 	session  *yamux.Session
 	engine   *Engine
@@ -135,14 +129,17 @@ func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
 		ws.CloseNow()
 		return nil, errors.New("隧道协议不兼容")
 	}
-	conn := websocket.NetConn(context.Background(), ws, websocket.MessageBinary)
+	conn := newTunnelCarrier(context.Background(), ws)
 	ok := false
 	defer func() {
 		if !ok {
-			ws.CloseNow()
+			conn.Close()
 		}
 	}()
-	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	deadline, _ := ctx.Deadline()
+	conn.SetDeadline(deadline)
+	stopAuth := context.AfterFunc(ctx, func() { ws.CloseNow() })
+	defer stopAuth()
 	// websocket.Dial 已完成完整 TLS 身份验证；凭据此时才进入加密通道。
 	if err := writeTunnelMessage(conn, tunnelAuth{Version: 1, EntryID: ep.EntryId, Credential: ep.Credential}); err != nil {
 		return nil, err
@@ -151,8 +148,11 @@ func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
 	if err := readTunnelMessage(conn, &result); err != nil || !result.OK {
 		return nil, errors.New("入口—出口凭据被拒绝")
 	}
+	if !stopAuth() || ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	conn.SetDeadline(time.Time{})
-	session, err := yamux.Client(conn, yamuxConfig())
+	session, err := yamux.Client(conn, c.engine.yamuxClientConfig(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -163,22 +163,22 @@ func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
 	return session, nil
 }
 func (c *tunnelClient) dial(ctx context.Context, ruleID string) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := c.engine.tunnelTimeout(ctx, c.engine.resources.limits.DialTimeout)
 	defer cancel()
-	handshake, stop := context.WithTimeout(ctx, 3*time.Second)
+	handshake, stop := c.engine.tunnelTimeout(ctx, c.engine.resources.limits.TunnelHandshakeTimeout)
 	session, err := c.getSession(handshake)
 	stop()
 	if err != nil {
 		return nil, err
 	}
-	stream, err := session.OpenStream()
+	stream, err := c.openStream(ctx, session)
 	if err != nil {
 		return nil, err
 	}
 	ok := false
 	defer func() {
 		if !ok {
-			stream.Close()
+			(&tunnelStream{Stream: stream, engine: c.engine}).Close()
 		}
 	}()
 	deadline, _ := ctx.Deadline()
@@ -197,15 +197,23 @@ func (c *tunnelClient) dial(ctx context.Context, ruleID string) (net.Conn, error
 	}
 	stream.SetDeadline(time.Time{})
 	ok = true
-	return &tunnelStream{Stream: stream}, nil
+	return &tunnelStream{Stream: stream, engine: c.engine}, nil
 }
 
-// yamux.Close 只关闭写方向；CloseWrite 保持反向读取，Close 同时解除本地读阻塞。
-// 强制流重置及完整取消清理由票 11 在此接续。
-type tunnelStream struct{ *yamux.Stream }
+// CloseWrite 保留反向数据，Close 用 RST 立即回收本地与远端流。
+type tunnelStream struct {
+	*yamux.Stream
+	engine    *Engine
+	closeOnce sync.Once
+	closeErr  error
+}
 
-func (s *tunnelStream) CloseWrite() error { return s.Stream.Close() }
-func (s *tunnelStream) Close() error      { s.Stream.SetReadDeadline(time.Now()); return s.Stream.Close() }
+func (s *tunnelStream) CloseWrite() error { return s.control(s.Stream.CloseWrite) }
+func (s *tunnelStream) Close() error {
+	// Reset 会先唤醒读写、再删除流槽；并发关闭必须等同一次完整清理结束。
+	s.closeOnce.Do(func() { s.closeErr = s.control(s.Stream.Reset) })
+	return s.closeErr
+}
 
 type tunnelServer struct {
 	engine      *Engine
@@ -231,7 +239,7 @@ func (e *Engine) startTunnelServer(config *controlpb.TunnelServer) (*tunnelServe
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &tunnelServer{engine: e, config: proto.Clone(config).(*controlpb.TunnelServer), listener: listener, ctx: ctx, cancel: cancel, connections: map[net.Conn]struct{}{}}
-	s.http = &http.Server{Handler: http.HandlerFunc(s.serveHTTP), ReadHeaderTimeout: 3 * time.Second, ErrorLog: log.New(io.Discard, "", 0), TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12, Time: e.deps.Now}}
+	s.http = &http.Server{Handler: http.HandlerFunc(s.serveHTTP), ReadHeaderTimeout: e.resources.limits.TunnelHandshakeTimeout, ErrorLog: log.New(io.Discard, "", 0), TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12, Time: e.deps.Now}}
 	go s.http.Serve(tls.NewListener(listener, s.http.TLSConfig))
 	return s, nil
 }
@@ -292,7 +300,8 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if ws.Subprotocol() != tunnelSubprotocol {
 		return
 	}
-	conn := websocket.NetConn(s.ctx, ws, websocket.MessageBinary)
+	conn := newTunnelCarrier(s.ctx, ws)
+	defer conn.Close()
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
@@ -302,7 +311,11 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	s.wg.Add(1)
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); delete(s.connections, conn); s.mu.Unlock(); s.wg.Done() }()
-	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	authCtx, stopAuthTimer := s.engine.tunnelTimeout(s.ctx, s.engine.resources.limits.TunnelHandshakeTimeout)
+	defer stopAuthTimer()
+	stopAuth := context.AfterFunc(authCtx, func() { ws.CloseNow() })
+	defer stopAuth()
+	conn.SetDeadline(time.Now().Add(s.engine.resources.limits.TunnelHandshakeTimeout))
 	var auth tunnelAuth
 	if err := readTunnelMessage(conn, &auth); err != nil || auth.Version != 1 || s.authorized(auth.EntryID, auth.Credential, "") == nil {
 		writeTunnelMessage(conn, tunnelResult{})
@@ -311,8 +324,12 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if err := writeTunnelMessage(conn, tunnelResult{OK: true}); err != nil {
 		return
 	}
+	if !stopAuth() || authCtx.Err() != nil {
+		return
+	}
+	stopAuthTimer()
 	conn.SetDeadline(time.Time{})
-	session, err := yamux.Server(conn, yamuxConfig())
+	session, err := yamux.Server(conn, s.engine.yamuxConfig(), nil)
 	if err != nil {
 		return
 	}
@@ -335,43 +352,20 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
+		var lease *resourceLease
+		if auth.EntryID != s.engine.deps.NodeID {
+			lease = s.engine.resources.reserveTunnel()
+			if lease == nil {
+				(&tunnelStream{Stream: stream, engine: s.engine}).Close()
+				continue
+			}
+		}
 		streams.Add(1)
-		go func() { defer streams.Done(); s.serveStream(ctx, &tunnelStream{Stream: stream}, auth) }()
+		go func() {
+			defer streams.Done()
+			s.serveLimitedStream(ctx, &tunnelStream{Stream: stream, engine: s.engine}, auth, lease)
+		}()
 	}
-}
-func (s *tunnelServer) serveStream(ctx context.Context, stream net.Conn, auth tunnelAuth) {
-	defer stream.Close()
-	stream.SetDeadline(time.Now().Add(10 * time.Second))
-	stop := context.AfterFunc(ctx, func() { stream.Close() })
-	defer stop()
-	var request tunnelRequest
-	if err := readTunnelMessage(stream, &request); err != nil || request.RuleID == "" {
-		return
-	}
-	rule := s.authorized(auth.EntryID, auth.Credential, request.RuleID)
-	if rule == nil {
-		writeTunnelMessage(stream, tunnelResult{})
-		return
-	}
-	// 本机入口已计量的流不重复计数；其他入口交来的业务在出口计一次。
-	if auth.EntryID != s.engine.deps.NodeID {
-		s.engine.businessConnections.Add(1)
-		defer s.engine.businessConnections.Add(^uint64(0))
-	}
-	// 目标只来自出口配置，入口不能指定解析结果或任意地址。
-	target, err := s.engine.dialTarget(ctx, rule)
-	if err != nil {
-		writeTunnelMessage(stream, tunnelResult{})
-		return
-	}
-	defer target.Close()
-	if err := writeTunnelMessage(stream, tunnelResult{OK: true}); err != nil {
-		return
-	}
-	stream.SetDeadline(time.Time{})
-	stopTarget := context.AfterFunc(ctx, func() { target.Close() })
-	defer stopTarget()
-	proxyTCP(stream, target)
 }
 func proxyTCP(client, target net.Conn) {
 	done := make(chan struct{}, 1)
