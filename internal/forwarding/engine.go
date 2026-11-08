@@ -110,7 +110,7 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 	}
 	for _, r := range s.Rules {
 		result := &controlpb.RuleApplyResult{RuleId: r.Id, ApplyError: "配置应用尚未完成"}
-		if current := e.rules[r.Id]; current != nil && proto.Equal(current.config, r) && proto.Equal(current.exit, groups[r.ExitGroupId]) {
+		if current := e.rules[r.Id]; current != nil && proto.Equal(current.config, r) && sameTunnelRoute(current.exit, groups[r.ExitGroupId]) {
 			checkpoint.Rules = append(checkpoint.Rules, r)
 			result.AppliedRevision, result.ApplyError = s.Revision, ""
 		}
@@ -126,7 +126,7 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 		if next != nil {
 			ep = groups[next.ExitGroupId]
 		}
-		if !proto.Equal(current.config, next) || !proto.Equal(current.exit, ep) {
+		if !proto.Equal(current.config, next) || !sameTunnelRoute(current.exit, ep) {
 			current.stop()
 			delete(e.rules, id)
 		}
@@ -138,6 +138,9 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 		failures = append(failures, errors.New(e.tunnelError))
 	}
 	e.applyTunnelClients(endpoints)
+	for _, current := range e.rules {
+		current.exit = groups[current.config.ExitGroupId]
+	}
 	e.results = nil
 	for _, r := range s.Rules {
 		result := &controlpb.RuleApplyResult{RuleId: r.Id}
@@ -179,12 +182,18 @@ func tunnelEndpoints(exitGroups []*controlpb.ExitGroup) (map[string]*controlpb.T
 
 func (e *Engine) applyTunnelClients(endpoints map[string]*controlpb.TunnelEndpoint) {
 	for id, client := range e.tunnelClients {
-		if !proto.Equal(client.endpoint, endpoints[id]) {
+		client.mu.Lock()
+		same := sameTunnelRoute(client.endpoint, endpoints[id])
+		client.mu.Unlock()
+		if !same {
 			client.close()
 			delete(e.tunnelClients, id)
 		}
 	}
 	for id, ep := range endpoints {
+		if e.tunnelClients[id] != nil {
+			e.tunnelClients[id].updateEndpoint(ep)
+		}
 		if e.tunnelClients[id] == nil {
 			e.tunnelClients[id] = &tunnelClient{endpoint: proto.Clone(ep).(*controlpb.TunnelEndpoint), engine: e}
 		}
@@ -358,7 +367,7 @@ func (e *Engine) dialTargetWithin(ctx context.Context, r *controlpb.ForwardRule,
 func (e *Engine) applyTunnelServer(config *controlpb.TunnelServer) error {
 	if e.tunnelServer != nil {
 		old := e.tunnelServer.config
-		if config == nil || old.ListenPort != config.ListenPort || !bytes.Equal(old.CertificatePem, config.CertificatePem) || !bytes.Equal(old.PrivateKeyPem, config.PrivateKeyPem) {
+		if config == nil || old.ListenPort != config.ListenPort || old.ServerName != config.ServerName || old.RotationId == "" && config.RotationId == "" && (!bytes.Equal(old.CertificatePem, config.CertificatePem) || !bytes.Equal(old.PrivateKeyPem, config.PrivateKeyPem)) {
 			e.tunnelServer.close()
 			e.tunnelServer = nil
 		} else {

@@ -13,6 +13,7 @@ message EnrollResponse { string node_id = 1; string token = 2; }
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 message NodeReport {
+  uint32 tunnel_rotation_version = 160;
   // 自测独立补报，只消费自测结果，不推进活性、探针、事件或配置确认。
   bool self_check_only = 90;
   repeated bytes self_check_results = 91;
@@ -134,6 +135,8 @@ enum RuleKind { RULE_KIND_UNSPECIFIED = 0; RULE_KIND_DIRECT = 1; RULE_KIND_TUNNE
 
 // 票 08 使用字段号 40–59；授权代次与确认由票 09 扩展。
 message TunnelEndpoint {
+  string rotation_id = 160;
+  repeated bytes trusted_certificates_pem = 161;
   string node_id = 40;
   string address = 41;
   uint32 port = 42;
@@ -149,6 +152,7 @@ message ExitGroup {
   repeated TunnelEndpoint exits = 42;
 }
 message TunnelPeer {
+  repeated string additional_credentials = 160;
   string entry_id = 40;
   string credential = 41;
 }
@@ -157,6 +161,7 @@ message TunnelGrant {
   ForwardRule rule = 41;
 }
 message TunnelServer {
+  string rotation_id = 160;
   uint32 listen_port = 40;
   TunnelTransport transport = 41;
   string server_name = 42;

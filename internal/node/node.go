@@ -200,7 +200,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 		deps.Forwarding.Clock = deps.Clock
 	}
 	engine := forwarding.NewEngine(deps.Forwarding)
-	report := &controlpb.NodeReport{DnsWatchCapable: true, TunnelAuthorizationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
+	report := &controlpb.NodeReport{DnsWatchCapable: true, TunnelAuthorizationVersion: 1, TunnelRotationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
 	defer func() {
 		engine.Close()
 		if deps.Traffic != nil {

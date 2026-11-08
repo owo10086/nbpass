@@ -42,6 +42,14 @@ func validateTunnelSnapshot(s *controlpb.ConfigSnapshot) error {
 			if err != nil || !AllowedIP(ip, true) {
 				return invalid
 			}
+			if len(ep.TrustedCertificatesPem) > 1 {
+				return invalid
+			}
+			for _, cert := range ep.TrustedCertificatesPem {
+				if _, err := tunnelCertificate(cert, ep.ServerName); err != nil {
+					return err
+				}
+			}
 			if _, err := tunnelCertificate(ep.CertificatePem, ep.ServerName); err != nil {
 				return err
 			}
@@ -70,6 +78,14 @@ func validateTunnelSnapshot(s *controlpb.ConfigSnapshot) error {
 		for _, p := range server.Peers {
 			if p == nil || p.EntryId == "" || peers[p.EntryId] || len(p.Credential) != 43 {
 				return invalid
+			}
+			if len(p.AdditionalCredentials) > 1 {
+				return invalid
+			}
+			for _, credential := range p.AdditionalCredentials {
+				if len(credential) != 43 {
+					return invalid
+				}
 			}
 			peers[p.EntryId] = true
 		}

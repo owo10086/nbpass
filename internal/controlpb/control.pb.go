@@ -306,7 +306,8 @@ func (x *EnrollResponse) GetToken() string {
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 type NodeReport struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	TunnelRotationVersion uint32                 `protobuf:"varint,160,opt,name=tunnel_rotation_version,json=tunnelRotationVersion,proto3" json:"tunnel_rotation_version,omitempty"`
 	// 自测独立补报，只消费自测结果，不推进活性、探针、事件或配置确认。
 	SelfCheckOnly    bool     `protobuf:"varint,90,opt,name=self_check_only,json=selfCheckOnly,proto3" json:"self_check_only,omitempty"`
 	SelfCheckResults [][]byte `protobuf:"bytes,91,rep,name=self_check_results,json=selfCheckResults,proto3" json:"self_check_results,omitempty"`
@@ -374,6 +375,13 @@ func (x *NodeReport) ProtoReflect() protoreflect.Message {
 // Deprecated: Use NodeReport.ProtoReflect.Descriptor instead.
 func (*NodeReport) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *NodeReport) GetTunnelRotationVersion() uint32 {
+	if x != nil {
+		return x.TunnelRotationVersion
+	}
+	return 0
 }
 
 func (x *NodeReport) GetSelfCheckOnly() bool {
@@ -1287,17 +1295,19 @@ func (x *ForwardRule) GetExitGroupId() string {
 
 // 票 08 使用字段号 40–59；授权代次与确认由票 09 扩展。
 type TunnelEndpoint struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	NodeId         string                 `protobuf:"bytes,40,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	Address        string                 `protobuf:"bytes,41,opt,name=address,proto3" json:"address,omitempty"`
-	Port           uint32                 `protobuf:"varint,42,opt,name=port,proto3" json:"port,omitempty"`
-	Transport      TunnelTransport        `protobuf:"varint,43,opt,name=transport,proto3,enum=nbpass.control.v1.TunnelTransport" json:"transport,omitempty"`
-	ServerName     string                 `protobuf:"bytes,44,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
-	CertificatePem []byte                 `protobuf:"bytes,45,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"`
-	EntryId        string                 `protobuf:"bytes,46,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
-	Credential     string                 `protobuf:"bytes,47,opt,name=credential,proto3" json:"credential,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	RotationId             string                 `protobuf:"bytes,160,opt,name=rotation_id,json=rotationId,proto3" json:"rotation_id,omitempty"`
+	TrustedCertificatesPem [][]byte               `protobuf:"bytes,161,rep,name=trusted_certificates_pem,json=trustedCertificatesPem,proto3" json:"trusted_certificates_pem,omitempty"`
+	NodeId                 string                 `protobuf:"bytes,40,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	Address                string                 `protobuf:"bytes,41,opt,name=address,proto3" json:"address,omitempty"`
+	Port                   uint32                 `protobuf:"varint,42,opt,name=port,proto3" json:"port,omitempty"`
+	Transport              TunnelTransport        `protobuf:"varint,43,opt,name=transport,proto3,enum=nbpass.control.v1.TunnelTransport" json:"transport,omitempty"`
+	ServerName             string                 `protobuf:"bytes,44,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
+	CertificatePem         []byte                 `protobuf:"bytes,45,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"`
+	EntryId                string                 `protobuf:"bytes,46,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	Credential             string                 `protobuf:"bytes,47,opt,name=credential,proto3" json:"credential,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *TunnelEndpoint) Reset() {
@@ -1328,6 +1338,20 @@ func (x *TunnelEndpoint) ProtoReflect() protoreflect.Message {
 // Deprecated: Use TunnelEndpoint.ProtoReflect.Descriptor instead.
 func (*TunnelEndpoint) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *TunnelEndpoint) GetRotationId() string {
+	if x != nil {
+		return x.RotationId
+	}
+	return ""
+}
+
+func (x *TunnelEndpoint) GetTrustedCertificatesPem() [][]byte {
+	if x != nil {
+		return x.TrustedCertificatesPem
+	}
+	return nil
 }
 
 func (x *TunnelEndpoint) GetNodeId() string {
@@ -1447,11 +1471,12 @@ func (x *ExitGroup) GetExits() []*TunnelEndpoint {
 }
 
 type TunnelPeer struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	EntryId       string                 `protobuf:"bytes,40,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
-	Credential    string                 `protobuf:"bytes,41,opt,name=credential,proto3" json:"credential,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	AdditionalCredentials []string               `protobuf:"bytes,160,rep,name=additional_credentials,json=additionalCredentials,proto3" json:"additional_credentials,omitempty"`
+	EntryId               string                 `protobuf:"bytes,40,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	Credential            string                 `protobuf:"bytes,41,opt,name=credential,proto3" json:"credential,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *TunnelPeer) Reset() {
@@ -1482,6 +1507,13 @@ func (x *TunnelPeer) ProtoReflect() protoreflect.Message {
 // Deprecated: Use TunnelPeer.ProtoReflect.Descriptor instead.
 func (*TunnelPeer) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *TunnelPeer) GetAdditionalCredentials() []string {
+	if x != nil {
+		return x.AdditionalCredentials
+	}
+	return nil
 }
 
 func (x *TunnelPeer) GetEntryId() string {
@@ -1552,6 +1584,7 @@ func (x *TunnelGrant) GetRule() *ForwardRule {
 
 type TunnelServer struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
+	RotationId     string                 `protobuf:"bytes,160,opt,name=rotation_id,json=rotationId,proto3" json:"rotation_id,omitempty"`
 	ListenPort     uint32                 `protobuf:"varint,40,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
 	Transport      TunnelTransport        `protobuf:"varint,41,opt,name=transport,proto3,enum=nbpass.control.v1.TunnelTransport" json:"transport,omitempty"`
 	ServerName     string                 `protobuf:"bytes,42,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
@@ -1591,6 +1624,13 @@ func (x *TunnelServer) ProtoReflect() protoreflect.Message {
 // Deprecated: Use TunnelServer.ProtoReflect.Descriptor instead.
 func (*TunnelServer) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *TunnelServer) GetRotationId() string {
+	if x != nil {
+		return x.RotationId
+	}
+	return ""
 }
 
 func (x *TunnelServer) GetListenPort() uint32 {
@@ -2022,9 +2062,10 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\xb0\t\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\xe9\t\n" +
 	"\n" +
-	"NodeReport\x12&\n" +
+	"NodeReport\x127\n" +
+	"\x17tunnel_rotation_version\x18\xa0\x01 \x01(\rR\x15tunnelRotationVersion\x12&\n" +
 	"\x0fself_check_only\x18Z \x01(\bR\rselfCheckOnly\x12,\n" +
 	"\x12self_check_results\x18[ \x03(\fR\x10selfCheckResults\x12$\n" +
 	"\x0edns_watch_only\x18d \x01(\bR\fdnsWatchOnly\x12M\n" +
@@ -2124,8 +2165,11 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"targetPort\x12#\n" +
 	"\rallow_private\x18\a \x01(\bR\fallowPrivate\x12/\n" +
 	"\x04kind\x18\b \x01(\x0e2\x1b.nbpass.control.v1.RuleKindR\x04kind\x12\"\n" +
-	"\rexit_group_id\x18( \x01(\tR\vexitGroupId\"\x9e\x02\n" +
-	"\x0eTunnelEndpoint\x12\x17\n" +
+	"\rexit_group_id\x18( \x01(\tR\vexitGroupId\"\xfb\x02\n" +
+	"\x0eTunnelEndpoint\x12 \n" +
+	"\vrotation_id\x18\xa0\x01 \x01(\tR\n" +
+	"rotationId\x129\n" +
+	"\x18trusted_certificates_pem\x18\xa1\x01 \x03(\fR\x16trustedCertificatesPem\x12\x17\n" +
 	"\anode_id\x18( \x01(\tR\x06nodeId\x12\x18\n" +
 	"\aaddress\x18) \x01(\tR\aaddress\x12\x12\n" +
 	"\x04port\x18* \x01(\rR\x04port\x12@\n" +
@@ -2140,17 +2184,20 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\tExitGroup\x12\x0e\n" +
 	"\x02id\x18( \x01(\tR\x02id\x12;\n" +
 	"\bstrategy\x18) \x01(\x0e2\x1f.nbpass.control.v1.ExitStrategyR\bstrategy\x127\n" +
-	"\x05exits\x18* \x03(\v2!.nbpass.control.v1.TunnelEndpointR\x05exits\"G\n" +
+	"\x05exits\x18* \x03(\v2!.nbpass.control.v1.TunnelEndpointR\x05exits\"\x7f\n" +
 	"\n" +
-	"TunnelPeer\x12\x19\n" +
+	"TunnelPeer\x126\n" +
+	"\x16additional_credentials\x18\xa0\x01 \x03(\tR\x15additionalCredentials\x12\x19\n" +
 	"\bentry_id\x18( \x01(\tR\aentryId\x12\x1e\n" +
 	"\n" +
 	"credential\x18) \x01(\tR\n" +
 	"credential\"\\\n" +
 	"\vTunnelGrant\x12\x19\n" +
 	"\bentry_id\x18( \x01(\tR\aentryId\x122\n" +
-	"\x04rule\x18) \x01(\v2\x1e.nbpass.control.v1.ForwardRuleR\x04rule\"\xd0\x02\n" +
-	"\fTunnelServer\x12\x1f\n" +
+	"\x04rule\x18) \x01(\v2\x1e.nbpass.control.v1.ForwardRuleR\x04rule\"\xf2\x02\n" +
+	"\fTunnelServer\x12 \n" +
+	"\vrotation_id\x18\xa0\x01 \x01(\tR\n" +
+	"rotationId\x12\x1f\n" +
 	"\vlisten_port\x18( \x01(\rR\n" +
 	"listenPort\x12@\n" +
 	"\ttransport\x18) \x01(\x0e2\".nbpass.control.v1.TunnelTransportR\ttransport\x12\x1f\n" +

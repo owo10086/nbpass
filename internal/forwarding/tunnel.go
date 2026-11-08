@@ -3,7 +3,6 @@ package forwarding
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
@@ -88,6 +87,7 @@ type tunnelClient struct {
 	mu       sync.Mutex
 	endpoint *controlpb.TunnelEndpoint
 	session  *yamux.Session
+	users    map[*yamux.Session]int
 	engine   *Engine
 	closed   bool
 }
@@ -96,6 +96,9 @@ func (c *tunnelClient) close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
+	for session := range c.users {
+		session.Close()
+	}
 	if c.session != nil {
 		c.session.Close()
 	}
@@ -103,6 +106,9 @@ func (c *tunnelClient) close() {
 func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.getSessionLocked(ctx)
+}
+func (c *tunnelClient) getSessionLocked(ctx context.Context) (*yamux.Session, error) {
 	if c.closed {
 		return nil, net.ErrClosed
 	}
@@ -114,12 +120,28 @@ func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
 	if !roots.AppendCertsFromPEM(ep.CertificatePem) {
 		return nil, errors.New("出口证书无效")
 	}
-	pinned, err := tunnelCertificate(ep.CertificatePem, ep.ServerName)
+	trusted := append([][]byte{ep.CertificatePem}, ep.TrustedCertificatesPem...)
+	pins := []*x509.Certificate{}
+	for _, data := range trusted {
+		cert, err := tunnelCertificate(data, ep.ServerName)
+		if err != nil {
+			return nil, err
+		}
+		pins = append(pins, cert)
+		roots.AppendCertsFromPEM(data)
+	}
+	_, err := tunnelCertificate(ep.CertificatePem, ep.ServerName)
 	if err != nil {
 		return nil, err
 	}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: ep.ServerName, MinVersion: tls.VersionTLS12, Time: c.engine.deps.Now, VerifyConnection: func(state tls.ConnectionState) error {
-		if len(state.PeerCertificates) == 0 || !bytes.Equal(state.PeerCertificates[0].Raw, pinned.Raw) {
+		matched := false
+		for _, pin := range pins {
+			if len(state.PeerCertificates) > 0 && bytes.Equal(state.PeerCertificates[0].Raw, pin.Raw) {
+				matched = true
+			}
+		}
+		if !matched {
 			return errors.New("出口证书与固定信任不匹配")
 		}
 		return nil
@@ -170,12 +192,36 @@ func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
 func (c *tunnelClient) dial(ctx context.Context, rule *controlpb.ForwardRule) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	for attempt := 0; ; attempt++ {
+		c.mu.Lock()
+		before := c.endpoint
+		c.mu.Unlock()
+		conn, err := c.dialOnce(ctx, rule)
+		if err == nil {
+			return conn, nil
+		}
+		c.mu.Lock()
+		changed := c.endpoint != before && !c.closed
+		c.mu.Unlock()
+		// 未交付业务数据，且本次拨号期间确有材料更新，最多在当前载体重试一次。
+		if attempt > 0 || !changed || ctx.Err() != nil {
+			return nil, err
+		}
+	}
+}
+func (c *tunnelClient) dialOnce(ctx context.Context, rule *controlpb.ForwardRule) (net.Conn, error) {
 	handshake, stop := context.WithTimeout(ctx, 3*time.Second)
-	session, err := c.getSession(handshake)
+	session, entryID, err := c.acquireSession(handshake)
 	stop()
 	if err != nil {
 		return nil, err
 	}
+	released := false
+	defer func() {
+		if !released {
+			c.releaseSession(session)
+		}
+	}()
 	stream, err := session.OpenStream()
 	if err != nil {
 		return nil, err
@@ -190,7 +236,7 @@ func (c *tunnelClient) dial(ctx context.Context, rule *controlpb.ForwardRule) (n
 	stream.SetDeadline(deadline)
 	stopCancel := context.AfterFunc(ctx, func() { stream.SetDeadline(time.Now()) })
 	defer stopCancel()
-	if err := writeTunnelMessage(stream, streamAuthorization(c.endpoint.EntryId, rule)); err != nil {
+	if err := writeTunnelMessage(stream, streamAuthorization(entryID, rule)); err != nil {
 		return nil, err
 	}
 	var result tunnelResult
@@ -202,7 +248,8 @@ func (c *tunnelClient) dial(ctx context.Context, rule *controlpb.ForwardRule) (n
 	}
 	stream.SetDeadline(time.Time{})
 	ok = true
-	return &tunnelStream{Stream: stream}, nil
+	released = true
+	return &rotatingTunnelStream{tunnelStream: &tunnelStream{Stream: stream}, release: func() { c.releaseSession(session) }}, nil
 }
 
 // yamux.Close 只关闭写方向；CloseWrite 保持反向读取，Close 同时解除本地读阻塞。
@@ -226,7 +273,7 @@ type tunnelServer struct {
 }
 
 func (e *Engine) startTunnelServer(config *controlpb.TunnelServer) (*tunnelServer, error) {
-	cert, err := tls.X509KeyPair(config.CertificatePem, config.PrivateKeyPem)
+	_, err := tls.X509KeyPair(config.CertificatePem, config.PrivateKeyPem)
 	if err != nil {
 		return nil, errors.New("出口证书或私钥无效")
 	}
@@ -236,7 +283,7 @@ func (e *Engine) startTunnelServer(config *controlpb.TunnelServer) (*tunnelServe
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &tunnelServer{engine: e, config: proto.Clone(config).(*controlpb.TunnelServer), listener: listener, ctx: ctx, cancel: cancel, connections: map[net.Conn]struct{}{}}
-	s.http = &http.Server{Handler: http.HandlerFunc(s.serveHTTP), ReadHeaderTimeout: 3 * time.Second, ErrorLog: log.New(io.Discard, "", 0), TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12, Time: e.deps.Now}}
+	s.http = &http.Server{Handler: http.HandlerFunc(s.serveHTTP), ReadHeaderTimeout: 3 * time.Second, ErrorLog: log.New(io.Discard, "", 0), TLSConfig: &tls.Config{GetCertificate: s.currentCertificate, MinVersion: tls.VersionTLS12, Time: e.deps.Now}}
 	go s.http.Serve(tls.NewListener(listener, s.http.TLSConfig))
 	return s, nil
 }
@@ -266,7 +313,7 @@ func (s *tunnelServer) authorized(entry, credential, ruleID string) *controlpb.F
 	}
 	peerOK := false
 	for _, peer := range s.config.Peers {
-		if peer.EntryId == entry && subtle.ConstantTimeCompare([]byte(peer.Credential), []byte(credential)) == 1 {
+		if peer.EntryId == entry && validPeerCredential(peer, credential) {
 			peerOK = true
 			break
 		}
@@ -375,7 +422,7 @@ func (s *tunnelServer) serveStream(ctx context.Context, stream net.Conn, auth tu
 		return
 	}
 	defer target.Close()
-	if ctx.Err() != nil || s.authorizeStream(auth, request) == nil {
+	if ctx.Err() != nil || s.authorizeExistingStream(auth, request) == nil {
 		writeTunnelMessage(stream, tunnelResult{})
 		return
 	}
