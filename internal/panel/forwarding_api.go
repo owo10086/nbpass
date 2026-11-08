@@ -3,6 +3,7 @@ package panel
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -112,6 +113,8 @@ func missingResult(result sql.Result, err error) error {
 	return nil
 }
 func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
+	p.entryMu.Lock()
+	defer p.entryMu.Unlock()
 	var body struct {
 		Name    string   `json:"name"`
 		Members []string `json:"members"`
@@ -134,6 +137,7 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	publicationStatus := "未发布"
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
 		var exists int
 		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM nodes WHERE id=?", body.Members[0]).Scan(&exists); err != nil {
@@ -141,6 +145,16 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 		}
 		if exists != 1 {
 			return &forwardingError{400, "入口成员不存在"}
+		}
+		if !creating {
+			var active string
+			err := tx.QueryRowContext(r.Context(), "SELECT active_node_id FROM entry_publications WHERE group_id=?", id).Scan(&active)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if active != "" && active != body.Members[0] {
+				return &forwardingError{409, "请先通过入口动作切换活动入口，再移除该成员"}
+			}
 		}
 		if creating {
 			if _, err := tx.ExecContext(r.Context(), "INSERT INTO entry_groups(id,name) VALUES(?,?)", id, body.Name); err != nil {
@@ -155,7 +169,10 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		_, err := tx.ExecContext(r.Context(), "INSERT INTO entry_group_members(group_id,node_id,position) VALUES(?,?,0)", id, body.Members[0])
-		return err
+		if err != nil {
+			return err
+		}
+		return tx.QueryRowContext(r.Context(), "SELECT publication_status FROM entry_groups WHERE id=?", id).Scan(&publicationStatus)
 	}) {
 		return
 	}
@@ -163,10 +180,19 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 	if creating {
 		code = 201
 	}
-	respond(w, code, entryGroupView{ID: id, Name: body.Name, Members: body.Members, PublicationStatus: "未发布"})
+	respond(w, code, entryGroupView{ID: id, Name: body.Name, Members: body.Members, PublicationStatus: publicationStatus})
 }
 func (p *Panel) deleteEntryGroup(w http.ResponseWriter, r *http.Request) {
+	p.entryMu.Lock()
+	defer p.entryMu.Unlock()
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
+		var pending int
+		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM entry_actions WHERE group_id=? AND stage<>?", r.PathValue("id"), EntryWritten).Scan(&pending); err != nil {
+			return err
+		}
+		if pending > 0 {
+			return &forwardingError{409, "入口动作尚未核对完成，不能删除入口组"}
+		}
 		var n int
 		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM forward_rules WHERE entry_group_id=?", r.PathValue("id")).Scan(&n); err != nil {
 			return err

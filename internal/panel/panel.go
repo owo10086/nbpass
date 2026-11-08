@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"nbpass/internal/dnsprovider"
 	"nbpass/internal/timing"
 )
 
@@ -33,6 +34,7 @@ type PasswordHasher interface {
 }
 
 type Dependencies struct {
+	DNSProvider  dnsprovider.Provider
 	Clock        Clock
 	Persistence  Persistence
 	KeyFile      KeyFile
@@ -51,6 +53,8 @@ type Config struct {
 }
 
 type Panel struct {
+	entryMu         sync.Mutex
+	coordinator     *entryCoordinator
 	config          Config
 	deps            Dependencies
 	db              *sql.DB
@@ -97,6 +101,9 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 	if config.PasswordConcurrency < 1 {
 		return nil, errors.New("密码校验并发必须大于零")
 	}
+	if deps.DNSProvider == nil {
+		deps.DNSProvider = dnsprovider.DNSPod{}
+	}
 	if deps.Passwords == nil {
 		deps.Passwords = BcryptPasswords{}
 	}
@@ -123,10 +130,15 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 		db.Close()
 		return nil, err
 	}
+	if err := p.startEntryCoordinator(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return p, nil
 }
 
 func (p *Panel) Close() error {
+	p.coordinator.close()
 	p.controlMu.Lock()
 	defer p.controlMu.Unlock()
 	for _, session := range p.controls {

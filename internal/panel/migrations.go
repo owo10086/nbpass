@@ -86,6 +86,7 @@ var migrations = []string{
  ALTER TABLE nodes ADD COLUMN apply_error TEXT NOT NULL DEFAULT '';`,
 	listenerPortsMigration,
 	tunnelMigration,
+	managedDNSMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {
