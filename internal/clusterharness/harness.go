@@ -7,10 +7,12 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/netip"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -47,6 +49,9 @@ func New(t testing.TB, options ...func(*panel.Dependencies)) *Harness {
 		Persistence: platform.SQLite{Path: filepath.Join(h.Dir, "panel.db")},
 		KeyFile:     platform.LocalKeyFile{Path: filepath.Join(h.Dir, "panel.key")},
 		Random:      rand.Reader,
+		LookupIPv4: func(context.Context, string) ([]netip.Addr, error) {
+			return nil, errors.New("测试台未配置目标域名解析")
+		},
 	}
 	for _, option := range options {
 		option(&h.Dependencies)

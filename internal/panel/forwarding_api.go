@@ -3,7 +3,6 @@ package panel
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"net/http"
 	"strings"
 
@@ -54,30 +53,33 @@ func (p *Panel) listEntryGroups(w http.ResponseWriter, r *http.Request) {
 
 // mutateForwarding 把业务改动和所有受影响节点的完整快照原子提交，然后通知控制流。
 func (p *Panel) mutateForwarding(w http.ResponseWriter, r *http.Request, change func(*sql.Tx) error) bool {
-	p.controlMu.Lock()
-	defer p.controlMu.Unlock()
-	tx, err := p.db.BeginTx(r.Context(), nil)
-	if err != nil {
-		problem(w, 503, "存储暂不可用")
-		return false
-	}
-	defer tx.Rollback()
-	if err = change(tx); err != nil {
-		var api *forwardingError
-		if errors.As(err, &api) {
-			problem(w, api.status, api.message)
-		} else {
-			problem(w, 503, "存储暂不可用")
+	if err := p.commitForwarding(r.Context(), change); err != nil {
+		if !writeConfigurationError(w, err) {
+			problem(w, 503, "无法保存配置快照")
 		}
 		return false
 	}
-	changed, err := p.compileSnapshots(r.Context(), tx)
+	return true
+}
+
+// 提交与 HTTP 写出分离；慢读者不能持有控制锁或数据库连接。
+func (p *Panel) commitForwarding(ctx context.Context, change func(*sql.Tx) error) error {
+	p.controlMu.Lock()
+	defer p.controlMu.Unlock()
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err = change(tx); err != nil {
+		return err
+	}
+	changed, err := p.compileSnapshots(ctx, tx)
 	if err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {
-		problem(w, 503, "无法保存配置快照")
-		return false
+		return err
 	}
 	for _, id := range changed {
 		if session := p.controls[id]; session != nil {
@@ -87,7 +89,7 @@ func (p *Panel) mutateForwarding(w http.ResponseWriter, r *http.Request, change 
 			}
 		}
 	}
-	return true
+	return nil
 }
 
 type forwardingError struct {
