@@ -38,18 +38,19 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 	if err := p.validateConfiguration(ctx, tx, rules, members); err != nil {
 		return nil, err
 	}
-	rows, err = tx.QueryContext(ctx, "SELECT id,desired_revision FROM nodes ORDER BY id")
+	rows, err = tx.QueryContext(ctx, "SELECT id,desired_revision,check_port FROM nodes ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
 	type nodeRevision struct {
-		id       string
-		revision uint64
+		id        string
+		revision  uint64
+		checkPort uint32
 	}
 	nodes := []nodeRevision{}
 	for rows.Next() {
 		var n nodeRevision
-		if err := rows.Scan(&n.id, &n.revision); err != nil {
+		if err := rows.Scan(&n.id, &n.revision, &n.checkPort); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -62,7 +63,10 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 	}
 	compiled := map[string]*controlpb.ConfigSnapshot{}
 	for _, n := range nodes {
-		compiled[n.id] = &controlpb.ConfigSnapshot{}
+		compiled[n.id] = &controlpb.ConfigSnapshot{CheckPort: n.checkPort}
+		if n.checkPort == 18080 {
+			compiled[n.id].CheckPort = 0
+		}
 	}
 	for _, r := range rules {
 		if !r.Enabled {
@@ -137,6 +141,10 @@ func (p *Panel) controlMessage(ctx context.Context, id string) (*controlpb.Panel
 		}
 	}
 	m.RotationCommand, err = p.rotationCommand(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	m.CheckerTasks, err = p.checkerTasks(ctx, id)
 	if err != nil {
 		return nil, err
 	}

@@ -91,6 +91,7 @@ var migrations = []string{
 	rotationMigration,
 	configResultsMigration,
 	selfCheckMigration,
+	checkerMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {
