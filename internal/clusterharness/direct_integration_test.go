@@ -20,7 +20,7 @@ func TestDirectConnectionsFeedProbeWhileEventsAndIPKeepWorking(t *testing.T) {
 	awaitNode(t, c, id, connected)
 	awaitUptime(t, c, id, 0)
 	gid := entryGroup(c, id)["id"].(string)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	rule := c.Do("POST", "/api/rules", directBody(gid, port, "127.0.0.1", echoTarget(t, "A:")), 201)
 	revision := awaitRevision(t, c, id, 0)
 	conn := tcpExchange(t, port, "A:")

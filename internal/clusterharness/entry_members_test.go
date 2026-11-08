@@ -5,7 +5,10 @@ import (
 	"net"
 	"reflect"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"nbpass/internal/clusterharness"
 	"nbpass/internal/node"
@@ -42,12 +45,12 @@ func TestEntryMembersAllListenDirectAndTunnelAndRemovalRevokes(t *testing.T) {
 			h, c := nodeBrowser(t)
 			a, b := addNode(c, "入口 A"), addNode(c, "入口 B")
 			ids := []string{a["id"].(string), b["id"].(string)}
-			ports := []int{freePort(t), freePort(t)}
+			ports := []int{h.ReserveTCPPort(), h.ReserveTCPPort()}
 			for i, n := range []map[string]any{a, b} {
 				port := ports[i]
 				h.StartNode(n["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) {
 					d.Forwarding.Listen = func(network, _ string) (net.Listener, error) {
-						return net.Listen(network, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+						return h.ListenTCP(network, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 					}
 				})
 				awaitNode(t, c, ids[i], connected)
@@ -59,7 +62,7 @@ func TestEntryMembersAllListenDirectAndTunnelAndRemovalRevokes(t *testing.T) {
 				exitID := exit["id"].(string)
 				h.StartNode(exit["installation_ticket"].(string))
 				awaitNode(t, c, exitID, connected)
-				c.Do("PUT", "/api/nodes/"+exitID+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": freePort(t), "transport": "wss"}, 200)
+				c.Do("PUT", "/api/nodes/"+exitID+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": h.ReserveTCPPort(), "transport": "wss"}, 200)
 				eg := c.Do("POST", "/api/exit-groups", map[string]any{"name": "出口组", "members": []string{exitID}, "strategy": "primary_backup"}, 201)
 				body["kind"], body["exit_group_id"] = "tunnel", eg["id"]
 			}
@@ -112,4 +115,76 @@ func TestEntryMembersKeepPortLoopAndDeletionChecks(t *testing.T) {
 	}
 	c.Do("DELETE", "/api/nodes/"+b, nil, 409)
 	c.Do("DELETE", "/api/entry-groups/"+gid, nil, 409)
+}
+
+// 出口被确定性地阻塞在 bind 前；入口必须报告未就绪并拒绝新连接，
+// 出口确认后由控制消息重试，不依赖心跳推进或业务连接重试。
+func TestEntryMembersWaitForExitAuthorizationBeforeListening(t *testing.T) {
+	h, c := nodeBrowser(t)
+	ids := make([]string, 2)
+	ports := []chan int{make(chan int, 1), make(chan int, 1)}
+	var listens [2]atomic.Int32
+	for i := range ids {
+		n := addNode(c, fmt.Sprintf("入口 %d", i))
+		ids[i] = n["id"].(string)
+		h.StartNode(n["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) {
+			d.Forwarding.Listen = func(network, _ string) (net.Listener, error) {
+				listens[i].Add(1)
+				listener, err := net.Listen(network, "127.0.0.1:0")
+				if err == nil {
+					ports[i] <- listener.Addr().(*net.TCPAddr).Port
+				}
+				return listener, err
+			}
+		})
+		awaitNode(t, c, ids[i], connected)
+	}
+	exit := addNode(c, "延迟出口")
+	exitID := exit["id"].(string)
+	blocked, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	h.StartNode(exit["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) {
+		d.Forwarding.Listen = func(network, address string) (net.Listener, error) {
+			close(blocked)
+			<-release
+			return h.ListenTCP(network, address)
+		}
+	})
+	t.Cleanup(unblock)
+	awaitNode(t, c, exitID, connected)
+	c.Do("PUT", "/api/nodes/"+exitID+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": h.ReserveTCPPort(), "transport": "wss"}, 200)
+	select {
+	case <-blocked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("出口未进入监听阻塞点")
+	}
+	eg := c.Do("POST", "/api/exit-groups", map[string]any{"name": "出口组", "members": []string{exitID}, "strategy": "primary_backup"}, 201)
+	gid := c.Do("POST", "/api/entry-groups", map[string]any{"name": "多成员", "members": ids}, 201)["id"].(string)
+	body := directBody(gid, 29001, "127.0.0.1", echoTarget(t, "R:"))
+	body["kind"], body["exit_group_id"] = "tunnel", eg["id"]
+	c.Do("POST", "/api/rules", body, 201)
+	for i, id := range ids {
+		awaitNode(t, c, id, func(row map[string]any) bool {
+			return row["desired_revision"].(float64) > 0 && (row["config_status"] == "正常" || row["config_status"] == "同步失败")
+		})
+		row := nodeRow(t, c, id)
+		if row["config_status"] != "同步失败" || row["apply_error"] == "" {
+			t.Fatalf("出口未就绪却确认了入口监听: %v", row)
+		}
+		if listens[i].Load() != 0 {
+			t.Fatal("出口授权前启动了业务监听")
+		}
+	}
+	unblock()
+	awaitRevision(t, c, exitID, 0)
+	for i, id := range ids {
+		awaitRevision(t, c, id, 0)
+		select {
+		case port := <-ports[i]:
+			tcpExchange(t, port, "R:")
+		case <-time.After(time.Second):
+			t.Fatal("确认配置后仍无入口监听")
+		}
+	}
 }

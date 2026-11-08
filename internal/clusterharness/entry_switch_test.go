@@ -246,7 +246,7 @@ func TestEntryManualSwitchPersistenceFailureIsAtomicAndVersionIsExclusive(t *tes
 }
 
 func TestEntryManualSwitchKeepsPublishedMemberUntilWriteConfirmed(t *testing.T) {
-	_, c, fake, account, gid := dnsBrowser(t)
+	h, c, fake, account, gid := dnsBrowser(t)
 	entered, release := make(chan struct{}), make(chan struct{})
 	var hold atomic.Bool
 	var once sync.Once
@@ -266,7 +266,7 @@ func TestEntryManualSwitchKeepsPublishedMemberUntilWriteConfirmed(t *testing.T) 
 	a := memberOf(c, gid)
 	b := addNode(c, "入口 B")["id"].(string)
 	saveMembers(c, gid, 200, a, b)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	c.Do("POST", "/api/rules", directBody(gid, port, "127.0.0.1", echoTarget(t, "A:")), 201)
 	rev := awaitRevision(t, c, a, 0)
 	c.Do("PUT", "/api/entry-groups/"+gid+"/managed-record", binding(account), 200)

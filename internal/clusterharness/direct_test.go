@@ -22,15 +22,24 @@ func entryGroup(c *clusterharness.Client, id string) map[string]any {
 func directBody(group string, port int, target string, targetPort int) map[string]any {
 	return map[string]any{"name": "直连 A", "entry_group_id": group, "kind": "direct", "listen_port": port, "target_address": target, "target_family": "ipv4", "target_port": targetPort, "allow_private": true, "enabled": true}
 }
-func freePort(t *testing.T) int {
-	t.Helper()
-	l, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+
+func TestReservedRulePortCannotBeUsedAsDialSource(t *testing.T) {
+	h, c := nodeBrowser(t)
+	port := h.ReserveTCPPort()
+	target := echoTarget(t, "P:")
+	dialer := &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port}, Timeout: time.Second}
+	conn, err := dialer.Dial("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(target)))
+	if err == nil {
+		conn.Close()
+		t.Fatal("分配给规则的端口仍可被出站连接占用")
 	}
-	p := l.Addr().(*net.TCPAddr).Port
-	l.Close()
-	return p
+	n := addNode(c, "预留端口入口")
+	id := n["id"].(string)
+	h.StartNode(n["installation_ticket"].(string))
+	awaitNode(t, c, id, connected)
+	c.Do("POST", "/api/rules", directBody(entryGroup(c, id)["id"].(string), port, "127.0.0.1", target), 201)
+	awaitRevision(t, c, id, 0)
+	tcpExchange(t, port, "P:")
 }
 func echoTarget(t *testing.T, prefix string) int {
 	t.Helper()
@@ -119,7 +128,7 @@ func TestDirectRuleLifecycleOverRealTCP(t *testing.T) {
 	if g["publication_status"] != "未发布" {
 		t.Fatalf("未绑定 DNS 的组: %v", g)
 	}
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	target := echoTarget(t, "A:")
 	body := directBody(gid, port, "127.0.0.1", target)
 	rule := c.Do("POST", "/api/rules", body, 201)
@@ -163,14 +172,14 @@ func TestDirectManagementValidationAndPersistence(t *testing.T) {
 	n := addNode(c, "入口 A")
 	gid := entryGroup(c, n["id"].(string))["id"].(string)
 	for _, change := range []map[string]any{{"target_address": "192.168.1.1", "allow_private": false}, {"target_address": "::1"}, {"target_family": "ipv6"}, {"target_address": "https://example.com"}, {"target_port": 0}, {"listen_port": 65536}, {"kind": "tunnel"}, {"target_address": "invalid host"}} {
-		body := directBody(gid, freePort(t), "example.com", 443)
+		body := directBody(gid, h.ReserveTCPPort(), "example.com", 443)
 		for k, v := range change {
 			body[k] = v
 		}
 		c.Do("POST", "/api/rules", body, 400)
 	}
 	c.Do("POST", "/api/entry-groups", map[string]any{"name": "坏组", "members": []string{"missing"}}, 400)
-	body := directBody(gid, freePort(t), "example.com", 443)
+	body := directBody(gid, h.ReserveTCPPort(), "example.com", 443)
 	body["allow_private"] = false
 	rule := c.Do("POST", "/api/rules", body, 201)
 	c.Do("DELETE", "/api/entry-groups/"+gid, nil, 409)
@@ -217,7 +226,7 @@ func TestDirectDeleteWhileDisconnectedConvergesWithFullSnapshot(t *testing.T) {
 	real := h.StartNode(n["installation_ticket"].(string))
 	awaitNode(t, c, id, connected)
 	gid := entryGroup(c, id)["id"].(string)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	body := directBody(gid, port, "127.0.0.1", echoTarget(t, "A:"))
 	rule := c.Do("POST", "/api/rules", body, 201)
 	rev := awaitRevision(t, c, id, 0)
@@ -261,12 +270,12 @@ func TestNewNodeProcessMustConfirmConfigurationAgain(t *testing.T) {
 				close(blocked)
 				<-release
 			}
-			return net.Listen(network, address)
+			return h.ListenTCP(network, address)
 		}
 	})
 	awaitNode(t, c, id, connected)
 	gid := entryGroup(c, id)["id"].(string)
-	body := directBody(gid, freePort(t), "127.0.0.1", echoTarget(t, "A:"))
+	body := directBody(gid, h.ReserveTCPPort(), "127.0.0.1", echoTarget(t, "A:"))
 	c.Do("POST", "/api/rules", body, 201)
 	awaitRevision(t, c, id, 0)
 	real.Restart()
@@ -292,7 +301,7 @@ func TestAppliedAcknowledgementLostDuringDisconnectConvergesOnReconnect(t *testi
 	var disconnected atomic.Bool
 	real := h.StartNode(n["installation_ticket"].(string), func(_ *node.Config, deps *node.Dependencies) {
 		deps.Forwarding.Listen = func(network, address string) (net.Listener, error) {
-			listener, err := net.Listen(network, address)
+			listener, err := h.ListenTCP(network, address)
 			if err == nil && disconnected.CompareAndSwap(false, true) {
 				realRef.Load().Disconnect()
 			}
@@ -302,7 +311,7 @@ func TestAppliedAcknowledgementLostDuringDisconnectConvergesOnReconnect(t *testi
 	realRef.Store(real)
 	awaitNode(t, c, id, connected)
 	gid := entryGroup(c, id)["id"].(string)
-	body := directBody(gid, freePort(t), "127.0.0.1", echoTarget(t, "A:"))
+	body := directBody(gid, h.ReserveTCPPort(), "127.0.0.1", echoTarget(t, "A:"))
 	c.Do("POST", "/api/rules", body, 201)
 	awaitNode(t, c, id, func(row map[string]any) bool { return disconnected.Load() && !connected(row) })
 	// 规则已实际监听，但应用确认因链路断开未到达面板。

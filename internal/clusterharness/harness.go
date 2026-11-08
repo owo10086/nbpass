@@ -34,6 +34,7 @@ type Harness struct {
 	PublicOrigin  string
 	Control       *httptest.Server
 	controlServer atomic.Pointer[grpc.Server]
+	ports         portReservations
 }
 
 type Client struct {
@@ -44,6 +45,7 @@ type Client struct {
 func New(t testing.TB, options ...func(*panel.Dependencies)) *Harness {
 	t.Helper()
 	h := &Harness{t: t, Dir: t.TempDir(), Clock: &Clock{now: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)}}
+	t.Cleanup(h.ports.close)
 	h.Dependencies = panel.Dependencies{
 		Clock:       h.Clock,
 		Persistence: platform.SQLite{Path: filepath.Join(h.Dir, "panel.db")},
