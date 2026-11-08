@@ -87,6 +87,7 @@ var migrations = []string{
 	listenerPortsMigration,
 	tunnelMigration,
 	managedDNSMigration,
+	offlineMigration + telegramMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

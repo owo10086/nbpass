@@ -369,7 +369,7 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		if err := p.recordNodeIP(ctx, id, report.PublicIpv4); err != nil {
 			return nil, status.Error(codes.Unavailable, "存储暂不可用")
 		}
-		if _, err := p.db.ExecContext(ctx, "UPDATE nodes SET last_seen_at=?,disconnected_at=NULL,software_version=? WHERE id=? AND token_hash=?", p.deps.Clock.Now().UnixNano(), report.SoftwareVersion, id, digest); err != nil {
+		if err := p.recordHeartbeat(ctx, id, report.SoftwareVersion, digest); err != nil {
 			return nil, status.Error(codes.Unavailable, "存储暂不可用")
 		}
 	}

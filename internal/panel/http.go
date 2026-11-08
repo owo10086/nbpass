@@ -12,6 +12,7 @@ func (p *Panel) Handler() http.Handler {
 	p.forwardingRoutes(mux)
 	p.tunnelRoutes(mux)
 	p.managedDNSRoutes(mux)
+	p.telegramRoutes(mux)
 	mux.HandleFunc("GET /api/auth/status", p.status)
 	mux.HandleFunc("POST /api/auth/setup", p.setup)
 	mux.HandleFunc("POST /api/auth/login", p.login)
