@@ -18,6 +18,7 @@ type DNSProvider string
 const (
 	IPv4          AddressFamily   = "ipv4"
 	Direct        RuleKind        = "direct"
+	Tunnel        RuleKind        = "tunnel"
 	WSS           TunnelTransport = "wss"
 	PrimaryBackup ExitStrategy    = "primary_backup"
 	DNSPod        DNSProvider     = "dnspod"
@@ -28,6 +29,7 @@ type Rule struct {
 	Name          string        `json:"name"`
 	EntryGroupID  string        `json:"entry_group_id"`
 	Kind          RuleKind      `json:"kind"`
+	ExitGroupID   string        `json:"exit_group_id,omitempty"`
 	ListenPort    int           `json:"listen_port"`
 	TargetAddress string        `json:"target_address"`
 	TargetFamily  AddressFamily `json:"target_family"`
@@ -42,8 +44,11 @@ func (r *Rule) Validate() error {
 	if r.Name == "" || len(r.Name) > 200 || r.EntryGroupID == "" {
 		return errors.New("请指定规则名称和入口组")
 	}
-	if r.Kind != Direct || r.TargetFamily != IPv4 {
-		return errors.New("当前仅支持 TCP、IPv4 直连规则")
+	if (r.Kind != Direct && r.Kind != Tunnel) || r.TargetFamily != IPv4 {
+		return errors.New("当前仅支持 TCP、IPv4 的直连或隧道规则")
+	}
+	if r.Kind == Tunnel && r.ExitGroupID == "" || r.Kind == Direct && r.ExitGroupID != "" {
+		return errors.New("请为隧道规则指定出口组，直连规则不使用出口组")
 	}
 	if r.ListenPort < 1 || r.ListenPort > 65535 || r.TargetPort < 1 || r.TargetPort > 65535 {
 		return errors.New("端口须为 1–65535")
@@ -89,5 +94,9 @@ func AllowedIP(ip netip.Addr, allowPrivate bool) bool {
 }
 
 func (r Rule) Config() *controlpb.ForwardRule {
-	return &controlpb.ForwardRule{Id: r.ID, EntryGroupId: r.EntryGroupID, Kind: controlpb.RuleKind_RULE_KIND_DIRECT, ListenPort: uint32(r.ListenPort), TargetAddress: r.TargetAddress, TargetFamily: controlpb.AddressFamily_ADDRESS_FAMILY_IPV4, TargetPort: uint32(r.TargetPort), AllowPrivate: r.AllowPrivate}
+	kind := controlpb.RuleKind_RULE_KIND_DIRECT
+	if r.Kind == Tunnel {
+		kind = controlpb.RuleKind_RULE_KIND_TUNNEL
+	}
+	return &controlpb.ForwardRule{ExitGroupId: r.ExitGroupID, Id: r.ID, EntryGroupId: r.EntryGroupID, Kind: kind, ListenPort: uint32(r.ListenPort), TargetAddress: r.TargetAddress, TargetFamily: controlpb.AddressFamily_ADDRESS_FAMILY_IPV4, TargetPort: uint32(r.TargetPort), AllowPrivate: r.AllowPrivate}
 }

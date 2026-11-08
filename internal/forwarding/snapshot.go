@@ -23,13 +23,13 @@ func ValidateSnapshot(s *controlpb.ConfigSnapshot) error {
 	}
 	ids := map[string]bool{}
 	for _, r := range s.Rules {
-		if r == nil || r.Id == "" || ids[r.Id] || r.Kind != controlpb.RuleKind_RULE_KIND_DIRECT || r.TargetFamily != controlpb.AddressFamily_ADDRESS_FAMILY_IPV4 || r.ListenPort < 1 || r.ListenPort > 65535 || r.TargetPort < 1 || r.TargetPort > 65535 {
-			return errors.New("直连配置无效")
+		if r == nil || r.Id == "" || ids[r.Id] || (r.Kind != controlpb.RuleKind_RULE_KIND_DIRECT && r.Kind != controlpb.RuleKind_RULE_KIND_TUNNEL) || r.TargetFamily != controlpb.AddressFamily_ADDRESS_FAMILY_IPV4 || r.ListenPort < 1 || r.ListenPort > 65535 || r.TargetPort < 1 || r.TargetPort > 65535 {
+			return errors.New("转发配置无效")
 		}
 		if err := ValidateTarget(r.TargetAddress, r.AllowPrivate); err != nil {
 			return err
 		}
 		ids[r.Id] = true
 	}
-	return nil
+	return validateTunnelSnapshot(s)
 }

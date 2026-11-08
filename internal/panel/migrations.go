@@ -84,6 +84,7 @@ var migrations = []string{
  ALTER TABLE nodes ADD COLUMN applied_digest TEXT NOT NULL DEFAULT '';
  ALTER TABLE nodes ADD COLUMN attempted_revision INTEGER NOT NULL DEFAULT 0;
  ALTER TABLE nodes ADD COLUMN apply_error TEXT NOT NULL DEFAULT '';`,
+	tunnelMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

@@ -57,26 +57,33 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	compiled := map[string][]*controlpb.ForwardRule{}
+	compiled := map[string]*controlpb.ConfigSnapshot{}
+	for _, n := range nodes {
+		compiled[n.id] = &controlpb.ConfigSnapshot{}
+	}
 	for _, r := range rules {
 		if !r.Enabled {
 			continue
 		}
 		for _, id := range members[r.EntryGroupID] {
-			compiled[id] = append(compiled[id], r.Config())
+			compiled[id].Rules = append(compiled[id].Rules, r.Config())
 		}
+	}
+	if err := p.compileTunnels(ctx, tx, rules, members, compiled); err != nil {
+		return nil, err
 	}
 	changed := []string{}
 	for _, n := range nodes {
-		next := &controlpb.ConfigSnapshot{Rules: compiled[n.id]}
+		next := compiled[n.id]
 		previous := &controlpb.ConfigSnapshot{}
 		var data []byte
-		err := tx.QueryRowContext(ctx, "SELECT snapshot FROM node_snapshots WHERE node_id=?", n.id).Scan(&data)
+		var encrypted bool
+		err := tx.QueryRowContext(ctx, "SELECT snapshot,encrypted FROM node_snapshots WHERE node_id=?", n.id).Scan(&data, &encrypted)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
 		if len(data) > 0 {
-			if err := proto.Unmarshal(data, previous); err != nil {
+			if err := p.decodeSnapshot(n.id, data, encrypted, previous); err != nil {
 				return nil, err
 			}
 		}
@@ -95,7 +102,11 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 		if len(data) > 60<<10 {
 			return nil, errors.New("节点配置快照超过控制消息上限")
 		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO node_snapshots(node_id,snapshot,digest) VALUES(?,?,?) ON CONFLICT(node_id) DO UPDATE SET snapshot=excluded.snapshot,digest=excluded.digest`, n.id, data, next.Digest); err != nil {
+		data, err = p.secrets.(*sealedSecrets).seal("node-snapshot:"+n.id, data)
+		if err != nil {
+			return nil, err
+		}
+		if _, err = tx.ExecContext(ctx, `INSERT INTO node_snapshots(node_id,snapshot,digest,encrypted) VALUES(?,?,?,1) ON CONFLICT(node_id) DO UPDATE SET snapshot=excluded.snapshot,digest=excluded.digest,encrypted=1`, n.id, data, next.Digest); err != nil {
 			return nil, err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE nodes SET desired_revision=?,attempted_revision=0,apply_error='' WHERE id=?", next.Revision, n.id); err != nil {
@@ -108,13 +119,14 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 func (p *Panel) controlMessage(ctx context.Context, id string) (*controlpb.PanelMessage, error) {
 	m := &controlpb.PanelMessage{ProtocolVersion: 1}
 	var data []byte
-	err := p.db.QueryRowContext(ctx, `SELECT n.desired_revision,s.snapshot FROM nodes n LEFT JOIN node_snapshots s ON s.node_id=n.id WHERE n.id=?`, id).Scan(&m.DesiredRevision, &data)
+	var encrypted sql.NullBool
+	err := p.db.QueryRowContext(ctx, `SELECT n.desired_revision,s.snapshot,s.encrypted FROM nodes n LEFT JOIN node_snapshots s ON s.node_id=n.id WHERE n.id=?`, id).Scan(&m.DesiredRevision, &data, &encrypted)
 	if err != nil {
 		return nil, err
 	}
 	if len(data) > 0 {
 		m.Snapshot = &controlpb.ConfigSnapshot{}
-		if err := proto.Unmarshal(data, m.Snapshot); err != nil {
+		if err := p.decodeSnapshot(id, data, encrypted.Bool, m.Snapshot); err != nil {
 			return nil, err
 		}
 	}
