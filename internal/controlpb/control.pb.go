@@ -306,18 +306,20 @@ func (x *EnrollResponse) GetToken() string {
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 type NodeReport struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	RotationOnly      bool                   `protobuf:"varint,80,opt,name=rotation_only,json=rotationOnly,proto3" json:"rotation_only,omitempty"`
-	Rotation          *RotationProgress      `protobuf:"bytes,81,opt,name=rotation,proto3" json:"rotation,omitempty"`
-	NodeId            string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	ProcessInstance   string                 `protobuf:"bytes,2,opt,name=process_instance,json=processInstance,proto3" json:"process_instance,omitempty"`
-	ProtocolVersion   uint32                 `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	SoftwareVersion   string                 `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
-	AppliedRevision   uint64                 `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
-	AppliedDigest     string                 `protobuf:"bytes,6,opt,name=applied_digest,json=appliedDigest,proto3" json:"applied_digest,omitempty"`
-	AttemptedRevision uint64                 `protobuf:"varint,7,opt,name=attempted_revision,json=attemptedRevision,proto3" json:"attempted_revision,omitempty"`
-	ApplyError        string                 `protobuf:"bytes,8,opt,name=apply_error,json=applyError,proto3" json:"apply_error,omitempty"`
-	Probe             *ProbeSample           `protobuf:"bytes,14,opt,name=probe,proto3" json:"probe,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 逐流授权能力独立于控制协议版本；旧节点不提前启用新授权。
+	TunnelAuthorizationVersion uint32            `protobuf:"varint,110,opt,name=tunnel_authorization_version,json=tunnelAuthorizationVersion,proto3" json:"tunnel_authorization_version,omitempty"`
+	RotationOnly               bool              `protobuf:"varint,80,opt,name=rotation_only,json=rotationOnly,proto3" json:"rotation_only,omitempty"`
+	Rotation                   *RotationProgress `protobuf:"bytes,81,opt,name=rotation,proto3" json:"rotation,omitempty"`
+	NodeId                     string            `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	ProcessInstance            string            `protobuf:"bytes,2,opt,name=process_instance,json=processInstance,proto3" json:"process_instance,omitempty"`
+	ProtocolVersion            uint32            `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	SoftwareVersion            string            `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
+	AppliedRevision            uint64            `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
+	AppliedDigest              string            `protobuf:"bytes,6,opt,name=applied_digest,json=appliedDigest,proto3" json:"applied_digest,omitempty"`
+	AttemptedRevision          uint64            `protobuf:"varint,7,opt,name=attempted_revision,json=attemptedRevision,proto3" json:"attempted_revision,omitempty"`
+	ApplyError                 string            `protobuf:"bytes,8,opt,name=apply_error,json=applyError,proto3" json:"apply_error,omitempty"`
+	Probe                      *ProbeSample      `protobuf:"bytes,14,opt,name=probe,proto3" json:"probe,omitempty"`
 	// 探针独立上报不推进 10 秒活性时间，也不改变配置应用状态。
 	ProbeOnly bool `protobuf:"varint,15,opt,name=probe_only,json=probeOnly,proto3" json:"probe_only,omitempty"`
 	// 节点查询的出站公网 IPv4，不作为已验证可入站的业务地址。
@@ -362,6 +364,13 @@ func (x *NodeReport) ProtoReflect() protoreflect.Message {
 // Deprecated: Use NodeReport.ProtoReflect.Descriptor instead.
 func (*NodeReport) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *NodeReport) GetTunnelAuthorizationVersion() uint32 {
+	if x != nil {
+		return x.TunnelAuthorizationVersion
+	}
+	return 0
 }
 
 func (x *NodeReport) GetRotationOnly() bool {
@@ -909,18 +918,19 @@ func (x *ConfigSnapshot) GetTunnelServer() *TunnelServer {
 }
 
 type ForwardRule struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	EntryGroupId  string                 `protobuf:"bytes,2,opt,name=entry_group_id,json=entryGroupId,proto3" json:"entry_group_id,omitempty"`
-	ListenPort    uint32                 `protobuf:"varint,3,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
-	TargetAddress string                 `protobuf:"bytes,4,opt,name=target_address,json=targetAddress,proto3" json:"target_address,omitempty"`
-	TargetFamily  AddressFamily          `protobuf:"varint,5,opt,name=target_family,json=targetFamily,proto3,enum=nbpass.control.v1.AddressFamily" json:"target_family,omitempty"`
-	TargetPort    uint32                 `protobuf:"varint,6,opt,name=target_port,json=targetPort,proto3" json:"target_port,omitempty"`
-	AllowPrivate  bool                   `protobuf:"varint,7,opt,name=allow_private,json=allowPrivate,proto3" json:"allow_private,omitempty"`
-	Kind          RuleKind               `protobuf:"varint,8,opt,name=kind,proto3,enum=nbpass.control.v1.RuleKind" json:"kind,omitempty"`
-	ExitGroupId   string                 `protobuf:"bytes,40,opt,name=exit_group_id,json=exitGroupId,proto3" json:"exit_group_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	AuthorizationGeneration uint64                 `protobuf:"varint,110,opt,name=authorization_generation,json=authorizationGeneration,proto3" json:"authorization_generation,omitempty"`
+	Id                      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	EntryGroupId            string                 `protobuf:"bytes,2,opt,name=entry_group_id,json=entryGroupId,proto3" json:"entry_group_id,omitempty"`
+	ListenPort              uint32                 `protobuf:"varint,3,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
+	TargetAddress           string                 `protobuf:"bytes,4,opt,name=target_address,json=targetAddress,proto3" json:"target_address,omitempty"`
+	TargetFamily            AddressFamily          `protobuf:"varint,5,opt,name=target_family,json=targetFamily,proto3,enum=nbpass.control.v1.AddressFamily" json:"target_family,omitempty"`
+	TargetPort              uint32                 `protobuf:"varint,6,opt,name=target_port,json=targetPort,proto3" json:"target_port,omitempty"`
+	AllowPrivate            bool                   `protobuf:"varint,7,opt,name=allow_private,json=allowPrivate,proto3" json:"allow_private,omitempty"`
+	Kind                    RuleKind               `protobuf:"varint,8,opt,name=kind,proto3,enum=nbpass.control.v1.RuleKind" json:"kind,omitempty"`
+	ExitGroupId             string                 `protobuf:"bytes,40,opt,name=exit_group_id,json=exitGroupId,proto3" json:"exit_group_id,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *ForwardRule) Reset() {
@@ -951,6 +961,13 @@ func (x *ForwardRule) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ForwardRule.ProtoReflect.Descriptor instead.
 func (*ForwardRule) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *ForwardRule) GetAuthorizationGeneration() uint64 {
+	if x != nil {
+		return x.AuthorizationGeneration
+	}
+	return 0
 }
 
 func (x *ForwardRule) GetId() string {
@@ -1575,9 +1592,10 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\x9a\x06\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\xdc\x06\n" +
 	"\n" +
-	"NodeReport\x12#\n" +
+	"NodeReport\x12@\n" +
+	"\x1ctunnel_authorization_version\x18n \x01(\rR\x1atunnelAuthorizationVersion\x12#\n" +
 	"\rrotation_only\x18P \x01(\bR\frotationOnly\x12?\n" +
 	"\brotation\x18Q \x01(\v2#.nbpass.control.v1.RotationProgressR\brotation\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
@@ -1636,8 +1654,9 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x05rules\x18\x03 \x03(\v2\x1e.nbpass.control.v1.ForwardRuleR\x05rules\x12=\n" +
 	"\vexit_groups\x18( \x03(\v2\x1c.nbpass.control.v1.ExitGroupR\n" +
 	"exitGroups\x12D\n" +
-	"\rtunnel_server\x18) \x01(\v2\x1f.nbpass.control.v1.TunnelServerR\ftunnelServer\"\xed\x02\n" +
-	"\vForwardRule\x12\x0e\n" +
+	"\rtunnel_server\x18) \x01(\v2\x1f.nbpass.control.v1.TunnelServerR\ftunnelServer\"\xa8\x03\n" +
+	"\vForwardRule\x129\n" +
+	"\x18authorization_generation\x18n \x01(\x04R\x17authorizationGeneration\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12$\n" +
 	"\x0eentry_group_id\x18\x02 \x01(\tR\fentryGroupId\x12\x1f\n" +
 	"\vlisten_port\x18\x03 \x01(\rR\n" +
