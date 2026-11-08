@@ -24,6 +24,7 @@ type Dependencies struct {
 	Listen     func(string, string) (net.Listener, error)
 	DialTunnel func(context.Context, string) (net.Conn, error)
 	Now        func() time.Time
+	Persist    func(State) error
 }
 
 type Engine struct {
@@ -37,6 +38,8 @@ type Engine struct {
 	digest              string
 	highest             uint64
 	highestDigest       string
+	results             []*controlpb.RuleApplyResult
+	tunnelError         string
 }
 
 func NewEngine(deps Dependencies) *Engine {
@@ -72,7 +75,7 @@ func (e *Engine) Connections() (business, tunnel uint64) {
 func (e *Engine) Applied() (uint64, string) { return e.revision, e.digest }
 
 // Apply 保留未变化的监听，先撤销缺失/变化的规则，再启动新规则。
-// 调用方串行使用引擎；逐规则缓存与部分应用结果由票 04 在此边界扩展。
+// 调用方串行使用引擎；任何运行时撤销之前必须先提交不含旧规则的缓存。
 func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 	if err := ValidateSnapshot(s); err != nil {
 		return err
@@ -80,34 +83,35 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 	if s.Revision < e.highest || s.Revision == e.highest && s.Digest != e.highestDigest {
 		return errors.New("拒绝旧版本或同版本不同内容的快照")
 	}
-	e.highest, e.highestDigest = s.Revision, s.Digest
-	var failures []error
-	if err := e.applyTunnelServer(s.TunnelServer); err != nil {
-		failures = append(failures, fmt.Errorf("出口隧道监听失败: %w", err))
-	}
-	endpoints := map[string]*controlpb.TunnelEndpoint{}
-	groups := map[string]*controlpb.TunnelEndpoint{}
-	for _, g := range s.ExitGroups {
-		for _, ep := range g.Exits {
-			endpoints[ep.NodeId] = ep
-			groups[g.Id] = ep
-		}
-	}
-	for id, client := range e.tunnelClients {
-		if !proto.Equal(client.endpoint, endpoints[id]) {
-			client.close()
-			delete(e.tunnelClients, id)
-		}
-	}
-	for id, ep := range endpoints {
-		if e.tunnelClients[id] == nil {
-			e.tunnelClients[id] = &tunnelClient{endpoint: proto.Clone(ep).(*controlpb.TunnelEndpoint), engine: e}
-		}
-	}
+	endpoints, groups := tunnelEndpoints(s.ExitGroups)
 	desired := map[string]*controlpb.ForwardRule{}
 	for _, r := range s.Rules {
 		desired[r.Id] = r
 	}
+	checkpoint := e.State()
+	checkpoint.HighestRevision, checkpoint.HighestDigest = s.Revision, s.Digest
+	checkpoint.Rules, checkpoint.Results = nil, nil
+	checkpoint.ExitGroups = s.ExitGroups
+	checkpoint.TunnelError = ""
+	if !proto.Equal(checkpoint.TunnelServer, s.TunnelServer) {
+		// 更新授权也属于撤销：最终写盘失败后不能恢复旧凭据或旧授权。
+		checkpoint.TunnelServer = nil
+		if s.TunnelServer != nil {
+			checkpoint.TunnelError = "出口隧道配置应用尚未完成"
+		}
+	}
+	for _, r := range s.Rules {
+		result := &controlpb.RuleApplyResult{RuleId: r.Id, ApplyError: "配置应用尚未完成"}
+		if current := e.rules[r.Id]; current != nil && proto.Equal(current.config, r) && proto.Equal(current.exit, groups[r.ExitGroupId]) {
+			checkpoint.Rules = append(checkpoint.Rules, r)
+			result.AppliedRevision, result.ApplyError = s.Revision, ""
+		}
+		checkpoint.Results = append(checkpoint.Results, result)
+	}
+	if err := e.persist(checkpoint); err != nil {
+		return err
+	}
+	e.highest, e.highestDigest = s.Revision, s.Digest
 	for id, current := range e.rules {
 		next := desired[id]
 		var ep *controlpb.TunnelEndpoint
@@ -119,30 +123,83 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 			delete(e.rules, id)
 		}
 	}
+	var failures []error
+	e.tunnelError = ""
+	if err := e.applyTunnelServer(s.TunnelServer); err != nil {
+		e.tunnelError = ErrorSummary(fmt.Sprintf("出口隧道监听失败: %v", err), 1024)
+		failures = append(failures, errors.New(e.tunnelError))
+	}
+	e.applyTunnelClients(endpoints)
+	e.results = nil
 	for _, r := range s.Rules {
-		if e.rules[r.Id] != nil {
-			continue
+		result := &controlpb.RuleApplyResult{RuleId: r.Id}
+		if err := e.startRule(r, groups[r.ExitGroupId]); err != nil {
+			result.ApplyError = ErrorSummary(err.Error(), 1024)
+			failures = append(failures, errors.New(result.ApplyError))
+		} else {
+			result.AppliedRevision = s.Revision
 		}
-		listener, err := e.deps.Listen("tcp4", net.JoinHostPort("0.0.0.0", strconv.Itoa(int(r.ListenPort))))
-		if err != nil {
-			failures = append(failures, fmt.Errorf("规则 %s 监听失败: %w", r.Id, err))
-			continue
-		}
-		ctx, cancel := context.WithCancel(context.Background())
-		var client *tunnelClient
-		ep := groups[r.ExitGroupId]
-		if ep != nil {
-			client = e.tunnelClients[ep.NodeId]
-		}
-		current := &listenerRule{exit: ep, tunnel: client, config: proto.Clone(r).(*controlpb.ForwardRule), listener: listener, ctx: ctx, cancel: cancel, connections: map[net.Conn]struct{}{}, engine: e}
-		e.rules[r.Id] = current
-		current.wg.Add(1)
-		go current.accept()
+		e.results = append(e.results, result)
 	}
-	if len(failures) > 0 {
-		return errors.Join(failures...)
+	state := e.State()
+	if len(failures) == 0 {
+		state.AppliedRevision, state.AppliedDigest = s.Revision, s.Digest
 	}
-	e.revision, e.digest = s.Revision, s.Digest
+	if err := e.persist(state); err != nil {
+		for _, r := range e.results {
+			if r.ApplyError == "" {
+				r.ApplyError = ErrorSummary(err.Error(), 1024)
+			}
+		}
+		return errors.Join(append(failures, err)...)
+	}
+	e.revision, e.digest = state.AppliedRevision, state.AppliedDigest
+	return errors.Join(failures...)
+}
+
+func tunnelEndpoints(exitGroups []*controlpb.ExitGroup) (map[string]*controlpb.TunnelEndpoint, map[string]*controlpb.TunnelEndpoint) {
+	endpoints := map[string]*controlpb.TunnelEndpoint{}
+	groups := map[string]*controlpb.TunnelEndpoint{}
+	for _, g := range exitGroups {
+		for _, ep := range g.Exits {
+			endpoints[ep.NodeId] = ep
+			groups[g.Id] = ep
+		}
+	}
+	return endpoints, groups
+}
+
+func (e *Engine) applyTunnelClients(endpoints map[string]*controlpb.TunnelEndpoint) {
+	for id, client := range e.tunnelClients {
+		if !proto.Equal(client.endpoint, endpoints[id]) {
+			client.close()
+			delete(e.tunnelClients, id)
+		}
+	}
+	for id, ep := range endpoints {
+		if e.tunnelClients[id] == nil {
+			e.tunnelClients[id] = &tunnelClient{endpoint: proto.Clone(ep).(*controlpb.TunnelEndpoint), engine: e}
+		}
+	}
+}
+
+func (e *Engine) startRule(r *controlpb.ForwardRule, ep *controlpb.TunnelEndpoint) error {
+	if e.rules[r.Id] != nil {
+		return nil
+	}
+	listener, err := e.deps.Listen("tcp4", net.JoinHostPort("0.0.0.0", strconv.Itoa(int(r.ListenPort))))
+	if err != nil {
+		return fmt.Errorf("规则 %s 端口 %d 监听失败: %w", r.Id, r.ListenPort, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var client *tunnelClient
+	if ep != nil {
+		client = e.tunnelClients[ep.NodeId]
+	}
+	current := &listenerRule{exit: ep, tunnel: client, config: proto.Clone(r).(*controlpb.ForwardRule), listener: listener, ctx: ctx, cancel: cancel, connections: map[net.Conn]struct{}{}, engine: e}
+	e.rules[r.Id] = current
+	current.wg.Add(1)
+	go current.accept()
 	return nil
 }
 func (e *Engine) Close() {

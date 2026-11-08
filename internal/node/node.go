@@ -6,14 +6,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/url"
 	"os"
-	"strings"
 	"time"
-	"unicode/utf8"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -67,6 +66,7 @@ type Dependencies struct {
 	PublicIPv4          func(context.Context) (string, error)
 	Events              *EventQueue
 	Forwarding          forwarding.Dependencies
+	ConfigStore         ConfigStore
 }
 
 func Run(ctx context.Context, config Config, deps Dependencies) error {
@@ -165,8 +165,23 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 		deps.Forwarding.Now = deps.Clock.Now
 	}
 	deps.Forwarding.NodeID = credential.NodeID
+	if deps.ConfigStore == nil {
+		deps.ConfigStore, _ = deps.Store.(ConfigStore)
+	}
+	if deps.ConfigStore != nil {
+		deps.Forwarding.Persist = func(state forwarding.State) error {
+			data, err := json.Marshal(configCache{Version: 1, NodeID: credential.NodeID, ControlURL: credential.ControlURL, State: state})
+			if err != nil {
+				return err
+			}
+			return deps.ConfigStore.SaveConfig(ctx, data)
+		}
+	}
 	engine := forwarding.NewEngine(deps.Forwarding)
 	defer engine.Close()
+	if err := openConfigCache(ctx, credential, &deps, engine); err != nil {
+		return err
+	}
 	if deps.Connections == nil {
 		deps.Connections = engine
 	}
@@ -183,6 +198,11 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 		}
 	}()
 	report := &controlpb.NodeReport{NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
+	state := engine.State()
+	report.AttemptedRevision, report.AttemptedDigest, report.RuleResults = state.HighestRevision, state.HighestDigest, state.Results
+	report.AppliedRevision, report.AppliedDigest = engine.Applied()
+	report.ApplyError = engine.ApplyError()
+	report.RevocationsApplied = state.HighestRevision > 0
 	probeCtx, stopProbe := context.WithCancel(ctx)
 	defer stopProbe()
 	updates := make(chan probeUpdate, 1)
@@ -271,6 +291,10 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		}
 		if kind != configReport {
 			outgoing.AttemptedRevision, outgoing.ApplyError = 0, ""
+			outgoing.RuleResults, outgoing.AttemptedDigest = nil, ""
+			outgoing.RevocationsApplied = false
+		} else if err := limitConfigReport(outgoing); err != nil {
+			return err
 		}
 		if kind == probeReport || kind == eventReport || kind == rotationReport {
 			outgoing.AppliedRevision, outgoing.AppliedDigest = 0, ""
@@ -330,6 +354,11 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	nextHeartbeat := clock.Now().Add(10 * time.Second)
 	if err := send(heartbeatReport, nil); err != nil {
 		return err
+	}
+	if report.AttemptedRevision > 0 {
+		if err := send(configReport, nil); err != nil {
+			return err
+		}
 	}
 	if deps.rotations != nil && deps.rotations.snapshot() != nil {
 		if err := send(rotationReport, nil); err != nil {
@@ -432,8 +461,24 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				continue
 			}
 			report.AttemptedRevision = snapshot.Revision
+			report.AttemptedDigest = snapshot.Digest
 			err := engine.Apply(snapshot)
 			report.AppliedRevision, report.AppliedDigest = engine.Applied()
+			state := engine.State()
+			report.RuleResults = state.Results
+			report.RevocationsApplied = state.HighestRevision == snapshot.Revision && state.HighestDigest == snapshot.Digest
+			if state.HighestRevision != snapshot.Revision || state.HighestDigest != snapshot.Digest {
+				report.RuleResults = nil
+				for _, r := range snapshot.Rules {
+					result := &controlpb.RuleApplyResult{RuleId: r.Id, ApplyError: "配置未应用：缓存写入或快照校验失败"}
+					for _, previous := range state.Results {
+						if previous.RuleId == r.Id {
+							result.AppliedRevision = previous.AppliedRevision
+						}
+					}
+					report.RuleResults = append(report.RuleResults, result)
+				}
+			}
 			report.ApplyError = ""
 			if err != nil {
 				if deps.Events != nil {
@@ -442,13 +487,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 					}
 					drainEvents = true
 				}
-				report.ApplyError = strings.ToValidUTF8(err.Error(), "�")
-				if len(report.ApplyError) > 1024 {
-					report.ApplyError = report.ApplyError[:1024]
-					for !utf8.ValidString(report.ApplyError) {
-						report.ApplyError = report.ApplyError[:len(report.ApplyError)-1]
-					}
-				}
+				report.ApplyError = forwarding.ErrorSummary(err.Error(), 1024)
 			}
 			if err := send(configReport, nil); err != nil {
 				return err

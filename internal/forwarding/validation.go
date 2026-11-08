@@ -25,6 +25,8 @@ type ValidationNode struct {
 	ID, Name string
 	// 仅用于保守识别指回节点的目标，不作为已验证的业务发布地址。
 	ObservedIPv4 string
+	// 出口可通过独立管理 API 配置端口；同时保留节点参数中的预留端口约束。
+	ActiveTunnelListenPort int
 	NodeListenerPorts
 }
 
@@ -75,6 +77,11 @@ func ValidateConfiguration(nodes []ValidationNode, rules []Rule, members map[str
 			port int
 		}{{"tunnel", n.TunnelListenPort}, {"check", n.CheckPort}} {
 			if err := reserve(ListenerReference{NodeID: n.ID, NodeName: n.Name, Port: service.port, Kind: service.kind}); err != nil {
+				return err
+			}
+		}
+		if n.ActiveTunnelListenPort != 0 && n.ActiveTunnelListenPort != n.TunnelListenPort {
+			if err := reserve(ListenerReference{NodeID: n.ID, NodeName: n.Name, Port: n.ActiveTunnelListenPort, Kind: "tunnel"}); err != nil {
 				return err
 			}
 		}
