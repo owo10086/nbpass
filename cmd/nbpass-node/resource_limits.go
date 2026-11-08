@@ -14,5 +14,6 @@ func directResourceFlags(fs *flag.FlagSet) *forwarding.ResourceLimits {
 	fs.IntVar(&l.MaxPendingDials, "direct-max-pending-dials", 512, "每节点直连待拨号上限（含域名解析）")
 	fs.DurationVar(&l.DialTimeout, "direct-dial-timeout", 10*time.Second, "直连域名解析与候选拨号的总期限")
 	fs.DurationVar(&l.IdleTimeout, "direct-idle-timeout", 2*time.Hour, "直连双向均无数据时的空闲期限")
+	tunnelResourceFlags(fs, l)
 	return l
 }
