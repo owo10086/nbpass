@@ -106,10 +106,19 @@ func TestNodeNetworkIsolationOfflineThresholdAndRecovery(t *testing.T) {
 	}
 	// B 仍能上报，模拟网络只阻断 A。
 	h.Clock.Advance(10 * time.Second)
-	awaitNode(t, c, otherID, connected)
+	// 一次跳过多个定时期限后，真实传输可能先处理活性超时，再建立重试定时器。
+	// 与下方 A 的恢复相同，继续驱动注入时钟，让未被阻断的 B 完成重连。
+	deadline := time.Now().Add(5 * time.Second)
+	for !connected(nodeRow(t, c, otherID)) {
+		if time.Now().After(deadline) {
+			t.Fatal("未被阻断的节点未恢复控制连接")
+		}
+		h.Clock.Advance(time.Second)
+		time.Sleep(10 * time.Millisecond)
+	}
 	n.Restore()
 	// 断网错误与重连定时器的建立经过真实 gRPC 异步传输，推进重试周期直至恢复。
-	deadline := time.Now().Add(5 * time.Second)
+	deadline = time.Now().Add(5 * time.Second)
 	for !connected(nodeRow(t, c, id)) {
 		if time.Now().After(deadline) {
 			t.Fatal("恢复网络后节点未重连")

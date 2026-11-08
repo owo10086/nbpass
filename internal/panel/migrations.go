@@ -52,6 +52,7 @@ var migrations = []string{
 		prefix TEXT PRIMARY KEY
 	);`,
 	probeMigration,
+	eventMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

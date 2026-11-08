@@ -37,8 +37,8 @@ func TestProbeMigrationPreservesVersionFourRegionAndAuthData(t *testing.T) {
 	}
 	p := openDiskPanel(t, dir)
 	var version int
-	if err := p.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 5 {
-		t.Fatalf("应升级到版本 5: %d %v", version, err)
+	if err := p.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != len(migrations) {
+		t.Fatalf("应升级到当前版本 %d: %d %v", len(migrations), version, err)
 	}
 	var ip, override string
 	var disabled int

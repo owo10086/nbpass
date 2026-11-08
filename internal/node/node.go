@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"nbpass/internal/controlpb"
+	"nbpass/internal/eventlog"
 	"nbpass/internal/probe"
 	"nbpass/internal/publicip"
 	"nbpass/internal/timing"
@@ -55,6 +56,7 @@ type Dependencies struct {
 	RootCAs     *x509.CertPool
 	DialContext func(context.Context, string) (net.Conn, error)
 	PublicIPv4  func(context.Context) (string, error)
+	Events      *EventQueue
 }
 
 func Run(ctx context.Context, config Config, deps Dependencies) error {
@@ -115,6 +117,19 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	if config.EnrollOnly {
 		return nil
 	}
+	if deps.Events == nil {
+		if store, ok := deps.Store.(EventStore); ok {
+			deps.Events, err = OpenEventQueue(ctx, store, deps.Clock, deps.Random, EventLimits{})
+			if err != nil {
+				return errors.New("无法打开节点事件队列")
+			}
+		}
+	}
+	if deps.Events != nil {
+		if err := deps.Events.Record(ctx, "node_started", "节点进程启动", 0); err != nil {
+			return errors.New("节点启动事件持久化失败")
+		}
+	}
 	instance := make([]byte, 32)
 	if _, err := io.ReadFull(deps.Random, instance); err != nil {
 		return errors.New("无法生成节点进程实例")
@@ -153,31 +168,45 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		return err
 	}
 	// 每条新流先发活性；探针有自己的周期，不改变既有活性节奏。
-	report.Probe, report.ProbeOnly = nil, false
+	report.Probe, report.ProbeOnly, report.EventsOnly = nil, false, false
 	nextHeartbeat := clock.Now().Add(10 * time.Second)
 	for {
 		// 每次请求得到确认才开始下一活性周期，未响应的流也必须超时重连。
-		result := make(chan error, 1)
+		type response struct {
+			message *controlpb.PanelMessage
+			err     error
+		}
+		result := make(chan response, 1)
+		progress := false
 		// 超时取消与传输退出并非同步；旧流只能持有本轮不可变的报告。
 		outgoing := proto.Clone(report).(*controlpb.NodeReport)
 		// 公网 IP 属于 10 秒活性周期；独立探针不查询，避免被外部查询拖住。
-		if !outgoing.ProbeOnly {
+		if !outgoing.ProbeOnly && !outgoing.EventsOnly {
 			queryCtx, queryCancel := timeout(ctx, clock, 5*time.Second)
 			if value, err := deps.PublicIPv4(queryCtx); err == nil && queryCtx.Err() == nil {
 				outgoing.PublicIpv4, _ = publicip.Parse(value)
 			}
 			queryCancel()
 		}
+		if deps.Events != nil && !outgoing.ProbeOnly {
+			batch, err := deps.Events.Batch(ctx)
+			if err != nil {
+				return err
+			}
+			for _, e := range batch {
+				outgoing.Events = append(outgoing.Events, e.Proto())
+			}
+		}
 		go func() {
 			if err := stream.Send(outgoing); err != nil && !errors.Is(err, io.EOF) {
-				result <- err
+				result <- response{err: err}
 				return
 			}
 			message, err := stream.Recv()
 			if err == nil && message.ProtocolVersion != ProtocolVersion {
 				err = errors.New("控制协议不兼容")
 			}
-			result <- err
+			result <- response{message, err}
 		}()
 		timer := clock.NewTimer(15 * time.Second)
 		select {
@@ -186,13 +215,48 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			return ctx.Err()
 		case <-timer.C():
 			return errors.New("控制响应超时")
-		case err := <-result:
+		case received := <-result:
 			timer.Stop()
-			if err != nil {
-				return err
+			if received.err != nil {
+				return received.err
+			}
+			if deps.Events != nil {
+				sentIDs := make(map[string]bool, len(outgoing.Events))
+				for _, e := range outgoing.Events {
+					sentIDs[e.EventId] = true
+				}
+				for _, id := range received.message.AcknowledgedEventIds {
+					if !sentIDs[id] {
+						return errors.New("事件确认不属于当前批次")
+					}
+				}
+				if err := deps.Events.Ack(ctx, received.message.AcknowledgedEventIds); err != nil {
+					return err
+				}
+				progress = len(received.message.AcknowledgedEventIds) > 0
 			}
 		}
+		// 满批有确认进展才继续补报，不推进活性或其他报告状态。
+		if len(outgoing.Events) == eventlog.MaxBatch && progress {
+			report.Probe, report.ProbeOnly, report.EventsOnly = nil, false, true
+			// 每批之间让出到期活性及最新探针，慢 ACK 不能饿死其他上报。
+			select {
+			case update := <-updates:
+				if clock.Now().Sub(update.at) < 2*probe.IntervalSeconds*time.Second {
+					report.Probe = update.sample
+					report.ProbeOnly = clock.Now().Before(nextHeartbeat)
+					report.EventsOnly = false
+				}
+			default:
+			}
+			if !clock.Now().Before(nextHeartbeat) {
+				report.ProbeOnly, report.EventsOnly = false, false
+				nextHeartbeat = clock.Now().Add(10 * time.Second)
+			}
+			continue
+		}
 		report.Probe = nil
+		report.EventsOnly = false
 		for {
 			timer = clock.NewTimer(nextHeartbeat.Sub(clock.Now()))
 			select {

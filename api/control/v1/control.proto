@@ -23,6 +23,9 @@ message NodeReport {
   bool probe_only = 15;
   // 节点查询的出站公网 IPv4，不作为已验证可入站的业务地址。
   string public_ipv4 = 17;
+  repeated Event events = 18;
+  // 独立补报只处理事件，不改变活性、探针或配置状态。
+  bool events_only = 19;
 }
 
 message ProbeSample {
@@ -35,4 +38,21 @@ message ProbeSample {
 message PanelMessage {
   uint32 protocol_version = 1;
   uint64 desired_revision = 2;
+  repeated string acknowledged_event_ids = 15;
+}
+
+message Event {
+  string event_id = 1;
+  string type = 2;
+  string occurred_at = 3;
+  uint64 config_revision = 4;
+  string message = 5;
+  EventGap gap = 6;
+}
+
+message EventGap {
+  uint64 count = 1;
+  string from = 2;
+  string to = 3;
+  string reason = 4;
 }

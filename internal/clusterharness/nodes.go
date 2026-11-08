@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -25,6 +26,7 @@ type Node struct {
 	silent      bool
 	config      node.Config
 	deps        node.Dependencies
+	openEvents  func() (*node.EventQueue, error)
 }
 
 type memoryCredentials struct {
@@ -60,6 +62,11 @@ func (h *Harness) StartNode(ticket string, options ...func(*node.Config, *node.D
 	for _, option := range options {
 		option(&n.config, &n.deps)
 	}
+	if store, ok := n.deps.Store.(node.EventStore); ok && n.deps.Events == nil {
+		n.openEvents = func() (*node.EventQueue, error) {
+			return node.OpenEventQueue(context.Background(), store, n.deps.Clock, n.deps.Random, node.EventLimits{})
+		}
+	}
 	n.start()
 	h.t.Cleanup(n.Stop)
 	return n
@@ -69,7 +76,24 @@ func (n *Node) start() {
 	ctx, cancel := context.WithCancel(context.Background())
 	n.cancel = cancel
 	n.Done, n.finished = make(chan error, 1), make(chan struct{})
+	if n.openEvents != nil {
+		queue, err := n.openEvents()
+		if err != nil {
+			n.Done <- err
+			close(n.finished)
+			return
+		}
+		n.deps.Events = queue
+	}
 	go func() { defer close(n.finished); n.Done <- node.Run(ctx, n.config, n.deps) }()
+}
+
+// RecordEvent 驱动真实节点事件生产者；验证结果仍只读取面板 HTTP API。
+func (n *Node) RecordEvent(kind, message string, revision uint64) error {
+	if n.deps.Events == nil {
+		return fmt.Errorf("节点未配置事件队列")
+	}
+	return n.deps.Events.Record(context.Background(), kind, message, revision)
 }
 func (n *Node) Stop()    { n.cancel(); <-n.finished }
 func (n *Node) Restart() { n.Stop(); n.start() }

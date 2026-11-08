@@ -19,9 +19,10 @@ import (
 )
 
 type controlSession struct {
-	done     chan struct{}
-	once     sync.Once
-	instance string
+	done         chan struct{}
+	once         sync.Once
+	instance     string
+	eventsLogged bool
 }
 
 func (s *controlSession) stop() { s.once.Do(func() { close(s.done) }) }
@@ -295,15 +296,21 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, status.Error(codes.FailedPrecondition, "旧进程实例报告无效")
 	}
 	session.instance = report.ProcessInstance
-	if err := p.storeProbe(ctx, id, session.instance, report.Probe); err != nil {
-		return nil, status.Error(codes.Unavailable, "探针存储暂不可用")
+	if !report.EventsOnly {
+		if err := p.storeProbe(ctx, id, session.instance, report.Probe); err != nil {
+			return nil, status.Error(codes.Unavailable, "探针存储暂不可用")
+		}
 	}
 	var desired, applied int64
 	if err := p.db.QueryRowContext(ctx, "SELECT desired_revision, applied_revision FROM nodes WHERE id = ?", id).Scan(&desired, &applied); err != nil {
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
-	if report.ProbeOnly {
-		return &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired)}, nil
+	acked, err := p.acceptEvents(ctx, id, session, report)
+	if err != nil {
+		return nil, err
+	}
+	if report.ProbeOnly || report.EventsOnly {
+		return &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired), AcknowledgedEventIds: acked}, nil
 	}
 	// 独立探针只存指标；IP、地区与活性由正常活性报告更新。
 	if err := p.recordNodeIP(ctx, id, report.PublicIpv4); err != nil {
@@ -313,11 +320,11 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 	if report.AppliedRevision <= uint64(desired) && report.AppliedRevision > uint64(applied) {
 		applied = int64(report.AppliedRevision)
 	}
-	_, err := p.db.ExecContext(ctx, `UPDATE nodes SET last_seen_at = ?, disconnected_at = NULL,
+	_, err = p.db.ExecContext(ctx, `UPDATE nodes SET last_seen_at = ?, disconnected_at = NULL,
 		process_instance = ?, software_version = ?, applied_revision = ? WHERE id = ? AND token_hash = ?`,
 		p.deps.Clock.Now().UnixNano(), session.instance, report.SoftwareVersion, applied, id, digest)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
-	return &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired)}, nil
+	return &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired), AcknowledgedEventIds: acked}, nil
 }
