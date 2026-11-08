@@ -164,8 +164,9 @@ func (p *Panel) getSelfCheck(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	type roundView struct {
 		selfcheck.Round
-		FinalResult    string `json:"final_result"`
-		EvidenceSource string `json:"evidence_source"`
+		FinalResult    string            `json:"final_result"`
+		EvidenceSource string            `json:"evidence_source"`
+		Arbitration    *checkerRoundView `json:"arbitration,omitempty"`
 	}
 	rounds := []roundView{}
 	for rows.Next() {
@@ -184,6 +185,14 @@ func (p *Panel) getSelfCheck(w http.ResponseWriter, r *http.Request) {
 	if rows.Err() != nil {
 		problem(w, 503, "自测历史暂不可用")
 		return
+	}
+	rows.Close()
+	for i := range rounds {
+		rounds[i].Arbitration, err = loadCheckerRound(ctx, tx, id, rounds[i].ID)
+		if err != nil {
+			problem(w, 503, "补判证据暂不可用")
+			return
+		}
 	}
 	var next any
 	if len(rounds) > limit {
