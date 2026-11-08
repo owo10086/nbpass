@@ -33,6 +33,9 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	if len(os.Args) > 1 && os.Args[1] == "reset-password" {
+		return resetPassword(ctx, os.Args[2:], os.Stdin, os.Stdout)
+	}
 	httpAddress := flag.String("http-listen", "127.0.0.1:8080", "网页和 API 的 HTTP 监听地址")
 	controlAddress := flag.String("control-listen", "127.0.0.1:8081", "gRPC 控制监听地址")
 	controlURL := flag.String("control-url", "", "节点访问的 HTTPS 控制地址，默认与 public-origin 相同")

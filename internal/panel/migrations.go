@@ -42,6 +42,14 @@ var migrations = []string{
 		process_instance TEXT NOT NULL,
 		PRIMARY KEY(node_id, process_instance)
 	);`,
+	`CREATE TABLE auth_login_failures (
+		source TEXT PRIMARY KEY,
+		failures INTEGER NOT NULL,
+		locked_until INTEGER NOT NULL DEFAULT 0
+	);
+	CREATE TABLE auth_trusted_proxies (
+		prefix TEXT PRIMARY KEY
+	);`,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {
