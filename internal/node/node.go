@@ -11,15 +11,19 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"nbpass/internal/controlpb"
+	"nbpass/internal/forwarding"
 	"nbpass/internal/timing"
 )
 
@@ -49,6 +53,7 @@ type Dependencies struct {
 	Random      io.Reader
 	RootCAs     *x509.CertPool
 	DialContext func(context.Context, string) (net.Conn, error)
+	Forwarding  forwarding.Dependencies
 }
 
 func Run(ctx context.Context, config Config, deps Dependencies) error {
@@ -109,6 +114,8 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	if _, err := io.ReadFull(deps.Random, instance); err != nil {
 		return errors.New("无法生成节点进程实例")
 	}
+	engine := forwarding.NewEngine(deps.Forwarding)
+	defer engine.Close()
 	report := &controlpb.NodeReport{NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
 	for {
 		if ctx.Err() != nil {
@@ -116,7 +123,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 		}
 		// 由注入时钟控制重试，不额外等待 gRPC 内部的墙上时钟退避。
 		client.ResetConnectBackoff()
-		err := exchange(ctx, service, credential.Token, report, deps.Clock)
+		err := exchange(ctx, service, credential.Token, report, deps.Clock, engine)
 		if status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.FailedPrecondition {
 			return errors.New("节点凭据或进程实例已失效，请检查面板状态")
 		}
@@ -130,47 +137,112 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 }
 
-func exchange(ctx context.Context, service controlpb.ControlServiceClient, token string, report *controlpb.NodeReport, clock timing.Clock) error {
+func exchange(ctx context.Context, service controlpb.ControlServiceClient, token string, report *controlpb.NodeReport, clock timing.Clock, engine *forwarding.Engine) error {
 	streamCtx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token))
 	defer cancel()
 	stream, err := service.Connect(streamCtx)
 	if err != nil {
 		return err
 	}
-	for {
-		next := clock.Now().Add(10 * time.Second)
-		// 每次请求得到确认才开始下一活性周期，未响应的流也必须超时重连。
-		result := make(chan error, 1)
-		go func() {
-			if err := stream.Send(report); err != nil && !errors.Is(err, io.EOF) {
-				result <- err
+	type incoming struct {
+		message *controlpb.PanelMessage
+		err     error
+	}
+	messages := make(chan incoming)
+	go func() {
+		for {
+			m, err := stream.Recv()
+			select {
+			case messages <- incoming{m, err}:
+			case <-streamCtx.Done():
 				return
 			}
-			message, err := stream.Recv()
-			if err == nil && message.ProtocolVersion != ProtocolVersion {
-				err = errors.New("控制协议不兼容")
-			}
-			result <- err
-		}()
-		timer := clock.NewTimer(15 * time.Second)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C():
-			return errors.New("控制响应超时")
-		case err := <-result:
-			timer.Stop()
 			if err != nil {
-				return err
+				return
 			}
 		}
-		timer = clock.NewTimer(next.Sub(clock.Now()))
+	}()
+	// 发送与接收分别串行，允许面板在心跳间隔内主动推送。
+	send := func(confirm bool) error {
+		copy := proto.Clone(report).(*controlpb.NodeReport)
+		if !confirm {
+			copy.AttemptedRevision = 0
+			copy.ApplyError = ""
+		}
+		result := make(chan error, 1)
+		go func() { result <- stream.Send(copy) }()
+		timer := clock.NewTimer(15 * time.Second)
+		defer timer.Stop()
 		select {
+		case err := <-result:
+			return err
 		case <-ctx.Done():
-			timer.Stop()
 			return ctx.Err()
 		case <-timer.C():
+			return errors.New("控制发送超时")
+		}
+	}
+	if err := send(false); err != nil {
+		return err
+	}
+	heartbeat := clock.NewTimer(10 * time.Second)
+	defer func() { heartbeat.Stop() }()
+	response := clock.NewTimer(15 * time.Second)
+	defer func() { response.Stop() }()
+	var responseC = response.C()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-responseC:
+			return errors.New("控制响应超时")
+		case <-heartbeat.C():
+			if err := send(false); err != nil {
+				return err
+			}
+			if responseC == nil {
+				response = clock.NewTimer(15 * time.Second)
+				responseC = response.C()
+			}
+			heartbeat = clock.NewTimer(10 * time.Second)
+		case received := <-messages:
+			if received.err != nil {
+				return received.err
+			}
+			m := received.message
+			if m.ProtocolVersion != ProtocolVersion {
+				return errors.New("控制协议不兼容")
+			}
+			response.Stop()
+			responseC = nil
+			snapshot := m.Snapshot
+			if snapshot == nil {
+				continue
+			}
+			if snapshot.Revision != m.DesiredRevision {
+				return errors.New("配置快照版本不一致")
+			}
+			revision, digest := engine.Applied()
+			if snapshot.Revision < report.AttemptedRevision || (snapshot.Revision == revision && snapshot.Digest == digest) {
+				continue
+			}
+			report.AttemptedRevision = snapshot.Revision
+			err := engine.Apply(snapshot)
+			report.AppliedRevision, report.AppliedDigest = engine.Applied()
+			report.ApplyError = ""
+			if err != nil {
+				// 先限制再编码，避免汇总错误超过 gRPC 发送上限而丢失整份报告。
+				report.ApplyError = strings.ToValidUTF8(err.Error(), "�")
+				if len(report.ApplyError) > 1024 {
+					report.ApplyError = report.ApplyError[:1024]
+					for !utf8.ValidString(report.ApplyError) {
+						report.ApplyError = report.ApplyError[:len(report.ApplyError)-1]
+					}
+				}
+			}
+			if err := send(true); err != nil {
+				return err
+			}
 		}
 	}
 }
