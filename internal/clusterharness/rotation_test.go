@@ -331,9 +331,14 @@ func TestRotationTransportLossDuringBlockedHeartbeatCancelsExecution(t *testing.
 	time.Sleep(50 * time.Millisecond)
 	close(releaseHeartbeat)
 	n.Restore()
-	for i := 0; i < 5; i++ {
+	// 取消结果须在真实控制流重连后补报；持续驱动重连用的假时钟，不在五次推进后冻结它。
+	for i := 0; i < 50; i++ {
 		h.Clock.Advance(time.Second)
 		time.Sleep(20 * time.Millisecond)
+		state, _ := c.Do("GET", path, nil, 200)["action"].(map[string]any)
+		if state != nil && state["state"] == "cancelled" {
+			break
+		}
 	}
 	if calls.Load() != 0 {
 		t.Fatal("接收协程已知断流，仍调用接口")
@@ -400,7 +405,7 @@ func TestRotationContinuesObservingOfflineAndReportsAfterRestart(t *testing.T) {
 	awaitNode(t, c, id, connected)
 	c.Do("PUT", path, map[string]any{"url": vendor.URL + "/change?token=rotation-private-marker", "method": "POST", "private_endpoints": []string{vendor.URL + "/change"}}, 200)
 	c.Do("POST", path+"/actions", nil, 202)
-	awaitRotation(t, c, path, "observing")
+	awaitRotation(t, c, path, "unconfirmed")
 	n.Disconnect()
 	awaitNode(t, c, id, func(row map[string]any) bool { return row["connected"] == false })
 	h.Clock.Advance(60 * time.Second)

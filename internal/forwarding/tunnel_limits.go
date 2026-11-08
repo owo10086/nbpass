@@ -43,11 +43,13 @@ func (r *listenerRule) acceptTunnel(client net.Conn) {
 		lease.release()
 		return
 	}
+	finishTraffic := r.engine.meterConnection(r.config.Id)
 	r.engine.businessConnections.Add(1)
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
 		defer lease.release()
+		defer finishTraffic()
 		defer r.engine.businessConnections.Add(^uint64(0))
 		defer r.untrack(client)
 		r.serveLimitedTunnel(client, lease)
@@ -62,7 +64,7 @@ func (r *listenerRule) serveLimitedTunnel(client net.Conn, lease *resourceLease)
 	if r.tunnel == nil {
 		return
 	}
-	target, err := r.tunnel.dial(ctx, r.config.Id)
+	target, err := r.tunnel.dial(ctx, r.config)
 	lease.dialDone()
 	if err != nil {
 		return
@@ -71,6 +73,7 @@ func (r *listenerRule) serveLimitedTunnel(client net.Conn, lease *resourceLease)
 		return
 	}
 	defer r.untrack(target)
+	client, target = r.engine.meteredConns(r.config.Id, client, target)
 	proxyDirect(ctx, client, target, input, r.engine.resources.limits.IdleTimeout)
 }
 
@@ -100,32 +103,54 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 		return
 	}
 	stopHandshakeTimer()
-	rule := s.authorized(auth.EntryID, auth.Credential, request.RuleID)
+	rule := s.authorizeStream(auth, request)
 	if rule == nil || lease != nil && !lease.assignRule(rule.Id) {
-		writeTunnelMessage(stream, tunnelResult{})
+		s.rejectStream(stream)
 		return
 	}
+	// 在目标拨号前复查授权，撤权同时取消 DNS/拨号并归还共享预算。
+	stopAuthorization := s.watchStreamAuthorization(ctx, cancel, stream, auth, request)
+	defer stopAuthorization()
 	stream.SetDeadline(time.Time{})
 	input := newDirectInput(ctx, stream, cancel, s.engine.deps.Clock)
 	defer func() { cancel(); stream.Close(); <-input.done }()
 	dialCtx, stopDial := s.engine.tunnelTimeout(ctx, s.engine.resources.limits.DialTimeout)
+	// 目标始终取自出口授权配置，不接受入口自选的拨号地址。
 	target, err := s.engine.dialTargetWithin(dialCtx, rule, s.engine.resources.limits.DialTimeout)
 	stopDial()
 	if lease != nil {
 		lease.dialDone()
 	}
 	if err != nil {
+		s.rejectStream(stream)
 		return
 	}
 	defer target.Close()
 	stopTarget := context.AfterFunc(ctx, func() { target.Close() })
 	defer stopTarget()
 	stream.SetWriteDeadline(time.Now().Add(s.engine.resources.limits.TunnelHandshakeTimeout))
+	// 拨号期间授权可能已变更；交付成功前再核验一次，不等待下一秒复查。
+	if ctx.Err() != nil || s.authorizeStream(auth, request) == nil {
+		s.rejectStream(stream)
+		return
+	}
 	if err := writeTunnelMessage(stream, tunnelResult{OK: true}); err != nil {
 		return
 	}
 	stream.SetWriteDeadline(time.Time{})
 	proxyDirect(ctx, stream, target, input, s.engine.resources.limits.IdleTimeout)
+}
+
+func (s *tunnelServer) rejectStream(stream net.Conn) {
+	stream.SetWriteDeadline(time.Now().Add(s.engine.resources.limits.TunnelHandshakeTimeout))
+	if err := writeTunnelMessage(stream, tunnelResult{}); err != nil {
+		return
+	}
+	// FIN 先封存拒绝响应，随后生命周期的 RST 仍立即回收流槽。
+	// 若直接 RST，新 yamux 会丢弃对端尚未读取的响应，破坏既有协议。
+	if half, ok := stream.(interface{ CloseWrite() error }); ok {
+		half.CloseWrite()
+	}
 }
 
 func (e *Engine) yamuxConfig() *yamux.Config {

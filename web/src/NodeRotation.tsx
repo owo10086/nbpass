@@ -3,16 +3,17 @@ import { Alert, Button, Descriptions, Form, Input, Modal, Popconfirm, Select, Sp
 import { api } from './api';
 
 type RotationNode = { id: string; name: string; connected: boolean };
-type Action = { id: string; old_ip: string; new_ip: string; state: string; reason: string; attempts: number; expires_at: string; updated_at: string };
-type State = { configured: boolean; unsafe_network: boolean; warning: string; action: Action | null };
+type Action = { id: string; old_ip: string; new_ip: string; state: string; reason: string; attempts: number; expires_at: string; updated_at: string; observation_complete: boolean };
+type State = { configured: boolean; unsafe_network: boolean; warning: string; action: Action | null; frozen: boolean; freeze_reason: string; pending_operation: string; can_reconcile: boolean; can_unfreeze: boolean };
 type Values = { url: string; method: string; headers: string; body: string; private_endpoints: string };
-const labels: Record<string, string> = { authorized: '等待节点执行', started: '已开始调用', observing: '正在观察 IP', changed: 'IP 已变化', cancelled: '已取消', unconfirmed: '结果未确认' };
+const labels: Record<string, string> = { authorized: '等待节点执行', started: '已开始调用', observing: '正在观察 IP', changed: 'IP 已变化', cancelled: '已取消', unconfirmed: '结果未确认', released: '管理员已解除冻结（原结果未知）' };
 
 export function NodeRotation({ node, onClose, onError }: { node?: RotationNode; onClose: () => void; onError: (e: unknown) => void }) {
   const [state, setState] = useState<State>();
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [triggering, setTriggering] = useState(false);
+  const [controlling, setControlling] = useState(false);
   const [form] = Form.useForm<Values>();
   const id = node?.id;
   const path = `/nodes/${id}/ip-rotation`;
@@ -47,13 +48,31 @@ export function NodeRotation({ node, onClose, onError }: { node?: RotationNode; 
     catch (e) { onError(e); }
     finally { setTriggering(false); }
   }
+  async function control(operation: 'reconcile' | 'unfreeze') {
+    if (!state?.action) return;
+    setControlling(true);
+    try { await api(`${path}/${operation}`, 'POST', { action_id: state.action.id }); setState(await api<State>(path)); }
+    catch (e) { onError(e); }
+    finally { setControlling(false); }
+  }
   const action = state?.action;
-  const busy = !!action && !['changed', 'cancelled'].includes(action.state);
+  const busy = !!action && !['changed', 'cancelled', 'released'].includes(action.state);
   function close() { form.resetFields(); setEditing(false); onClose(); }
 
   return <Modal title={`换 IP${node ? `：${node.name}` : ''}`} open={!!node} onCancel={close} footer={null} width={720} destroyOnHidden>
     <Alert type="warning" showIcon title="换 IP 可能中断已有连接。" description="观察到公网 IPv4 变化才算换成，可达性仍需复检。当前操作不更新受管记录或出口地址。" />
     {state?.warning && <Alert style={{ marginTop: 12 }} type="warning" showIcon title={state.warning} />}
+    {state?.frozen && <Alert style={{ marginTop: 12 }} type="warning" showIcon title="自动换 IP 已冻结" description={<>
+      <div>{state.freeze_reason}</div>
+      <div>{action?.observation_complete ? '请先核对公网 IP。仍为旧 IP 不能证明商家未执行；手动解除表示接受原结果未知，保留历史及已用额度。' : '继续观察并记录，同一动作不会重调接口；本轮观察结束后可重新核对或手动解除。'}</div>
+      <Space wrap style={{ marginTop: 8 }}>
+        <Button disabled={!state.can_reconcile || controlling} loading={controlling} onClick={() => void control('reconcile')}>重新核对 IP</Button>
+        <Popconfirm title="解除结果未确认冻结？" description="原接口可能已经执行。解除不代表换成，不清空去重记录或已用额度；节点确认后才允许新动作。" onConfirm={() => control('unfreeze')}>
+          <Button danger disabled={!state.can_unfreeze || controlling} loading={controlling}>手动解除冻结</Button>
+        </Popconfirm>
+      </Space>
+    </>} />}
+    {state?.pending_operation && <Alert style={{ marginTop: 12 }} type="info" showIcon title={state.pending_operation === 'release' ? '解除请求已排队，等待节点持久化确认' : '正在重新核对公网 IP'} description="节点离线时保留请求，重连后继续处理；确认前保持冻结与动作互斥。" />}
     <Space style={{ margin: '16px 0' }} wrap>
       <Tag>{state?.configured ? '接口已配置，凭据不回显' : '尚未配置接口'}</Tag>
       <Button disabled={!state} onClick={() => { form.resetFields(); setEditing(!editing); }}>{editing ? '收起设置' : state?.configured ? '替换接口设置' : '配置换 IP 接口'}</Button>

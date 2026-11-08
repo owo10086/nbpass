@@ -20,7 +20,7 @@ import (
 	"nbpass/internal/controlpb"
 )
 
-func limitedTunnelPair(t *testing.T, limits ResourceLimits) (*Engine, *tunnelClient) {
+func limitedTunnelPair(t *testing.T, limits ResourceLimits) (*Engine, *tunnelClient, *controlpb.ForwardRule) {
 	t.Helper()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -46,7 +46,7 @@ func limitedTunnelPair(t *testing.T, limits ResourceLimits) (*Engine, *tunnelCli
 	t.Cleanup(server.close)
 	client := &tunnelClient{engine: NewEngine(Dependencies{}), endpoint: &controlpb.TunnelEndpoint{Address: "127.0.0.1", Port: uint32(server.listener.Addr().(*net.TCPAddr).Port), ServerName: "exit.test", CertificatePem: cert, EntryId: "entry", Credential: strings.Repeat("a", 43)}}
 	t.Cleanup(client.close)
-	return engine, client
+	return engine, client, rule
 }
 
 // 默认第 1025 条流必须失败；取消一条后同一会话恢复准入，不能只检查配置值。
@@ -105,7 +105,7 @@ func TestTunnelDefaultSessionStreamBudget(t *testing.T) {
 
 // 对端绕过入口门禁直接打开多条流，出口仍须拒绝；无规则请求也受握手期限约束。
 func TestTunnelUnfinishedStreamHandshakeAndReceiverCapacity(t *testing.T) {
-	engine, client := limitedTunnelPair(t, ResourceLimits{MaxTunnelStreams: 1, TunnelHandshakeTimeout: 150 * time.Millisecond})
+	engine, client, rule := limitedTunnelPair(t, ResourceLimits{MaxTunnelStreams: 1, TunnelHandshakeTimeout: 150 * time.Millisecond})
 	session, err := client.getSession(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +148,7 @@ func TestTunnelUnfinishedStreamHandshakeAndReceiverCapacity(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	conn, err := client.dial(context.Background(), "r")
+	conn, err := client.dial(context.Background(), rule)
 	if err != nil {
 		t.Fatalf("半开流回收后未恢复: %v", err)
 	}
@@ -157,8 +157,8 @@ func TestTunnelUnfinishedStreamHandshakeAndReceiverCapacity(t *testing.T) {
 
 // 满发送窗口下 Reset 必须同时唤醒读写并删除两端流，其他流继续工作。
 func TestTunnelResetUnblocksBackpressureWithoutClosingSession(t *testing.T) {
-	_, client := limitedTunnelPair(t, ResourceLimits{})
-	conn, err := client.dial(context.Background(), "r")
+	_, client, rule := limitedTunnelPair(t, ResourceLimits{})
+	conn, err := client.dial(context.Background(), rule)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestTunnelResetUnblocksBackpressureWithoutClosingSession(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	other, err := client.dial(context.Background(), "r")
+	other, err := client.dial(context.Background(), rule)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func (zeroReader) Read(b []byte) (int, error) { clear(b); return len(b), nil }
 
 // 已取消的请求（例如等会话锁期间收到 RST）不能留下对端看不到的流。
 func TestTunnelCanceledOpenDoesNotConsumeSessionCapacity(t *testing.T) {
-	_, client := limitedTunnelPair(t, ResourceLimits{})
+	_, client, rule := limitedTunnelPair(t, ResourceLimits{})
 	session, err := client.getSession(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -225,7 +225,7 @@ func TestTunnelCanceledOpenDoesNotConsumeSessionCapacity(t *testing.T) {
 	if session.NumStreams() != 0 {
 		t.Fatalf("已取消开流泄漏 %d 个槽", session.NumStreams())
 	}
-	conn, err := client.dial(context.Background(), "r")
+	conn, err := client.dial(context.Background(), rule)
 	if err != nil {
 		t.Fatal(err)
 	}

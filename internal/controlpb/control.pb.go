@@ -306,18 +306,27 @@ func (x *EnrollResponse) GetToken() string {
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 type NodeReport struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	RotationOnly      bool                   `protobuf:"varint,80,opt,name=rotation_only,json=rotationOnly,proto3" json:"rotation_only,omitempty"`
-	Rotation          *RotationProgress      `protobuf:"bytes,81,opt,name=rotation,proto3" json:"rotation,omitempty"`
-	NodeId            string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	ProcessInstance   string                 `protobuf:"bytes,2,opt,name=process_instance,json=processInstance,proto3" json:"process_instance,omitempty"`
-	ProtocolVersion   uint32                 `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	SoftwareVersion   string                 `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
-	AppliedRevision   uint64                 `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
-	AppliedDigest     string                 `protobuf:"bytes,6,opt,name=applied_digest,json=appliedDigest,proto3" json:"applied_digest,omitempty"`
-	AttemptedRevision uint64                 `protobuf:"varint,7,opt,name=attempted_revision,json=attemptedRevision,proto3" json:"attempted_revision,omitempty"`
-	ApplyError        string                 `protobuf:"bytes,8,opt,name=apply_error,json=applyError,proto3" json:"apply_error,omitempty"`
-	Probe             *ProbeSample           `protobuf:"bytes,14,opt,name=probe,proto3" json:"probe,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 自测独立补报，只消费自测结果，不推进活性、探针、事件或配置确认。
+	SelfCheckOnly    bool     `protobuf:"varint,90,opt,name=self_check_only,json=selfCheckOnly,proto3" json:"self_check_only,omitempty"`
+	SelfCheckResults [][]byte `protobuf:"bytes,91,rep,name=self_check_results,json=selfCheckResults,proto3" json:"self_check_results,omitempty"`
+	// 解析采样独立上报，不能推进活性、配置、探针或事件。
+	DnsWatchOnly    bool              `protobuf:"varint,100,opt,name=dns_watch_only,json=dnsWatchOnly,proto3" json:"dns_watch_only,omitempty"`
+	DnsWatchResults []*DNSWatchResult `protobuf:"bytes,101,rep,name=dns_watch_results,json=dnsWatchResults,proto3" json:"dns_watch_results,omitempty"`
+	DnsWatchCapable bool              `protobuf:"varint,102,opt,name=dns_watch_capable,json=dnsWatchCapable,proto3" json:"dns_watch_capable,omitempty"`
+	// 逐流授权能力独立于控制协议版本；旧节点不提前启用新授权。
+	TunnelAuthorizationVersion uint32            `protobuf:"varint,110,opt,name=tunnel_authorization_version,json=tunnelAuthorizationVersion,proto3" json:"tunnel_authorization_version,omitempty"`
+	RotationOnly               bool              `protobuf:"varint,80,opt,name=rotation_only,json=rotationOnly,proto3" json:"rotation_only,omitempty"`
+	Rotation                   *RotationProgress `protobuf:"bytes,81,opt,name=rotation,proto3" json:"rotation,omitempty"`
+	NodeId                     string            `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	ProcessInstance            string            `protobuf:"bytes,2,opt,name=process_instance,json=processInstance,proto3" json:"process_instance,omitempty"`
+	ProtocolVersion            uint32            `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	SoftwareVersion            string            `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
+	AppliedRevision            uint64            `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
+	AppliedDigest              string            `protobuf:"bytes,6,opt,name=applied_digest,json=appliedDigest,proto3" json:"applied_digest,omitempty"`
+	AttemptedRevision          uint64            `protobuf:"varint,7,opt,name=attempted_revision,json=attemptedRevision,proto3" json:"attempted_revision,omitempty"`
+	ApplyError                 string            `protobuf:"bytes,8,opt,name=apply_error,json=applyError,proto3" json:"apply_error,omitempty"`
+	Probe                      *ProbeSample      `protobuf:"bytes,14,opt,name=probe,proto3" json:"probe,omitempty"`
 	// 探针独立上报不推进 10 秒活性时间，也不改变配置应用状态。
 	ProbeOnly bool `protobuf:"varint,15,opt,name=probe_only,json=probeOnly,proto3" json:"probe_only,omitempty"`
 	// 节点查询的出站公网 IPv4，不作为已验证可入站的业务地址。
@@ -330,8 +339,11 @@ type NodeReport struct {
 	AttemptedDigest string             `protobuf:"bytes,21,opt,name=attempted_digest,json=attemptedDigest,proto3" json:"attempted_digest,omitempty"`
 	// 停用/删除在磁盘检查点及运行时均已撤销；不能只根据快照缺失推断。
 	RevocationsApplied bool `protobuf:"varint,22,opt,name=revocations_applied,json=revocationsApplied,proto3" json:"revocations_applied,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// 流量只消费自身载荷与确认，不推进其他控制状态。
+	TrafficOnly   bool           `protobuf:"varint,60,opt,name=traffic_only,json=trafficOnly,proto3" json:"traffic_only,omitempty"`
+	Traffic       []*RuleTraffic `protobuf:"bytes,61,rep,name=traffic,proto3" json:"traffic,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *NodeReport) Reset() {
@@ -362,6 +374,48 @@ func (x *NodeReport) ProtoReflect() protoreflect.Message {
 // Deprecated: Use NodeReport.ProtoReflect.Descriptor instead.
 func (*NodeReport) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *NodeReport) GetSelfCheckOnly() bool {
+	if x != nil {
+		return x.SelfCheckOnly
+	}
+	return false
+}
+
+func (x *NodeReport) GetSelfCheckResults() [][]byte {
+	if x != nil {
+		return x.SelfCheckResults
+	}
+	return nil
+}
+
+func (x *NodeReport) GetDnsWatchOnly() bool {
+	if x != nil {
+		return x.DnsWatchOnly
+	}
+	return false
+}
+
+func (x *NodeReport) GetDnsWatchResults() []*DNSWatchResult {
+	if x != nil {
+		return x.DnsWatchResults
+	}
+	return nil
+}
+
+func (x *NodeReport) GetDnsWatchCapable() bool {
+	if x != nil {
+		return x.DnsWatchCapable
+	}
+	return false
+}
+
+func (x *NodeReport) GetTunnelAuthorizationVersion() uint32 {
+	if x != nil {
+		return x.TunnelAuthorizationVersion
+	}
+	return 0
 }
 
 func (x *NodeReport) GetRotationOnly() bool {
@@ -490,6 +544,20 @@ func (x *NodeReport) GetRevocationsApplied() bool {
 	return false
 }
 
+func (x *NodeReport) GetTrafficOnly() bool {
+	if x != nil {
+		return x.TrafficOnly
+	}
+	return false
+}
+
+func (x *NodeReport) GetTraffic() []*RuleTraffic {
+	if x != nil {
+		return x.Traffic
+	}
+	return nil
+}
+
 type RuleApplyResult struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	RuleId          string                 `protobuf:"bytes,1,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
@@ -605,14 +673,18 @@ func (x *ProbeSample) GetValues() map[string]float64 {
 
 // 配置为完整快照；缺失规则表示撤销，摘要覆盖版本与全部内容。
 type PanelMessage struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	RotationCommand      *RotationCommand       `protobuf:"bytes,80,opt,name=rotation_command,json=rotationCommand,proto3" json:"rotation_command,omitempty"`
-	ProtocolVersion      uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	DesiredRevision      uint64                 `protobuf:"varint,2,opt,name=desired_revision,json=desiredRevision,proto3" json:"desired_revision,omitempty"`
-	Snapshot             *ConfigSnapshot        `protobuf:"bytes,3,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
-	AcknowledgedEventIds []string               `protobuf:"bytes,15,rep,name=acknowledged_event_ids,json=acknowledgedEventIds,proto3" json:"acknowledged_event_ids,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state                    protoimpl.MessageState `protogen:"open.v1"`
+	AcknowledgedSelfCheckIds []string               `protobuf:"bytes,90,rep,name=acknowledged_self_check_ids,json=acknowledgedSelfCheckIds,proto3" json:"acknowledged_self_check_ids,omitempty"`
+	DnsWatchTasks            []*DNSWatchTask        `protobuf:"bytes,100,rep,name=dns_watch_tasks,json=dnsWatchTasks,proto3" json:"dns_watch_tasks,omitempty"`
+	RotationCommand          *RotationCommand       `protobuf:"bytes,80,opt,name=rotation_command,json=rotationCommand,proto3" json:"rotation_command,omitempty"`
+	ProtocolVersion          uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	DesiredRevision          uint64                 `protobuf:"varint,2,opt,name=desired_revision,json=desiredRevision,proto3" json:"desired_revision,omitempty"`
+	Snapshot                 *ConfigSnapshot        `protobuf:"bytes,3,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	AcknowledgedEventIds     []string               `protobuf:"bytes,15,rep,name=acknowledged_event_ids,json=acknowledgedEventIds,proto3" json:"acknowledged_event_ids,omitempty"`
+	AcknowledgedTraffic      []*TrafficAck          `protobuf:"bytes,60,rep,name=acknowledged_traffic,json=acknowledgedTraffic,proto3" json:"acknowledged_traffic,omitempty"`
+	TrafficOnly              bool                   `protobuf:"varint,61,opt,name=traffic_only,json=trafficOnly,proto3" json:"traffic_only,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *PanelMessage) Reset() {
@@ -643,6 +715,20 @@ func (x *PanelMessage) ProtoReflect() protoreflect.Message {
 // Deprecated: Use PanelMessage.ProtoReflect.Descriptor instead.
 func (*PanelMessage) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *PanelMessage) GetAcknowledgedSelfCheckIds() []string {
+	if x != nil {
+		return x.AcknowledgedSelfCheckIds
+	}
+	return nil
+}
+
+func (x *PanelMessage) GetDnsWatchTasks() []*DNSWatchTask {
+	if x != nil {
+		return x.DnsWatchTasks
+	}
+	return nil
 }
 
 func (x *PanelMessage) GetRotationCommand() *RotationCommand {
@@ -680,6 +766,173 @@ func (x *PanelMessage) GetAcknowledgedEventIds() []string {
 	return nil
 }
 
+func (x *PanelMessage) GetAcknowledgedTraffic() []*TrafficAck {
+	if x != nil {
+		return x.AcknowledgedTraffic
+	}
+	return nil
+}
+
+func (x *PanelMessage) GetTrafficOnly() bool {
+	if x != nil {
+		return x.TrafficOnly
+	}
+	return false
+}
+
+// 每个进程、规则、分钟桶内的累计业务字节；桶起点决定 24 小时补报期限。
+type RuleTraffic struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	ProcessInstance   string                 `protobuf:"bytes,60,opt,name=process_instance,json=processInstance,proto3" json:"process_instance,omitempty"`
+	Sequence          uint64                 `protobuf:"varint,61,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	RuleId            string                 `protobuf:"bytes,62,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	BucketUnix        int64                  `protobuf:"varint,63,opt,name=bucket_unix,json=bucketUnix,proto3" json:"bucket_unix,omitempty"`
+	UploadBytes       uint64                 `protobuf:"varint,64,opt,name=upload_bytes,json=uploadBytes,proto3" json:"upload_bytes,omitempty"`
+	DownloadBytes     uint64                 `protobuf:"varint,65,opt,name=download_bytes,json=downloadBytes,proto3" json:"download_bytes,omitempty"`
+	ActiveConnections uint64                 `protobuf:"varint,66,opt,name=active_connections,json=activeConnections,proto3" json:"active_connections,omitempty"`
+	SampledAt         string                 `protobuf:"bytes,67,opt,name=sampled_at,json=sampledAt,proto3" json:"sampled_at,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *RuleTraffic) Reset() {
+	*x = RuleTraffic{}
+	mi := &file_control_v1_control_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuleTraffic) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuleTraffic) ProtoMessage() {}
+
+func (x *RuleTraffic) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuleTraffic.ProtoReflect.Descriptor instead.
+func (*RuleTraffic) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *RuleTraffic) GetProcessInstance() string {
+	if x != nil {
+		return x.ProcessInstance
+	}
+	return ""
+}
+
+func (x *RuleTraffic) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *RuleTraffic) GetRuleId() string {
+	if x != nil {
+		return x.RuleId
+	}
+	return ""
+}
+
+func (x *RuleTraffic) GetBucketUnix() int64 {
+	if x != nil {
+		return x.BucketUnix
+	}
+	return 0
+}
+
+func (x *RuleTraffic) GetUploadBytes() uint64 {
+	if x != nil {
+		return x.UploadBytes
+	}
+	return 0
+}
+
+func (x *RuleTraffic) GetDownloadBytes() uint64 {
+	if x != nil {
+		return x.DownloadBytes
+	}
+	return 0
+}
+
+func (x *RuleTraffic) GetActiveConnections() uint64 {
+	if x != nil {
+		return x.ActiveConnections
+	}
+	return 0
+}
+
+func (x *RuleTraffic) GetSampledAt() string {
+	if x != nil {
+		return x.SampledAt
+	}
+	return ""
+}
+
+type TrafficAck struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	ProcessInstance string                 `protobuf:"bytes,60,opt,name=process_instance,json=processInstance,proto3" json:"process_instance,omitempty"`
+	Sequence        uint64                 `protobuf:"varint,61,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *TrafficAck) Reset() {
+	*x = TrafficAck{}
+	mi := &file_control_v1_control_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TrafficAck) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TrafficAck) ProtoMessage() {}
+
+func (x *TrafficAck) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TrafficAck.ProtoReflect.Descriptor instead.
+func (*TrafficAck) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *TrafficAck) GetProcessInstance() string {
+	if x != nil {
+		return x.ProcessInstance
+	}
+	return ""
+}
+
+func (x *TrafficAck) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
 type Event struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	EventId        string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
@@ -694,7 +947,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_control_v1_control_proto_msgTypes[6]
+	mi := &file_control_v1_control_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -706,7 +959,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[6]
+	mi := &file_control_v1_control_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -719,7 +972,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{6}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *Event) GetEventId() string {
@@ -776,7 +1029,7 @@ type EventGap struct {
 
 func (x *EventGap) Reset() {
 	*x = EventGap{}
-	mi := &file_control_v1_control_proto_msgTypes[7]
+	mi := &file_control_v1_control_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -788,7 +1041,7 @@ func (x *EventGap) String() string {
 func (*EventGap) ProtoMessage() {}
 
 func (x *EventGap) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[7]
+	mi := &file_control_v1_control_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -801,7 +1054,7 @@ func (x *EventGap) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventGap.ProtoReflect.Descriptor instead.
 func (*EventGap) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{7}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *EventGap) GetCount() uint64 {
@@ -833,19 +1086,20 @@ func (x *EventGap) GetReason() string {
 }
 
 type ConfigSnapshot struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Revision      uint64                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
-	Digest        string                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
-	Rules         []*ForwardRule         `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
-	ExitGroups    []*ExitGroup           `protobuf:"bytes,40,rep,name=exit_groups,json=exitGroups,proto3" json:"exit_groups,omitempty"`
-	TunnelServer  *TunnelServer          `protobuf:"bytes,41,opt,name=tunnel_server,json=tunnelServer,proto3" json:"tunnel_server,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SelfCheckConfig []byte                 `protobuf:"bytes,90,opt,name=self_check_config,json=selfCheckConfig,proto3" json:"self_check_config,omitempty"`
+	Revision        uint64                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	Digest          string                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	Rules           []*ForwardRule         `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
+	ExitGroups      []*ExitGroup           `protobuf:"bytes,40,rep,name=exit_groups,json=exitGroups,proto3" json:"exit_groups,omitempty"`
+	TunnelServer    *TunnelServer          `protobuf:"bytes,41,opt,name=tunnel_server,json=tunnelServer,proto3" json:"tunnel_server,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ConfigSnapshot) Reset() {
 	*x = ConfigSnapshot{}
-	mi := &file_control_v1_control_proto_msgTypes[8]
+	mi := &file_control_v1_control_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -857,7 +1111,7 @@ func (x *ConfigSnapshot) String() string {
 func (*ConfigSnapshot) ProtoMessage() {}
 
 func (x *ConfigSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[8]
+	mi := &file_control_v1_control_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -870,7 +1124,14 @@ func (x *ConfigSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigSnapshot.ProtoReflect.Descriptor instead.
 func (*ConfigSnapshot) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{8}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ConfigSnapshot) GetSelfCheckConfig() []byte {
+	if x != nil {
+		return x.SelfCheckConfig
+	}
+	return nil
 }
 
 func (x *ConfigSnapshot) GetRevision() uint64 {
@@ -909,23 +1170,24 @@ func (x *ConfigSnapshot) GetTunnelServer() *TunnelServer {
 }
 
 type ForwardRule struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	EntryGroupId  string                 `protobuf:"bytes,2,opt,name=entry_group_id,json=entryGroupId,proto3" json:"entry_group_id,omitempty"`
-	ListenPort    uint32                 `protobuf:"varint,3,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
-	TargetAddress string                 `protobuf:"bytes,4,opt,name=target_address,json=targetAddress,proto3" json:"target_address,omitempty"`
-	TargetFamily  AddressFamily          `protobuf:"varint,5,opt,name=target_family,json=targetFamily,proto3,enum=nbpass.control.v1.AddressFamily" json:"target_family,omitempty"`
-	TargetPort    uint32                 `protobuf:"varint,6,opt,name=target_port,json=targetPort,proto3" json:"target_port,omitempty"`
-	AllowPrivate  bool                   `protobuf:"varint,7,opt,name=allow_private,json=allowPrivate,proto3" json:"allow_private,omitempty"`
-	Kind          RuleKind               `protobuf:"varint,8,opt,name=kind,proto3,enum=nbpass.control.v1.RuleKind" json:"kind,omitempty"`
-	ExitGroupId   string                 `protobuf:"bytes,40,opt,name=exit_group_id,json=exitGroupId,proto3" json:"exit_group_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	AuthorizationGeneration uint64                 `protobuf:"varint,110,opt,name=authorization_generation,json=authorizationGeneration,proto3" json:"authorization_generation,omitempty"`
+	Id                      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	EntryGroupId            string                 `protobuf:"bytes,2,opt,name=entry_group_id,json=entryGroupId,proto3" json:"entry_group_id,omitempty"`
+	ListenPort              uint32                 `protobuf:"varint,3,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
+	TargetAddress           string                 `protobuf:"bytes,4,opt,name=target_address,json=targetAddress,proto3" json:"target_address,omitempty"`
+	TargetFamily            AddressFamily          `protobuf:"varint,5,opt,name=target_family,json=targetFamily,proto3,enum=nbpass.control.v1.AddressFamily" json:"target_family,omitempty"`
+	TargetPort              uint32                 `protobuf:"varint,6,opt,name=target_port,json=targetPort,proto3" json:"target_port,omitempty"`
+	AllowPrivate            bool                   `protobuf:"varint,7,opt,name=allow_private,json=allowPrivate,proto3" json:"allow_private,omitempty"`
+	Kind                    RuleKind               `protobuf:"varint,8,opt,name=kind,proto3,enum=nbpass.control.v1.RuleKind" json:"kind,omitempty"`
+	ExitGroupId             string                 `protobuf:"bytes,40,opt,name=exit_group_id,json=exitGroupId,proto3" json:"exit_group_id,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *ForwardRule) Reset() {
 	*x = ForwardRule{}
-	mi := &file_control_v1_control_proto_msgTypes[9]
+	mi := &file_control_v1_control_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -937,7 +1199,7 @@ func (x *ForwardRule) String() string {
 func (*ForwardRule) ProtoMessage() {}
 
 func (x *ForwardRule) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[9]
+	mi := &file_control_v1_control_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -950,7 +1212,14 @@ func (x *ForwardRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardRule.ProtoReflect.Descriptor instead.
 func (*ForwardRule) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{9}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ForwardRule) GetAuthorizationGeneration() uint64 {
+	if x != nil {
+		return x.AuthorizationGeneration
+	}
+	return 0
 }
 
 func (x *ForwardRule) GetId() string {
@@ -1033,7 +1302,7 @@ type TunnelEndpoint struct {
 
 func (x *TunnelEndpoint) Reset() {
 	*x = TunnelEndpoint{}
-	mi := &file_control_v1_control_proto_msgTypes[10]
+	mi := &file_control_v1_control_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1045,7 +1314,7 @@ func (x *TunnelEndpoint) String() string {
 func (*TunnelEndpoint) ProtoMessage() {}
 
 func (x *TunnelEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[10]
+	mi := &file_control_v1_control_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1058,7 +1327,7 @@ func (x *TunnelEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelEndpoint.ProtoReflect.Descriptor instead.
 func (*TunnelEndpoint) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{10}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *TunnelEndpoint) GetNodeId() string {
@@ -1128,7 +1397,7 @@ type ExitGroup struct {
 
 func (x *ExitGroup) Reset() {
 	*x = ExitGroup{}
-	mi := &file_control_v1_control_proto_msgTypes[11]
+	mi := &file_control_v1_control_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1140,7 +1409,7 @@ func (x *ExitGroup) String() string {
 func (*ExitGroup) ProtoMessage() {}
 
 func (x *ExitGroup) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[11]
+	mi := &file_control_v1_control_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1153,7 +1422,7 @@ func (x *ExitGroup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExitGroup.ProtoReflect.Descriptor instead.
 func (*ExitGroup) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{11}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ExitGroup) GetId() string {
@@ -1187,7 +1456,7 @@ type TunnelPeer struct {
 
 func (x *TunnelPeer) Reset() {
 	*x = TunnelPeer{}
-	mi := &file_control_v1_control_proto_msgTypes[12]
+	mi := &file_control_v1_control_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1199,7 +1468,7 @@ func (x *TunnelPeer) String() string {
 func (*TunnelPeer) ProtoMessage() {}
 
 func (x *TunnelPeer) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[12]
+	mi := &file_control_v1_control_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1212,7 +1481,7 @@ func (x *TunnelPeer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelPeer.ProtoReflect.Descriptor instead.
 func (*TunnelPeer) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{12}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *TunnelPeer) GetEntryId() string {
@@ -1239,7 +1508,7 @@ type TunnelGrant struct {
 
 func (x *TunnelGrant) Reset() {
 	*x = TunnelGrant{}
-	mi := &file_control_v1_control_proto_msgTypes[13]
+	mi := &file_control_v1_control_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1251,7 +1520,7 @@ func (x *TunnelGrant) String() string {
 func (*TunnelGrant) ProtoMessage() {}
 
 func (x *TunnelGrant) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[13]
+	mi := &file_control_v1_control_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1264,7 +1533,7 @@ func (x *TunnelGrant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelGrant.ProtoReflect.Descriptor instead.
 func (*TunnelGrant) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{13}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *TunnelGrant) GetEntryId() string {
@@ -1296,7 +1565,7 @@ type TunnelServer struct {
 
 func (x *TunnelServer) Reset() {
 	*x = TunnelServer{}
-	mi := &file_control_v1_control_proto_msgTypes[14]
+	mi := &file_control_v1_control_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1308,7 +1577,7 @@ func (x *TunnelServer) String() string {
 func (*TunnelServer) ProtoMessage() {}
 
 func (x *TunnelServer) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[14]
+	mi := &file_control_v1_control_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1321,7 +1590,7 @@ func (x *TunnelServer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelServer.ProtoReflect.Descriptor instead.
 func (*TunnelServer) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{14}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *TunnelServer) GetListenPort() uint32 {
@@ -1375,21 +1644,24 @@ func (x *TunnelServer) GetGrants() []*TunnelGrant {
 
 // 一次性命令独立于配置；秘密仅经已认证的执行节点控制流传输。
 type RotationCommand struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActionId      string                 `protobuf:"bytes,80,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
-	NodeId        string                 `protobuf:"bytes,81,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	OldIp         string                 `protobuf:"bytes,82,opt,name=old_ip,json=oldIp,proto3" json:"old_ip,omitempty"`
-	ExpiresAt     int64                  `protobuf:"varint,83,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	ConfigJson    []byte                 `protobuf:"bytes,84,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
-	NodeName      string                 `protobuf:"bytes,85,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
-	IssuedAt      int64                  `protobuf:"varint,86,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ActionId   string                 `protobuf:"bytes,80,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
+	NodeId     string                 `protobuf:"bytes,81,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	OldIp      string                 `protobuf:"bytes,82,opt,name=old_ip,json=oldIp,proto3" json:"old_ip,omitempty"`
+	ExpiresAt  int64                  `protobuf:"varint,83,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	ConfigJson []byte                 `protobuf:"bytes,84,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
+	NodeName   string                 `protobuf:"bytes,85,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
+	IssuedAt   int64                  `protobuf:"varint,86,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
+	// 空值为原执行许可；reconcile / release 只操作已持久化动作，不调用商家。
+	Operation       string `protobuf:"bytes,120,opt,name=operation,proto3" json:"operation,omitempty"`
+	ControlSequence uint64 `protobuf:"varint,121,opt,name=control_sequence,json=controlSequence,proto3" json:"control_sequence,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RotationCommand) Reset() {
 	*x = RotationCommand{}
-	mi := &file_control_v1_control_proto_msgTypes[15]
+	mi := &file_control_v1_control_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1401,7 +1673,7 @@ func (x *RotationCommand) String() string {
 func (*RotationCommand) ProtoMessage() {}
 
 func (x *RotationCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[15]
+	mi := &file_control_v1_control_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1414,7 +1686,7 @@ func (x *RotationCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotationCommand.ProtoReflect.Descriptor instead.
 func (*RotationCommand) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{15}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RotationCommand) GetActionId() string {
@@ -1466,23 +1738,39 @@ func (x *RotationCommand) GetIssuedAt() int64 {
 	return 0
 }
 
+func (x *RotationCommand) GetOperation() string {
+	if x != nil {
+		return x.Operation
+	}
+	return ""
+}
+
+func (x *RotationCommand) GetControlSequence() uint64 {
+	if x != nil {
+		return x.ControlSequence
+	}
+	return 0
+}
+
 type RotationProgress struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActionId      string                 `protobuf:"bytes,80,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
-	Sequence      uint64                 `protobuf:"varint,81,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	State         string                 `protobuf:"bytes,82,opt,name=state,proto3" json:"state,omitempty"`
-	OldIp         string                 `protobuf:"bytes,83,opt,name=old_ip,json=oldIp,proto3" json:"old_ip,omitempty"`
-	NewIp         string                 `protobuf:"bytes,84,opt,name=new_ip,json=newIp,proto3" json:"new_ip,omitempty"`
-	Attempts      uint32                 `protobuf:"varint,85,opt,name=attempts,proto3" json:"attempts,omitempty"`
-	Reason        string                 `protobuf:"bytes,86,opt,name=reason,proto3" json:"reason,omitempty"`
-	UnsafeNetwork bool                   `protobuf:"varint,87,opt,name=unsafe_network,json=unsafeNetwork,proto3" json:"unsafe_network,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ActionId            string                 `protobuf:"bytes,80,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
+	Sequence            uint64                 `protobuf:"varint,81,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	State               string                 `protobuf:"bytes,82,opt,name=state,proto3" json:"state,omitempty"`
+	OldIp               string                 `protobuf:"bytes,83,opt,name=old_ip,json=oldIp,proto3" json:"old_ip,omitempty"`
+	NewIp               string                 `protobuf:"bytes,84,opt,name=new_ip,json=newIp,proto3" json:"new_ip,omitempty"`
+	Attempts            uint32                 `protobuf:"varint,85,opt,name=attempts,proto3" json:"attempts,omitempty"`
+	Reason              string                 `protobuf:"bytes,86,opt,name=reason,proto3" json:"reason,omitempty"`
+	UnsafeNetwork       bool                   `protobuf:"varint,87,opt,name=unsafe_network,json=unsafeNetwork,proto3" json:"unsafe_network,omitempty"`
+	ControlSequence     uint64                 `protobuf:"varint,120,opt,name=control_sequence,json=controlSequence,proto3" json:"control_sequence,omitempty"`
+	ObservationComplete bool                   `protobuf:"varint,121,opt,name=observation_complete,json=observationComplete,proto3" json:"observation_complete,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *RotationProgress) Reset() {
 	*x = RotationProgress{}
-	mi := &file_control_v1_control_proto_msgTypes[16]
+	mi := &file_control_v1_control_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1494,7 +1782,7 @@ func (x *RotationProgress) String() string {
 func (*RotationProgress) ProtoMessage() {}
 
 func (x *RotationProgress) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[16]
+	mi := &file_control_v1_control_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1507,7 +1795,7 @@ func (x *RotationProgress) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RotationProgress.ProtoReflect.Descriptor instead.
 func (*RotationProgress) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{16}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RotationProgress) GetActionId() string {
@@ -1566,6 +1854,165 @@ func (x *RotationProgress) GetUnsafeNetwork() bool {
 	return false
 }
 
+func (x *RotationProgress) GetControlSequence() uint64 {
+	if x != nil {
+		return x.ControlSequence
+	}
+	return 0
+}
+
+func (x *RotationProgress) GetObservationComplete() bool {
+	if x != nil {
+		return x.ObservationComplete
+	}
+	return false
+}
+
+// 票 20：每个消息的新增字段均限制在 100–109。
+type DNSWatchTask struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	TaskId          string                 `protobuf:"bytes,100,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Domain          string                 `protobuf:"bytes,101,opt,name=domain,proto3" json:"domain,omitempty"`
+	Resolver        string                 `protobuf:"bytes,102,opt,name=resolver,proto3" json:"resolver,omitempty"`
+	ExpiresAt       int64                  `protobuf:"varint,103,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	ExpectedVersion int64                  `protobuf:"varint,104,opt,name=expected_version,json=expectedVersion,proto3" json:"expected_version,omitempty"`
+	Round           int64                  `protobuf:"varint,105,opt,name=round,proto3" json:"round,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *DNSWatchTask) Reset() {
+	*x = DNSWatchTask{}
+	mi := &file_control_v1_control_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DNSWatchTask) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DNSWatchTask) ProtoMessage() {}
+
+func (x *DNSWatchTask) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DNSWatchTask.ProtoReflect.Descriptor instead.
+func (*DNSWatchTask) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *DNSWatchTask) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *DNSWatchTask) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+func (x *DNSWatchTask) GetResolver() string {
+	if x != nil {
+		return x.Resolver
+	}
+	return ""
+}
+
+func (x *DNSWatchTask) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
+func (x *DNSWatchTask) GetExpectedVersion() int64 {
+	if x != nil {
+		return x.ExpectedVersion
+	}
+	return 0
+}
+
+func (x *DNSWatchTask) GetRound() int64 {
+	if x != nil {
+		return x.Round
+	}
+	return 0
+}
+
+type DNSWatchResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,100,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Ips           []string               `protobuf:"bytes,101,rep,name=ips,proto3" json:"ips,omitempty"`
+	Failed        bool                   `protobuf:"varint,102,opt,name=failed,proto3" json:"failed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DNSWatchResult) Reset() {
+	*x = DNSWatchResult{}
+	mi := &file_control_v1_control_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DNSWatchResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DNSWatchResult) ProtoMessage() {}
+
+func (x *DNSWatchResult) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DNSWatchResult.ProtoReflect.Descriptor instead.
+func (*DNSWatchResult) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *DNSWatchResult) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *DNSWatchResult) GetIps() []string {
+	if x != nil {
+		return x.Ips
+	}
+	return nil
+}
+
+func (x *DNSWatchResult) GetFailed() bool {
+	if x != nil {
+		return x.Failed
+	}
+	return false
+}
+
 var File_control_v1_control_proto protoreflect.FileDescriptor
 
 const file_control_v1_control_proto_rawDesc = "" +
@@ -1575,9 +2022,15 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\x9a\x06\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\xb0\t\n" +
 	"\n" +
-	"NodeReport\x12#\n" +
+	"NodeReport\x12&\n" +
+	"\x0fself_check_only\x18Z \x01(\bR\rselfCheckOnly\x12,\n" +
+	"\x12self_check_results\x18[ \x03(\fR\x10selfCheckResults\x12$\n" +
+	"\x0edns_watch_only\x18d \x01(\bR\fdnsWatchOnly\x12M\n" +
+	"\x11dns_watch_results\x18e \x03(\v2!.nbpass.control.v1.DNSWatchResultR\x0fdnsWatchResults\x12*\n" +
+	"\x11dns_watch_capable\x18f \x01(\bR\x0fdnsWatchCapable\x12@\n" +
+	"\x1ctunnel_authorization_version\x18n \x01(\rR\x1atunnelAuthorizationVersion\x12#\n" +
 	"\rrotation_only\x18P \x01(\bR\frotationOnly\x12?\n" +
 	"\brotation\x18Q \x01(\v2#.nbpass.control.v1.RotationProgressR\brotation\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
@@ -1599,7 +2052,9 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"eventsOnly\x12E\n" +
 	"\frule_results\x18\x14 \x03(\v2\".nbpass.control.v1.RuleApplyResultR\vruleResults\x12)\n" +
 	"\x10attempted_digest\x18\x15 \x01(\tR\x0fattemptedDigest\x12/\n" +
-	"\x13revocations_applied\x18\x16 \x01(\bR\x12revocationsApplied\"v\n" +
+	"\x13revocations_applied\x18\x16 \x01(\bR\x12revocationsApplied\x12!\n" +
+	"\ftraffic_only\x18< \x01(\bR\vtrafficOnly\x128\n" +
+	"\atraffic\x18= \x03(\v2\x1e.nbpass.control.v1.RuleTrafficR\atraffic\"v\n" +
 	"\x0fRuleApplyResult\x12\x17\n" +
 	"\arule_id\x18\x01 \x01(\tR\x06ruleId\x12)\n" +
 	"\x10applied_revision\x18\x02 \x01(\x04R\x0fappliedRevision\x12\x1f\n" +
@@ -1610,13 +2065,32 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x06values\x18\x02 \x03(\v2*.nbpass.control.v1.ProbeSample.ValuesEntryR\x06values\x1a9\n" +
 	"\vValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xa8\x02\n" +
-	"\fPanelMessage\x12M\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xa5\x04\n" +
+	"\fPanelMessage\x12=\n" +
+	"\x1backnowledged_self_check_ids\x18Z \x03(\tR\x18acknowledgedSelfCheckIds\x12G\n" +
+	"\x0fdns_watch_tasks\x18d \x03(\v2\x1f.nbpass.control.v1.DNSWatchTaskR\rdnsWatchTasks\x12M\n" +
 	"\x10rotation_command\x18P \x01(\v2\".nbpass.control.v1.RotationCommandR\x0frotationCommand\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12)\n" +
 	"\x10desired_revision\x18\x02 \x01(\x04R\x0fdesiredRevision\x12=\n" +
 	"\bsnapshot\x18\x03 \x01(\v2!.nbpass.control.v1.ConfigSnapshotR\bsnapshot\x124\n" +
-	"\x16acknowledged_event_ids\x18\x0f \x03(\tR\x14acknowledgedEventIds\"\xc9\x01\n" +
+	"\x16acknowledged_event_ids\x18\x0f \x03(\tR\x14acknowledgedEventIds\x12P\n" +
+	"\x14acknowledged_traffic\x18< \x03(\v2\x1d.nbpass.control.v1.TrafficAckR\x13acknowledgedTraffic\x12!\n" +
+	"\ftraffic_only\x18= \x01(\bR\vtrafficOnly\"\xa6\x02\n" +
+	"\vRuleTraffic\x12)\n" +
+	"\x10process_instance\x18< \x01(\tR\x0fprocessInstance\x12\x1a\n" +
+	"\bsequence\x18= \x01(\x04R\bsequence\x12\x17\n" +
+	"\arule_id\x18> \x01(\tR\x06ruleId\x12\x1f\n" +
+	"\vbucket_unix\x18? \x01(\x03R\n" +
+	"bucketUnix\x12!\n" +
+	"\fupload_bytes\x18@ \x01(\x04R\vuploadBytes\x12%\n" +
+	"\x0edownload_bytes\x18A \x01(\x04R\rdownloadBytes\x12-\n" +
+	"\x12active_connections\x18B \x01(\x04R\x11activeConnections\x12\x1d\n" +
+	"\n" +
+	"sampled_at\x18C \x01(\tR\tsampledAt\"S\n" +
+	"\n" +
+	"TrafficAck\x12)\n" +
+	"\x10process_instance\x18< \x01(\tR\x0fprocessInstance\x12\x1a\n" +
+	"\bsequence\x18= \x01(\x04R\bsequence\"\xc9\x01\n" +
 	"\x05Event\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1f\n" +
@@ -1629,15 +2103,17 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\x12\x12\n" +
 	"\x04from\x18\x02 \x01(\tR\x04from\x12\x0e\n" +
 	"\x02to\x18\x03 \x01(\tR\x02to\x12\x16\n" +
-	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xff\x01\n" +
-	"\x0eConfigSnapshot\x12\x1a\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xab\x02\n" +
+	"\x0eConfigSnapshot\x12*\n" +
+	"\x11self_check_config\x18Z \x01(\fR\x0fselfCheckConfig\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\x04R\brevision\x12\x16\n" +
 	"\x06digest\x18\x02 \x01(\tR\x06digest\x124\n" +
 	"\x05rules\x18\x03 \x03(\v2\x1e.nbpass.control.v1.ForwardRuleR\x05rules\x12=\n" +
 	"\vexit_groups\x18( \x03(\v2\x1c.nbpass.control.v1.ExitGroupR\n" +
 	"exitGroups\x12D\n" +
-	"\rtunnel_server\x18) \x01(\v2\x1f.nbpass.control.v1.TunnelServerR\ftunnelServer\"\xed\x02\n" +
-	"\vForwardRule\x12\x0e\n" +
+	"\rtunnel_server\x18) \x01(\v2\x1f.nbpass.control.v1.TunnelServerR\ftunnelServer\"\xa8\x03\n" +
+	"\vForwardRule\x129\n" +
+	"\x18authorization_generation\x18n \x01(\x04R\x17authorizationGeneration\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12$\n" +
 	"\x0eentry_group_id\x18\x02 \x01(\tR\fentryGroupId\x12\x1f\n" +
 	"\vlisten_port\x18\x03 \x01(\rR\n" +
@@ -1683,7 +2159,7 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x0fcertificate_pem\x18+ \x01(\fR\x0ecertificatePem\x12&\n" +
 	"\x0fprivate_key_pem\x18, \x01(\fR\rprivateKeyPem\x123\n" +
 	"\x05peers\x18- \x03(\v2\x1d.nbpass.control.v1.TunnelPeerR\x05peers\x126\n" +
-	"\x06grants\x18. \x03(\v2\x1e.nbpass.control.v1.TunnelGrantR\x06grants\"\xd8\x01\n" +
+	"\x06grants\x18. \x03(\v2\x1e.nbpass.control.v1.TunnelGrantR\x06grants\"\xa1\x02\n" +
 	"\x0fRotationCommand\x12\x1b\n" +
 	"\taction_id\x18P \x01(\tR\bactionId\x12\x17\n" +
 	"\anode_id\x18Q \x01(\tR\x06nodeId\x12\x15\n" +
@@ -1693,7 +2169,9 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\vconfig_json\x18T \x01(\fR\n" +
 	"configJson\x12\x1b\n" +
 	"\tnode_name\x18U \x01(\tR\bnodeName\x12\x1b\n" +
-	"\tissued_at\x18V \x01(\x03R\bissuedAt\"\xea\x01\n" +
+	"\tissued_at\x18V \x01(\x03R\bissuedAt\x12\x1c\n" +
+	"\toperation\x18x \x01(\tR\toperation\x12)\n" +
+	"\x10control_sequence\x18y \x01(\x04R\x0fcontrolSequence\"\xc8\x02\n" +
 	"\x10RotationProgress\x12\x1b\n" +
 	"\taction_id\x18P \x01(\tR\bactionId\x12\x1a\n" +
 	"\bsequence\x18Q \x01(\x04R\bsequence\x12\x14\n" +
@@ -1702,7 +2180,21 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x06new_ip\x18T \x01(\tR\x05newIp\x12\x1a\n" +
 	"\battempts\x18U \x01(\rR\battempts\x12\x16\n" +
 	"\x06reason\x18V \x01(\tR\x06reason\x12%\n" +
-	"\x0eunsafe_network\x18W \x01(\bR\runsafeNetwork*H\n" +
+	"\x0eunsafe_network\x18W \x01(\bR\runsafeNetwork\x12)\n" +
+	"\x10control_sequence\x18x \x01(\x04R\x0fcontrolSequence\x121\n" +
+	"\x14observation_complete\x18y \x01(\bR\x13observationComplete\"\xbb\x01\n" +
+	"\fDNSWatchTask\x12\x17\n" +
+	"\atask_id\x18d \x01(\tR\x06taskId\x12\x16\n" +
+	"\x06domain\x18e \x01(\tR\x06domain\x12\x1a\n" +
+	"\bresolver\x18f \x01(\tR\bresolver\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18g \x01(\x03R\texpiresAt\x12)\n" +
+	"\x10expected_version\x18h \x01(\x03R\x0fexpectedVersion\x12\x14\n" +
+	"\x05round\x18i \x01(\x03R\x05round\"S\n" +
+	"\x0eDNSWatchResult\x12\x17\n" +
+	"\atask_id\x18d \x01(\tR\x06taskId\x12\x10\n" +
+	"\x03ips\x18e \x03(\tR\x03ips\x12\x16\n" +
+	"\x06failed\x18f \x01(\bR\x06failed*H\n" +
 	"\rAddressFamily\x12\x1e\n" +
 	"\x1aADDRESS_FAMILY_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ADDRESS_FAMILY_IPV4\x10\x01*Q\n" +
@@ -1733,7 +2225,7 @@ func file_control_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
+var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_control_v1_control_proto_goTypes = []any{
 	(AddressFamily)(0),       // 0: nbpass.control.v1.AddressFamily
 	(RuleKind)(0),            // 1: nbpass.control.v1.RuleKind
@@ -1745,49 +2237,57 @@ var file_control_v1_control_proto_goTypes = []any{
 	(*RuleApplyResult)(nil),  // 7: nbpass.control.v1.RuleApplyResult
 	(*ProbeSample)(nil),      // 8: nbpass.control.v1.ProbeSample
 	(*PanelMessage)(nil),     // 9: nbpass.control.v1.PanelMessage
-	(*Event)(nil),            // 10: nbpass.control.v1.Event
-	(*EventGap)(nil),         // 11: nbpass.control.v1.EventGap
-	(*ConfigSnapshot)(nil),   // 12: nbpass.control.v1.ConfigSnapshot
-	(*ForwardRule)(nil),      // 13: nbpass.control.v1.ForwardRule
-	(*TunnelEndpoint)(nil),   // 14: nbpass.control.v1.TunnelEndpoint
-	(*ExitGroup)(nil),        // 15: nbpass.control.v1.ExitGroup
-	(*TunnelPeer)(nil),       // 16: nbpass.control.v1.TunnelPeer
-	(*TunnelGrant)(nil),      // 17: nbpass.control.v1.TunnelGrant
-	(*TunnelServer)(nil),     // 18: nbpass.control.v1.TunnelServer
-	(*RotationCommand)(nil),  // 19: nbpass.control.v1.RotationCommand
-	(*RotationProgress)(nil), // 20: nbpass.control.v1.RotationProgress
-	nil,                      // 21: nbpass.control.v1.ProbeSample.ValuesEntry
+	(*RuleTraffic)(nil),      // 10: nbpass.control.v1.RuleTraffic
+	(*TrafficAck)(nil),       // 11: nbpass.control.v1.TrafficAck
+	(*Event)(nil),            // 12: nbpass.control.v1.Event
+	(*EventGap)(nil),         // 13: nbpass.control.v1.EventGap
+	(*ConfigSnapshot)(nil),   // 14: nbpass.control.v1.ConfigSnapshot
+	(*ForwardRule)(nil),      // 15: nbpass.control.v1.ForwardRule
+	(*TunnelEndpoint)(nil),   // 16: nbpass.control.v1.TunnelEndpoint
+	(*ExitGroup)(nil),        // 17: nbpass.control.v1.ExitGroup
+	(*TunnelPeer)(nil),       // 18: nbpass.control.v1.TunnelPeer
+	(*TunnelGrant)(nil),      // 19: nbpass.control.v1.TunnelGrant
+	(*TunnelServer)(nil),     // 20: nbpass.control.v1.TunnelServer
+	(*RotationCommand)(nil),  // 21: nbpass.control.v1.RotationCommand
+	(*RotationProgress)(nil), // 22: nbpass.control.v1.RotationProgress
+	(*DNSWatchTask)(nil),     // 23: nbpass.control.v1.DNSWatchTask
+	(*DNSWatchResult)(nil),   // 24: nbpass.control.v1.DNSWatchResult
+	nil,                      // 25: nbpass.control.v1.ProbeSample.ValuesEntry
 }
 var file_control_v1_control_proto_depIdxs = []int32{
-	20, // 0: nbpass.control.v1.NodeReport.rotation:type_name -> nbpass.control.v1.RotationProgress
-	8,  // 1: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
-	10, // 2: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
-	7,  // 3: nbpass.control.v1.NodeReport.rule_results:type_name -> nbpass.control.v1.RuleApplyResult
-	21, // 4: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
-	19, // 5: nbpass.control.v1.PanelMessage.rotation_command:type_name -> nbpass.control.v1.RotationCommand
-	12, // 6: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
-	11, // 7: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
-	13, // 8: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
-	15, // 9: nbpass.control.v1.ConfigSnapshot.exit_groups:type_name -> nbpass.control.v1.ExitGroup
-	18, // 10: nbpass.control.v1.ConfigSnapshot.tunnel_server:type_name -> nbpass.control.v1.TunnelServer
-	0,  // 11: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
-	1,  // 12: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
-	2,  // 13: nbpass.control.v1.TunnelEndpoint.transport:type_name -> nbpass.control.v1.TunnelTransport
-	3,  // 14: nbpass.control.v1.ExitGroup.strategy:type_name -> nbpass.control.v1.ExitStrategy
-	14, // 15: nbpass.control.v1.ExitGroup.exits:type_name -> nbpass.control.v1.TunnelEndpoint
-	13, // 16: nbpass.control.v1.TunnelGrant.rule:type_name -> nbpass.control.v1.ForwardRule
-	2,  // 17: nbpass.control.v1.TunnelServer.transport:type_name -> nbpass.control.v1.TunnelTransport
-	16, // 18: nbpass.control.v1.TunnelServer.peers:type_name -> nbpass.control.v1.TunnelPeer
-	17, // 19: nbpass.control.v1.TunnelServer.grants:type_name -> nbpass.control.v1.TunnelGrant
-	4,  // 20: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
-	6,  // 21: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
-	5,  // 22: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
-	9,  // 23: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
-	22, // [22:24] is the sub-list for method output_type
-	20, // [20:22] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	24, // 0: nbpass.control.v1.NodeReport.dns_watch_results:type_name -> nbpass.control.v1.DNSWatchResult
+	22, // 1: nbpass.control.v1.NodeReport.rotation:type_name -> nbpass.control.v1.RotationProgress
+	8,  // 2: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
+	12, // 3: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
+	7,  // 4: nbpass.control.v1.NodeReport.rule_results:type_name -> nbpass.control.v1.RuleApplyResult
+	10, // 5: nbpass.control.v1.NodeReport.traffic:type_name -> nbpass.control.v1.RuleTraffic
+	25, // 6: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
+	23, // 7: nbpass.control.v1.PanelMessage.dns_watch_tasks:type_name -> nbpass.control.v1.DNSWatchTask
+	21, // 8: nbpass.control.v1.PanelMessage.rotation_command:type_name -> nbpass.control.v1.RotationCommand
+	14, // 9: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
+	11, // 10: nbpass.control.v1.PanelMessage.acknowledged_traffic:type_name -> nbpass.control.v1.TrafficAck
+	13, // 11: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
+	15, // 12: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
+	17, // 13: nbpass.control.v1.ConfigSnapshot.exit_groups:type_name -> nbpass.control.v1.ExitGroup
+	20, // 14: nbpass.control.v1.ConfigSnapshot.tunnel_server:type_name -> nbpass.control.v1.TunnelServer
+	0,  // 15: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
+	1,  // 16: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
+	2,  // 17: nbpass.control.v1.TunnelEndpoint.transport:type_name -> nbpass.control.v1.TunnelTransport
+	3,  // 18: nbpass.control.v1.ExitGroup.strategy:type_name -> nbpass.control.v1.ExitStrategy
+	16, // 19: nbpass.control.v1.ExitGroup.exits:type_name -> nbpass.control.v1.TunnelEndpoint
+	15, // 20: nbpass.control.v1.TunnelGrant.rule:type_name -> nbpass.control.v1.ForwardRule
+	2,  // 21: nbpass.control.v1.TunnelServer.transport:type_name -> nbpass.control.v1.TunnelTransport
+	18, // 22: nbpass.control.v1.TunnelServer.peers:type_name -> nbpass.control.v1.TunnelPeer
+	19, // 23: nbpass.control.v1.TunnelServer.grants:type_name -> nbpass.control.v1.TunnelGrant
+	4,  // 24: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
+	6,  // 25: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
+	5,  // 26: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
+	9,  // 27: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
+	26, // [26:28] is the sub-list for method output_type
+	24, // [24:26] is the sub-list for method input_type
+	24, // [24:24] is the sub-list for extension type_name
+	24, // [24:24] is the sub-list for extension extendee
+	0,  // [0:24] is the sub-list for field type_name
 }
 
 func init() { file_control_v1_control_proto_init() }
@@ -1801,7 +2301,7 @@ func file_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_v1_control_proto_rawDesc), len(file_control_v1_control_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   18,
+			NumMessages:   22,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

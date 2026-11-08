@@ -69,9 +69,10 @@ func TestSingleExitTunnelOverWSSYamux(t *testing.T) {
 func tunnelSetup(t *testing.T) (*clusterharness.Harness, *clusterharness.Client, string, string, *clusterharness.Node, int, map[string]any) {
 	t.Helper()
 	h, c := nodeBrowser(t)
+	reservePort, listenOption := directPorts(t)
 	entry, exit := addNode(c, "入口"), addNode(c, "出口")
 	entryID, exitID := entry["id"].(string), exit["id"].(string)
-	h.StartNode(entry["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) {
+	h.StartNode(entry["installation_ticket"].(string), listenOption, func(_ *node.Config, d *node.Dependencies) {
 		d.Forwarding.DialTunnel = func(ctx context.Context, address string) (net.Conn, error) {
 			_, port, err := net.SplitHostPort(address)
 			if err != nil {
@@ -80,13 +81,13 @@ func tunnelSetup(t *testing.T) (*clusterharness.Harness, *clusterharness.Client,
 			return (&net.Dialer{}).DialContext(ctx, "tcp4", net.JoinHostPort("127.0.0.1", port))
 		}
 	})
-	n := h.StartNode(exit["installation_ticket"].(string))
+	n := h.StartNode(exit["installation_ticket"].(string), listenOption)
 	awaitNode(t, c, entryID, connected)
 	awaitNode(t, c, exitID, connected)
-	exitPort := freePort(t)
+	exitPort := reservePort()
 	c.Do("PUT", "/api/nodes/"+exitID+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": exitPort, "transport": "wss"}, 200)
 	g := c.Do("POST", "/api/exit-groups", map[string]any{"name": "出口组", "members": []string{exitID}, "strategy": "primary_backup"}, 201)
-	port := freePort(t)
+	port := reservePort()
 	body := directBody(entryGroup(c, entryID)["id"].(string), port, "127.0.0.1", echoTarget(t, "T:"))
 	body["kind"], body["exit_group_id"] = "tunnel", g["id"]
 	r := c.Do("POST", "/api/rules", body, 201)

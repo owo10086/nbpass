@@ -83,10 +83,14 @@ func TestConfigReportCannotReplaceConfirmedDigestOrRevision(t *testing.T) {
 
 // 物理传输验证：没有节点报告驱动时，60 秒计时器仍独立重发完整快照。
 func TestControlResendsFullSnapshotEverySixtySeconds(t *testing.T) {
-	p := openDiskPanel(t, t.TempDir())
-	defer p.Close()
 	clock := &syncOnlyClock{timers: make(chan *syncOnlyTimer, 4)}
-	p.deps.Clock = clock
+	deps := diskDependencies(t.TempDir())
+	deps.Clock = clock
+	p, err := Open(context.Background(), Config{PublicOrigin: "https://panel.test"}, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
 	token, digest, err := p.randomCredential()
 	if err != nil {
 		t.Fatal(err)

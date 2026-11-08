@@ -32,7 +32,12 @@ type tunnelAuth struct {
 	Credential string `json:"credential"`
 }
 type tunnelRequest struct {
-	RuleID string `json:"rule_id"`
+	RuleID        string                  `json:"rule_id"`
+	EntryID       string                  `json:"entry_id,omitempty"`
+	Generation    uint64                  `json:"generation,omitempty"`
+	TargetAddress string                  `json:"target_address,omitempty"`
+	TargetPort    uint32                  `json:"target_port,omitempty"`
+	TargetFamily  controlpb.AddressFamily `json:"target_family,omitempty"`
 }
 type tunnelResult struct {
 	OK bool `json:"ok"`
@@ -162,7 +167,7 @@ func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
 	go func() { <-session.CloseChan(); c.engine.tunnelConnections.Add(^uint64(0)) }()
 	return session, nil
 }
-func (c *tunnelClient) dial(ctx context.Context, ruleID string) (net.Conn, error) {
+func (c *tunnelClient) dial(ctx context.Context, rule *controlpb.ForwardRule) (net.Conn, error) {
 	ctx, cancel := c.engine.tunnelTimeout(ctx, c.engine.resources.limits.DialTimeout)
 	defer cancel()
 	handshake, stop := c.engine.tunnelTimeout(ctx, c.engine.resources.limits.TunnelHandshakeTimeout)
@@ -185,7 +190,7 @@ func (c *tunnelClient) dial(ctx context.Context, ruleID string) (net.Conn, error
 	stream.SetDeadline(deadline)
 	stopCancel := context.AfterFunc(ctx, func() { stream.SetDeadline(time.Now()) })
 	defer stopCancel()
-	if err := writeTunnelMessage(stream, tunnelRequest{RuleID: ruleID}); err != nil {
+	if err := writeTunnelMessage(stream, streamAuthorization(c.endpoint.EntryId, rule)); err != nil {
 		return nil, err
 	}
 	var result tunnelResult

@@ -75,6 +75,9 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 	if err := p.compileTunnels(ctx, tx, rules, members, compiled); err != nil {
 		return nil, err
 	}
+	if err := p.compileSelfChecks(ctx, tx, compiled); err != nil {
+		return nil, err
+	}
 	changed := []string{}
 	for _, n := range nodes {
 		next := compiled[n.id]
@@ -130,6 +133,12 @@ func (p *Panel) controlMessage(ctx context.Context, id string) (*controlpb.Panel
 	if len(data) > 0 {
 		m.Snapshot = &controlpb.ConfigSnapshot{}
 		if err := p.decodeSnapshot(id, data, encrypted.Bool, m.Snapshot); err != nil {
+			return nil, err
+		}
+	}
+	if session := p.controls[id]; session != nil && session.dnsWatchCapable {
+		m.DnsWatchTasks, err = p.dnsWatchCommands(ctx, id, session.instance)
+		if err != nil {
 			return nil, err
 		}
 	}

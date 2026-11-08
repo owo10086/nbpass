@@ -13,6 +13,15 @@ message EnrollResponse { string node_id = 1; string token = 2; }
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 message NodeReport {
+  // 自测独立补报，只消费自测结果，不推进活性、探针、事件或配置确认。
+  bool self_check_only = 90;
+  repeated bytes self_check_results = 91;
+  // 解析采样独立上报，不能推进活性、配置、探针或事件。
+  bool dns_watch_only = 100;
+  repeated DNSWatchResult dns_watch_results = 101;
+  bool dns_watch_capable = 102;
+  // 逐流授权能力独立于控制协议版本；旧节点不提前启用新授权。
+  uint32 tunnel_authorization_version = 110;
   bool rotation_only = 80;
   RotationProgress rotation = 81;
   string node_id = 1;
@@ -36,6 +45,9 @@ message NodeReport {
   string attempted_digest = 21;
   // 停用/删除在磁盘检查点及运行时均已撤销；不能只根据快照缺失推断。
   bool revocations_applied = 22;
+  // 流量只消费自身载荷与确认，不推进其他控制状态。
+  bool traffic_only = 60;
+  repeated RuleTraffic traffic = 61;
 }
 
 message RuleApplyResult {
@@ -52,11 +64,31 @@ message ProbeSample {
 
 // 配置为完整快照；缺失规则表示撤销，摘要覆盖版本与全部内容。
 message PanelMessage {
+  repeated string acknowledged_self_check_ids = 90;
+  repeated DNSWatchTask dns_watch_tasks = 100;
   RotationCommand rotation_command = 80;
   uint32 protocol_version = 1;
   uint64 desired_revision = 2;
   ConfigSnapshot snapshot = 3;
   repeated string acknowledged_event_ids = 15;
+  repeated TrafficAck acknowledged_traffic = 60;
+  bool traffic_only = 61;
+}
+
+// 每个进程、规则、分钟桶内的累计业务字节；桶起点决定 24 小时补报期限。
+message RuleTraffic {
+  string process_instance = 60;
+  uint64 sequence = 61;
+  string rule_id = 62;
+  int64 bucket_unix = 63;
+  uint64 upload_bytes = 64;
+  uint64 download_bytes = 65;
+  uint64 active_connections = 66;
+  string sampled_at = 67;
+}
+message TrafficAck {
+  string process_instance = 60;
+  uint64 sequence = 61;
 }
 
 message Event {
@@ -76,6 +108,7 @@ message EventGap {
 }
 
 message ConfigSnapshot {
+  bytes self_check_config = 90;
   uint64 revision = 1;
   string digest = 2;
   repeated ForwardRule rules = 3;
@@ -84,6 +117,7 @@ message ConfigSnapshot {
 }
 
 message ForwardRule {
+  uint64 authorization_generation = 110;
   string id = 1;
   string entry_group_id = 2;
   uint32 listen_port = 3;
@@ -143,6 +177,9 @@ message RotationCommand {
  bytes config_json = 84;
  string node_name = 85;
  int64 issued_at = 86;
+ // 空值为原执行许可；reconcile / release 只操作已持久化动作，不调用商家。
+ string operation = 120;
+ uint64 control_sequence = 121;
 }
 message RotationProgress {
  string action_id = 80;
@@ -153,4 +190,21 @@ message RotationProgress {
  uint32 attempts = 85;
  string reason = 86;
  bool unsafe_network = 87;
+ uint64 control_sequence = 120;
+ bool observation_complete = 121;
+}
+
+// 票 20：每个消息的新增字段均限制在 100–109。
+message DNSWatchTask {
+ string task_id = 100;
+ string domain = 101;
+ string resolver = 102;
+ int64 expires_at = 103;
+ int64 expected_version = 104;
+ int64 round = 105;
+}
+message DNSWatchResult {
+ string task_id = 100;
+ repeated string ips = 101;
+ bool failed = 102;
 }
