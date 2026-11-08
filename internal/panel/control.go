@@ -18,9 +18,10 @@ import (
 )
 
 type controlSession struct {
-	done     chan struct{}
-	once     sync.Once
-	instance string
+	done         chan struct{}
+	once         sync.Once
+	instance     string
+	eventsLogged bool
 }
 
 func (s *controlSession) stop() { s.once.Do(func() { close(s.done) }) }
@@ -303,5 +304,9 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
-	return &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired)}, nil
+	acked, err := p.acceptEvents(ctx, id, session, report)
+	if err != nil {
+		return nil, err
+	}
+	return &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired), AcknowledgedEventIds: acked}, nil
 }

@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"nbpass/internal/controlpb"
+	"nbpass/internal/eventlog"
 	"nbpass/internal/timing"
 )
 
@@ -49,6 +50,7 @@ type Dependencies struct {
 	Random      io.Reader
 	RootCAs     *x509.CertPool
 	DialContext func(context.Context, string) (net.Conn, error)
+	Events      *EventQueue
 }
 
 func Run(ctx context.Context, config Config, deps Dependencies) error {
@@ -105,6 +107,19 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	if config.EnrollOnly {
 		return nil
 	}
+	if deps.Events == nil {
+		if store, ok := deps.Store.(EventStore); ok {
+			deps.Events, err = OpenEventQueue(ctx, store, deps.Clock, deps.Random, EventLimits{})
+			if err != nil {
+				return errors.New("无法打开节点事件队列")
+			}
+		}
+	}
+	if deps.Events != nil {
+		if err := deps.Events.Record(ctx, "node_started", "节点进程启动", 0); err != nil {
+			return errors.New("节点启动事件持久化失败")
+		}
+	}
 	instance := make([]byte, 32)
 	if _, err := io.ReadFull(deps.Random, instance); err != nil {
 		return errors.New("无法生成节点进程实例")
@@ -116,7 +131,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 		}
 		// 由注入时钟控制重试，不额外等待 gRPC 内部的墙上时钟退避。
 		client.ResetConnectBackoff()
-		err := exchange(ctx, service, credential.Token, report, deps.Clock)
+		err := exchange(ctx, service, credential.Token, report, deps.Clock, deps.Events)
 		if status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.FailedPrecondition {
 			return errors.New("节点凭据或进程实例已失效，请检查面板状态")
 		}
@@ -130,7 +145,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 }
 
-func exchange(ctx context.Context, service controlpb.ControlServiceClient, token string, report *controlpb.NodeReport, clock timing.Clock) error {
+func exchange(ctx context.Context, service controlpb.ControlServiceClient, token string, report *controlpb.NodeReport, clock timing.Clock, events *EventQueue) error {
 	streamCtx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token))
 	defer cancel()
 	stream, err := service.Connect(streamCtx)
@@ -139,18 +154,33 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	}
 	for {
 		next := clock.Now().Add(10 * time.Second)
+		progress := false
+		outgoing := &controlpb.NodeReport{NodeId: report.NodeId, ProcessInstance: report.ProcessInstance, ProtocolVersion: report.ProtocolVersion, SoftwareVersion: report.SoftwareVersion, AppliedRevision: report.AppliedRevision}
+		if events != nil {
+			batch, err := events.Batch(ctx)
+			if err != nil {
+				return err
+			}
+			for _, e := range batch {
+				outgoing.Events = append(outgoing.Events, e.Proto())
+			}
+		}
 		// 每次请求得到确认才开始下一活性周期，未响应的流也必须超时重连。
-		result := make(chan error, 1)
+		type response struct {
+			message *controlpb.PanelMessage
+			err     error
+		}
+		result := make(chan response, 1)
 		go func() {
-			if err := stream.Send(report); err != nil && !errors.Is(err, io.EOF) {
-				result <- err
+			if err := stream.Send(outgoing); err != nil && !errors.Is(err, io.EOF) {
+				result <- response{err: err}
 				return
 			}
 			message, err := stream.Recv()
 			if err == nil && message.ProtocolVersion != ProtocolVersion {
 				err = errors.New("控制协议不兼容")
 			}
-			result <- err
+			result <- response{message, err}
 		}()
 		timer := clock.NewTimer(15 * time.Second)
 		select {
@@ -159,11 +189,30 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			return ctx.Err()
 		case <-timer.C():
 			return errors.New("控制响应超时")
-		case err := <-result:
+		case received := <-result:
 			timer.Stop()
-			if err != nil {
-				return err
+			if received.err != nil {
+				return received.err
 			}
+			if events != nil {
+				sentIDs := make(map[string]bool, len(outgoing.Events))
+				for _, e := range outgoing.Events {
+					sentIDs[e.EventId] = true
+				}
+				for _, id := range received.message.AcknowledgedEventIds {
+					if !sentIDs[id] {
+						return errors.New("事件确认不属于当前批次")
+					}
+				}
+				if err := events.Ack(ctx, received.message.AcknowledgedEventIds); err != nil {
+					return err
+				}
+				progress = len(received.message.AcknowledgedEventIds) > 0
+			}
+		}
+		// 有事件时逐批排空，仍在每一批交换活性；不挤占单条消息的大小预算。
+		if len(outgoing.Events) == eventlog.MaxBatch && progress {
+			continue
 		}
 		timer = clock.NewTimer(next.Sub(clock.Now()))
 		select {

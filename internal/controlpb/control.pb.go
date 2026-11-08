@@ -125,6 +125,7 @@ type NodeReport struct {
 	ProtocolVersion uint32                 `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	SoftwareVersion string                 `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
 	AppliedRevision uint64                 `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
+	Events          []*Event               `protobuf:"bytes,15,rep,name=events,proto3" json:"events,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -194,13 +195,21 @@ func (x *NodeReport) GetAppliedRevision() uint64 {
 	return 0
 }
 
+func (x *NodeReport) GetEvents() []*Event {
+	if x != nil {
+		return x.Events
+	}
+	return nil
+}
+
 // revision 仅为接缝元数据，本票不下发或应用配置快照。
 type PanelMessage struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	ProtocolVersion uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	DesiredRevision uint64                 `protobuf:"varint,2,opt,name=desired_revision,json=desiredRevision,proto3" json:"desired_revision,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	ProtocolVersion      uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	DesiredRevision      uint64                 `protobuf:"varint,2,opt,name=desired_revision,json=desiredRevision,proto3" json:"desired_revision,omitempty"`
+	AcknowledgedEventIds []string               `protobuf:"bytes,15,rep,name=acknowledged_event_ids,json=acknowledgedEventIds,proto3" json:"acknowledged_event_ids,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *PanelMessage) Reset() {
@@ -247,6 +256,165 @@ func (x *PanelMessage) GetDesiredRevision() uint64 {
 	return 0
 }
 
+func (x *PanelMessage) GetAcknowledgedEventIds() []string {
+	if x != nil {
+		return x.AcknowledgedEventIds
+	}
+	return nil
+}
+
+type Event struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	EventId        string                 `protobuf:"bytes,1,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
+	Type           string                 `protobuf:"bytes,2,opt,name=type,proto3" json:"type,omitempty"`
+	OccurredAt     string                 `protobuf:"bytes,3,opt,name=occurred_at,json=occurredAt,proto3" json:"occurred_at,omitempty"`
+	ConfigRevision uint64                 `protobuf:"varint,4,opt,name=config_revision,json=configRevision,proto3" json:"config_revision,omitempty"`
+	Message        string                 `protobuf:"bytes,5,opt,name=message,proto3" json:"message,omitempty"`
+	Gap            *EventGap              `protobuf:"bytes,6,opt,name=gap,proto3" json:"gap,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *Event) Reset() {
+	*x = Event{}
+	mi := &file_control_v1_control_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Event) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Event) ProtoMessage() {}
+
+func (x *Event) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Event.ProtoReflect.Descriptor instead.
+func (*Event) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *Event) GetEventId() string {
+	if x != nil {
+		return x.EventId
+	}
+	return ""
+}
+
+func (x *Event) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *Event) GetOccurredAt() string {
+	if x != nil {
+		return x.OccurredAt
+	}
+	return ""
+}
+
+func (x *Event) GetConfigRevision() uint64 {
+	if x != nil {
+		return x.ConfigRevision
+	}
+	return 0
+}
+
+func (x *Event) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *Event) GetGap() *EventGap {
+	if x != nil {
+		return x.Gap
+	}
+	return nil
+}
+
+type EventGap struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Count         uint64                 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	From          string                 `protobuf:"bytes,2,opt,name=from,proto3" json:"from,omitempty"`
+	To            string                 `protobuf:"bytes,3,opt,name=to,proto3" json:"to,omitempty"`
+	Reason        string                 `protobuf:"bytes,4,opt,name=reason,proto3" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EventGap) Reset() {
+	*x = EventGap{}
+	mi := &file_control_v1_control_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EventGap) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EventGap) ProtoMessage() {}
+
+func (x *EventGap) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EventGap.ProtoReflect.Descriptor instead.
+func (*EventGap) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *EventGap) GetCount() uint64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *EventGap) GetFrom() string {
+	if x != nil {
+		return x.From
+	}
+	return ""
+}
+
+func (x *EventGap) GetTo() string {
+	if x != nil {
+		return x.To
+	}
+	return ""
+}
+
+func (x *EventGap) GetReason() string {
+	if x != nil {
+		return x.Reason
+	}
+	return ""
+}
+
 var File_control_v1_control_proto protoreflect.FileDescriptor
 
 const file_control_v1_control_proto_rawDesc = "" +
@@ -256,17 +424,32 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\xd1\x01\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\x83\x02\n" +
 	"\n" +
 	"NodeReport\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
 	"\x10process_instance\x18\x02 \x01(\tR\x0fprocessInstance\x12)\n" +
 	"\x10protocol_version\x18\x03 \x01(\rR\x0fprotocolVersion\x12)\n" +
 	"\x10software_version\x18\x04 \x01(\tR\x0fsoftwareVersion\x12)\n" +
-	"\x10applied_revision\x18\x05 \x01(\x04R\x0fappliedRevision\"d\n" +
+	"\x10applied_revision\x18\x05 \x01(\x04R\x0fappliedRevision\x120\n" +
+	"\x06events\x18\x0f \x03(\v2\x18.nbpass.control.v1.EventR\x06events\"\x9a\x01\n" +
 	"\fPanelMessage\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12)\n" +
-	"\x10desired_revision\x18\x02 \x01(\x04R\x0fdesiredRevision2\xae\x01\n" +
+	"\x10desired_revision\x18\x02 \x01(\x04R\x0fdesiredRevision\x124\n" +
+	"\x16acknowledged_event_ids\x18\x0f \x03(\tR\x14acknowledgedEventIds\"\xc9\x01\n" +
+	"\x05Event\x12\x19\n" +
+	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x12\n" +
+	"\x04type\x18\x02 \x01(\tR\x04type\x12\x1f\n" +
+	"\voccurred_at\x18\x03 \x01(\tR\n" +
+	"occurredAt\x12'\n" +
+	"\x0fconfig_revision\x18\x04 \x01(\x04R\x0econfigRevision\x12\x18\n" +
+	"\amessage\x18\x05 \x01(\tR\amessage\x12-\n" +
+	"\x03gap\x18\x06 \x01(\v2\x1b.nbpass.control.v1.EventGapR\x03gap\"\\\n" +
+	"\bEventGap\x12\x14\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\x12\x12\n" +
+	"\x04from\x18\x02 \x01(\tR\x04from\x12\x0e\n" +
+	"\x02to\x18\x03 \x01(\tR\x02to\x12\x16\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason2\xae\x01\n" +
 	"\x0eControlService\x12M\n" +
 	"\x06Enroll\x12 .nbpass.control.v1.EnrollRequest\x1a!.nbpass.control.v1.EnrollResponse\x12M\n" +
 	"\aConnect\x12\x1d.nbpass.control.v1.NodeReport\x1a\x1f.nbpass.control.v1.PanelMessage(\x010\x01B\x1bZ\x19nbpass/internal/controlpbb\x06proto3"
@@ -283,23 +466,27 @@ func file_control_v1_control_proto_rawDescGZIP() []byte {
 	return file_control_v1_control_proto_rawDescData
 }
 
-var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_control_v1_control_proto_goTypes = []any{
 	(*EnrollRequest)(nil),  // 0: nbpass.control.v1.EnrollRequest
 	(*EnrollResponse)(nil), // 1: nbpass.control.v1.EnrollResponse
 	(*NodeReport)(nil),     // 2: nbpass.control.v1.NodeReport
 	(*PanelMessage)(nil),   // 3: nbpass.control.v1.PanelMessage
+	(*Event)(nil),          // 4: nbpass.control.v1.Event
+	(*EventGap)(nil),       // 5: nbpass.control.v1.EventGap
 }
 var file_control_v1_control_proto_depIdxs = []int32{
-	0, // 0: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
-	2, // 1: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
-	1, // 2: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
-	3, // 3: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	4, // 0: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
+	5, // 1: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
+	0, // 2: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
+	2, // 3: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
+	1, // 4: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
+	3, // 5: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
+	4, // [4:6] is the sub-list for method output_type
+	2, // [2:4] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_control_v1_control_proto_init() }
@@ -313,7 +500,7 @@ func file_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_v1_control_proto_rawDesc), len(file_control_v1_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

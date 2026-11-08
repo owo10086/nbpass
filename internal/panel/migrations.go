@@ -42,6 +42,7 @@ var migrations = []string{
 		process_instance TEXT NOT NULL,
 		PRIMARY KEY(node_id, process_instance)
 	);`,
+	eventMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {
