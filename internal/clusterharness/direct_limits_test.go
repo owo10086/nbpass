@@ -96,7 +96,7 @@ func TestDirectHalfCloseTransfersBothDirectionsAndReleasesResources(t *testing.T
 				}
 			}()
 			port := reservePort()
-			c.Do("POST", "/api/rules", directBody(gid, port, "127.0.0.1", l.Addr().(*net.TCPAddr).Port), 201)
+			rule := c.Do("POST", "/api/rules", directBody(gid, port, "127.0.0.1", l.Addr().(*net.TCPAddr).Port), 201)
 			awaitRevision(t, c, id, 0)
 			conn := directClient(t, port)
 			conn.SetDeadline(time.Now().Add(5 * time.Second))
@@ -121,6 +121,7 @@ func TestDirectHalfCloseTransfersBothDirectionsAndReleasesResources(t *testing.T
 				t.Fatal("半关闭后的请求未传完")
 			}
 			sampleBusiness(t, h, c, id, 0)
+			awaitTraffic(t, h, c, rule["id"].(string), 300000, 420000, float64(0))
 		})
 	}
 }
@@ -246,6 +247,7 @@ func TestDirectResourceLimitsRejectNewConnectionsAndKeepControlResponsive(t *tes
 	b1 := tcpExchange(t, pb, "A:")
 	sampleBusiness(t, h, c, id, 3)
 	requireClosed(t, directClient(t, pb))
+	awaitTraffic(t, h, c, ra["id"].(string), 8, 12, float64(2))
 	// 满载时仍能独立推进活性，并应用新增规则的快照。
 	h.Clock.Advance(10 * time.Second)
 	awaitNode(t, c, id, func(row map[string]any) bool { return row["last_seen_at"] == h.Clock.Now().Format(time.RFC3339Nano) })

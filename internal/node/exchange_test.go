@@ -208,6 +208,62 @@ type interleavedClient struct {
 	stream *interleavedStream
 }
 
+// 重启保留的未满在途批次确认后，剩余事件不能等下一个心跳才补报。
+func TestRestartedEventBackfillDrainsAfterShortPendingBatch(t *testing.T) {
+	clock := &exchangeClock{}
+	store := FileStore{Dir: filepath.Join(t.TempDir(), "node"), Random: rand.Reader}
+	queue, err := OpenEventQueue(context.Background(), store, clock, rand.Reader, EventLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.Record(context.Background(), "node_started", "上一进程启动", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queue.Batch(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := queue.Record(context.Background(), "sync_failed", "等待补报", 3); err != nil {
+		t.Fatal(err)
+	}
+	queue, err = OpenEventQueue(context.Background(), store, clock, rand.Reader, EventLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream := &interleavedStream{reports: make(chan *controlpb.NodeReport, 4), messages: make(chan *controlpb.PanelMessage, 4)}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	engine := forwarding.NewEngine(forwarding.Dependencies{})
+	defer engine.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- exchange(ctx, interleavedClient{stream: stream}, "token", &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "restarted"}, Dependencies{Clock: clock, Events: queue, PublicIPv4: func(context.Context) (string, error) { return "", nil }}, nil, engine)
+	}()
+	receive := func() *controlpb.NodeReport {
+		t.Helper()
+		select {
+		case r := <-stream.reports:
+			return r
+		case err := <-done:
+			t.Fatalf("事件补报提前结束: %v", err)
+		case <-ctx.Done():
+			t.Fatal("未满批次确认后剩余事件未继续补报")
+		}
+		return nil
+	}
+	first := receive()
+	if len(first.Events) != 1 || first.Events[0].Type != "node_started" {
+		t.Fatalf("未保留旧在途批次: %v", first)
+	}
+	stream.messages <- &controlpb.PanelMessage{ProtocolVersion: 1, AcknowledgedEventIds: []string{first.Events[0].EventId}}
+	if r := receive(); !r.EventsOnly || len(r.Events) != 1 || r.Events[0].Type != "sync_failed" {
+		t.Fatalf("未继续补报排队事件: %v", r)
+	}
+	cancel()
+	if err := <-done; err != context.Canceled {
+		t.Fatalf("取消失败: %v", err)
+	}
+}
+
 func (c interleavedClient) Connect(ctx context.Context, _ ...grpc.CallOption) (grpc.BidiStreamingClient[controlpb.NodeReport, controlpb.PanelMessage], error) {
 	c.stream.ctx = ctx
 	return c.stream, nil

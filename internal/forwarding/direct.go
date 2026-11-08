@@ -22,11 +22,13 @@ func (r *listenerRule) acceptDirect(client net.Conn) {
 		lease.release()
 		return
 	}
+	finishTraffic := r.engine.meterConnection(r.config.Id)
 	r.engine.businessConnections.Add(1)
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
 		defer lease.release()
+		defer finishTraffic()
 		defer r.engine.businessConnections.Add(^uint64(0))
 		defer r.untrack(client)
 		r.serveDirect(client, lease)
@@ -47,6 +49,7 @@ func (r *listenerRule) serveDirect(client net.Conn, lease *resourceLease) {
 		return
 	}
 	defer r.untrack(target)
+	client, target = r.engine.meteredConns(r.config.Id, client, target)
 	proxyDirect(ctx, client, target, input, r.engine.resources.limits.IdleTimeout)
 }
 

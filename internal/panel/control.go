@@ -153,6 +153,9 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 	if err != nil {
 		return err
 	}
+	if first.TrafficOnly {
+		return status.Error(codes.InvalidArgument, "流量报告不能建立控制会话")
+	}
 	if err := p.admitControl(stream.Context(), id, digest, session, first); err != nil {
 		return err
 	}
@@ -241,13 +244,13 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 				return err
 			}
 			report := message.report
-			heartbeat := !report.ProbeOnly && !report.EventsOnly && !report.RotationOnly && report.AttemptedRevision == 0
+			heartbeat := !report.ProbeOnly && !report.EventsOnly && !report.RotationOnly && !report.TrafficOnly && report.AttemptedRevision == 0
 			if heartbeat {
 				alive.Stop()
 				alive = p.deps.Clock.NewTimer(90 * time.Second)
 			}
 			// 配置确认没有回包；探针/事件回包不附配置，避免相互触发同步。
-			if heartbeat || report.ProbeOnly || report.EventsOnly || report.RotationOnly || len(response.AcknowledgedEventIds) > 0 {
+			if heartbeat || report.ProbeOnly || report.EventsOnly || report.RotationOnly || report.TrafficOnly || len(response.AcknowledgedEventIds) > 0 {
 				if err := send(response, heartbeat); err != nil {
 					return err
 				}
@@ -263,7 +266,7 @@ func validateReport(report *controlpb.NodeReport) error {
 	if len(report.ProcessInstance) == 0 || len(report.ProcessInstance) > 128 || len(report.SoftwareVersion) > 128 {
 		return status.Error(codes.InvalidArgument, "节点报告无效")
 	}
-	if report.PublicIpv4 != "" {
+	if !report.TrafficOnly && report.PublicIpv4 != "" {
 		if ip, err := publicip.Parse(report.PublicIpv4); err != nil || ip != report.PublicIpv4 {
 			return status.Error(codes.InvalidArgument, "节点公网 IPv4 无效")
 		}
@@ -358,6 +361,9 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, status.Error(codes.FailedPrecondition, "旧进程实例报告无效")
 	}
 	session.instance = report.ProcessInstance
+	if report.TrafficOnly {
+		return p.acceptTraffic(ctx, id, session.instance, report)
+	}
 	if report.RotationOnly {
 		if err := p.acceptRotation(ctx, id, report.Rotation); err != nil {
 			return nil, status.Error(codes.InvalidArgument, "换 IP 进度无法保存")

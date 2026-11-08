@@ -91,7 +91,7 @@ func testPartialRuleReportIsolation(t *testing.T, encrypted bool) {
 		}
 	}
 	assertStatuses("正常", "同步失败")
-	for _, kind := range []string{"old", "future", "digest", "probe", "events"} {
+	for _, kind := range []string{"old", "future", "digest", "probe", "events", "traffic", "rotation"} {
 		report := proto.Clone(partial).(*controlpb.NodeReport)
 		report.ApplyError = "错误覆盖"
 		report.RuleResults[0].AppliedRevision, report.RuleResults[0].ApplyError = 0, "错误覆盖"
@@ -107,6 +107,11 @@ func testPartialRuleReportIsolation(t *testing.T, encrypted bool) {
 			report.ProbeOnly = true
 		case "events":
 			report.EventsOnly = true
+		case "traffic":
+			report.TrafficOnly = true
+		case "rotation":
+			report.RotationOnly = true
+			report.Rotation = &controlpb.RotationProgress{ActionId: "无当前动作"}
 		}
 		send(report)
 		assertStatuses("正常", "同步失败")
