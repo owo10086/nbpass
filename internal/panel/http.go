@@ -21,6 +21,8 @@ func (p *Panel) Handler() http.Handler {
 	mux.HandleFunc("POST /api/nodes/{id}/token/reset", p.resetNodeToken)
 	mux.HandleFunc("POST /api/nodes/{id}/token/revoke", p.revokeNodeToken)
 	mux.HandleFunc("PUT /api/nodes/{id}/maintenance", p.maintainNode)
+	mux.HandleFunc("PUT /api/nodes/{id}/region", p.setNodeRegion)
+	mux.HandleFunc("PUT /api/nodes/{id}/checker", p.setNodeChecker)
 	mux.HandleFunc("GET /install-node.sh", p.installNode)
 	mux.HandleFunc("GET /downloads/nbpass-node-linux-amd64", p.downloadNode)
 	mux.HandleFunc("GET /api/overview", func(w http.ResponseWriter, r *http.Request) { respond(w, http.StatusOK, map[string]any{}) })

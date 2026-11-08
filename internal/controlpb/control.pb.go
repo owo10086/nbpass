@@ -125,8 +125,10 @@ type NodeReport struct {
 	ProtocolVersion uint32                 `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	SoftwareVersion string                 `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
 	AppliedRevision uint64                 `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// 节点查询的出站公网 IPv4，不作为已验证可入站的业务地址。
+	PublicIpv4    string `protobuf:"bytes,17,opt,name=public_ipv4,json=publicIpv4,proto3" json:"public_ipv4,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *NodeReport) Reset() {
@@ -194,6 +196,13 @@ func (x *NodeReport) GetAppliedRevision() uint64 {
 	return 0
 }
 
+func (x *NodeReport) GetPublicIpv4() string {
+	if x != nil {
+		return x.PublicIpv4
+	}
+	return ""
+}
+
 // revision 仅为接缝元数据，本票不下发或应用配置快照。
 type PanelMessage struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
@@ -256,14 +265,16 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\xd1\x01\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\xf2\x01\n" +
 	"\n" +
 	"NodeReport\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
 	"\x10process_instance\x18\x02 \x01(\tR\x0fprocessInstance\x12)\n" +
 	"\x10protocol_version\x18\x03 \x01(\rR\x0fprotocolVersion\x12)\n" +
 	"\x10software_version\x18\x04 \x01(\tR\x0fsoftwareVersion\x12)\n" +
-	"\x10applied_revision\x18\x05 \x01(\x04R\x0fappliedRevision\"d\n" +
+	"\x10applied_revision\x18\x05 \x01(\x04R\x0fappliedRevision\x12\x1f\n" +
+	"\vpublic_ipv4\x18\x11 \x01(\tR\n" +
+	"publicIpv4\"d\n" +
 	"\fPanelMessage\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12)\n" +
 	"\x10desired_revision\x18\x02 \x01(\x04R\x0fdesiredRevision2\xae\x01\n" +

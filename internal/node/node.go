@@ -18,8 +18,10 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"nbpass/internal/controlpb"
+	"nbpass/internal/publicip"
 	"nbpass/internal/timing"
 )
 
@@ -49,6 +51,7 @@ type Dependencies struct {
 	Random      io.Reader
 	RootCAs     *x509.CertPool
 	DialContext func(context.Context, string) (net.Conn, error)
+	PublicIPv4  func(context.Context) (string, error)
 }
 
 func Run(ctx context.Context, config Config, deps Dependencies) error {
@@ -58,6 +61,9 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 	if deps.Clock == nil || deps.Store == nil || deps.Random == nil {
 		return errors.New("节点外部依赖不完整")
+	}
+	if deps.PublicIPv4 == nil {
+		deps.PublicIPv4 = defaultPublicIPv4.Query
 	}
 	address := u.Host
 	if u.Port() == "" {
@@ -116,7 +122,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 		}
 		// 由注入时钟控制重试，不额外等待 gRPC 内部的墙上时钟退避。
 		client.ResetConnectBackoff()
-		err := exchange(ctx, service, credential.Token, report, deps.Clock)
+		err := exchange(ctx, service, credential.Token, report, deps)
 		if status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.FailedPrecondition {
 			return errors.New("节点凭据或进程实例已失效，请检查面板状态")
 		}
@@ -130,7 +136,8 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 }
 
-func exchange(ctx context.Context, service controlpb.ControlServiceClient, token string, report *controlpb.NodeReport, clock timing.Clock) error {
+func exchange(ctx context.Context, service controlpb.ControlServiceClient, token string, report *controlpb.NodeReport, deps Dependencies) error {
+	clock := deps.Clock
 	streamCtx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token))
 	defer cancel()
 	stream, err := service.Connect(streamCtx)
@@ -139,10 +146,16 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	}
 	for {
 		next := clock.Now().Add(10 * time.Second)
+		current := proto.Clone(report).(*controlpb.NodeReport)
+		queryCtx, queryCancel := timeout(ctx, clock, 5*time.Second)
+		if value, err := deps.PublicIPv4(queryCtx); err == nil && queryCtx.Err() == nil {
+			current.PublicIpv4, _ = publicip.Parse(value)
+		}
+		queryCancel()
 		// 每次请求得到确认才开始下一活性周期，未响应的流也必须超时重连。
 		result := make(chan error, 1)
 		go func() {
-			if err := stream.Send(report); err != nil && !errors.Is(err, io.EOF) {
+			if err := stream.Send(current); err != nil && !errors.Is(err, io.EOF) {
 				result <- err
 				return
 			}

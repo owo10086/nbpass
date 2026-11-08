@@ -73,6 +73,7 @@ func (p *Panel) addNode(w http.ResponseWriter, r *http.Request) {
 }
 
 type nodeView struct {
+	nodeRegionView
 	ID               string     `json:"id"`
 	Name             string     `json:"name"`
 	Status           string     `json:"status"`
@@ -99,7 +100,10 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 	p.controlMu.Lock()
 	defer p.controlMu.Unlock()
 	rows, err := p.db.QueryContext(r.Context(), `SELECT id, name, last_seen_at, disconnected_at, maintenance_until,
-		desired_revision, applied_revision, software_version, process_instance FROM nodes ORDER BY created_at, id`)
+		desired_revision, applied_revision, software_version, process_instance,
+		COALESCE(public_ipv4, ''), COALESCE(auto_name, '未知'), COALESCE(auto_mainland, 0),
+		override_name, COALESCE(override_mainland, 0), COALESCE(checker_disabled, 0)
+		FROM nodes LEFT JOIN node_regions ON node_id = id ORDER BY created_at, id`)
 	if err != nil {
 		problem(w, 503, "存储暂不可用")
 		return
@@ -110,10 +114,14 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var n nodeView
 		var last, disconnected, maintenance sql.NullInt64
-		if err := rows.Scan(&n.ID, &n.Name, &last, &disconnected, &maintenance, &n.DesiredRevision, &n.AppliedRevision, &n.SoftwareVersion, &n.ProcessInstance); err != nil {
+		var override sql.NullString
+		var mainland bool
+		if err := rows.Scan(&n.ID, &n.Name, &last, &disconnected, &maintenance, &n.DesiredRevision, &n.AppliedRevision, &n.SoftwareVersion, &n.ProcessInstance,
+			&n.PublicIPv4, &n.AutomaticRegion.Name, &n.AutomaticRegion.MainlandChina, &override, &mainland, &n.CheckerDisabled); err != nil {
 			problem(w, 503, "存储暂不可用")
 			return
 		}
+		n.resolve(override, mainland)
 		n.LastSeenAt, n.MaintenanceUntil = nullableTime(last), nullableTime(maintenance)
 		n.Connected = p.controls[n.ID] != nil && last.Valid && now.Sub(*n.LastSeenAt) < 90*time.Second
 		n.Status, n.StatusLabel = "online", "在线"

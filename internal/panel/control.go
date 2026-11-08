@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"nbpass/internal/controlpb"
+	"nbpass/internal/publicip"
 )
 
 type controlSession struct {
@@ -207,6 +208,11 @@ func validateReport(report *controlpb.NodeReport) error {
 	if len(report.ProcessInstance) == 0 || len(report.ProcessInstance) > 128 || len(report.SoftwareVersion) > 128 {
 		return status.Error(codes.InvalidArgument, "节点报告无效")
 	}
+	if report.PublicIpv4 != "" {
+		if ip, err := publicip.Parse(report.PublicIpv4); err != nil || ip != report.PublicIpv4 {
+			return status.Error(codes.InvalidArgument, "节点公网 IPv4 无效")
+		}
+	}
 	return nil
 }
 
@@ -289,6 +295,9 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, status.Error(codes.FailedPrecondition, "旧进程实例报告无效")
 	}
 	session.instance = report.ProcessInstance
+	if err := p.recordNodeIP(ctx, id, report.PublicIpv4); err != nil {
+		return nil, status.Error(codes.Unavailable, "存储暂不可用")
+	}
 	var desired, applied int64
 	if err := p.db.QueryRowContext(ctx, "SELECT desired_revision, applied_revision FROM nodes WHERE id = ?", id).Scan(&desired, &applied); err != nil {
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")

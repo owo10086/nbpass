@@ -17,6 +17,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"nbpass/internal/ipregion"
 	"nbpass/internal/nodebundle"
 	"nbpass/internal/panel"
 	"nbpass/internal/platform"
@@ -49,13 +50,18 @@ func run(ctx context.Context) error {
 	if (ip == nil || !ip.IsLoopback()) && !*trustedControl {
 		return errors.New("控制端口仅可绑定回环地址；可信网络需显式指定 -trust-control-network")
 	}
+	regions, err := ipregion.New()
+	if err != nil {
+		return fmt.Errorf("加载 ip2region 离线库: %w", err)
+	}
 	core, err := panel.Open(ctx, panel.Config{PublicOrigin: *origin, ControlURL: *controlURL, PasswordConcurrency: *concurrency}, panel.Dependencies{
-		Clock:       platform.RealClock{},
-		Persistence: platform.SQLite{Path: filepath.Join(*dir, "panel.db")},
-		KeyFile:     platform.LocalKeyFile{Path: filepath.Join(*dir, "panel.key")},
-		Random:      rand.Reader,
-		Assets:      web.Assets,
-		NodeBinary:  nodebundle.Open,
+		Clock:        platform.RealClock{},
+		Persistence:  platform.SQLite{Path: filepath.Join(*dir, "panel.db")},
+		KeyFile:      platform.LocalKeyFile{Path: filepath.Join(*dir, "panel.key")},
+		Random:       rand.Reader,
+		Assets:       web.Assets,
+		NodeBinary:   nodebundle.Open,
+		RegionLookup: regions,
 	})
 	if err != nil {
 		return fmt.Errorf("启动面板: %w", err)
