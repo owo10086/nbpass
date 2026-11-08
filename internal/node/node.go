@@ -18,8 +18,10 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"nbpass/internal/controlpb"
+	"nbpass/internal/probe"
 	"nbpass/internal/timing"
 )
 
@@ -44,6 +46,8 @@ type Config struct {
 }
 
 type Dependencies struct {
+	Probe       probe.Collector
+	Connections probe.Connections
 	Clock       timing.Clock
 	Store       Store
 	Random      io.Reader
@@ -59,6 +63,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	if deps.Clock == nil || deps.Store == nil || deps.Random == nil {
 		return errors.New("节点外部依赖不完整")
 	}
+	started := deps.Clock.Now()
 	address := u.Host
 	if u.Port() == "" {
 		address = net.JoinHostPort(u.Hostname(), "443")
@@ -110,13 +115,17 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 		return errors.New("无法生成节点进程实例")
 	}
 	report := &controlpb.NodeReport{NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
+	probeCtx, stopProbe := context.WithCancel(ctx)
+	defer stopProbe()
+	updates := make(chan probeUpdate, 1)
+	go sampleProbe(probeCtx, deps, started, updates)
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 		// 由注入时钟控制重试，不额外等待 gRPC 内部的墙上时钟退避。
 		client.ResetConnectBackoff()
-		err := exchange(ctx, service, credential.Token, report, deps.Clock)
+		err := exchange(ctx, service, credential.Token, report, deps.Clock, updates)
 		if status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.FailedPrecondition {
 			return errors.New("节点凭据或进程实例已失效，请检查面板状态")
 		}
@@ -130,19 +139,23 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 }
 
-func exchange(ctx context.Context, service controlpb.ControlServiceClient, token string, report *controlpb.NodeReport, clock timing.Clock) error {
+func exchange(ctx context.Context, service controlpb.ControlServiceClient, token string, report *controlpb.NodeReport, clock timing.Clock, updates <-chan probeUpdate) error {
 	streamCtx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token))
 	defer cancel()
 	stream, err := service.Connect(streamCtx)
 	if err != nil {
 		return err
 	}
+	// 每条新流先发活性；探针有自己的周期，不改变既有活性节奏。
+	report.Probe, report.ProbeOnly = nil, false
+	nextHeartbeat := clock.Now().Add(10 * time.Second)
 	for {
-		next := clock.Now().Add(10 * time.Second)
 		// 每次请求得到确认才开始下一活性周期，未响应的流也必须超时重连。
 		result := make(chan error, 1)
+		// 超时取消与传输退出并非同步；旧流只能持有本轮不可变的报告。
+		outgoing := proto.Clone(report).(*controlpb.NodeReport)
 		go func() {
-			if err := stream.Send(report); err != nil && !errors.Is(err, io.EOF) {
+			if err := stream.Send(outgoing); err != nil && !errors.Is(err, io.EOF) {
 				result <- err
 				return
 			}
@@ -165,12 +178,27 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				return err
 			}
 		}
-		timer = clock.NewTimer(next.Sub(clock.Now()))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C():
+		report.Probe = nil
+		for {
+			timer = clock.NewTimer(nextHeartbeat.Sub(clock.Now()))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C():
+				report.ProbeOnly = false
+			case update := <-updates:
+				timer.Stop()
+				if clock.Now().Sub(update.at) >= 2*probe.IntervalSeconds*time.Second {
+					continue
+				}
+				report.Probe = update.sample
+				report.ProbeOnly = clock.Now().Before(nextHeartbeat)
+			}
+			if !report.ProbeOnly {
+				nextHeartbeat = clock.Now().Add(10 * time.Second)
+			}
+			break
 		}
 	}
 }

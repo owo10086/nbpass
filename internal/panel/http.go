@@ -18,6 +18,7 @@ func (p *Panel) Handler() http.Handler {
 	mux.HandleFunc("GET /api/secrets/{name}", p.getSecret)
 	mux.HandleFunc("GET /api/nodes", p.listNodes)
 	mux.HandleFunc("POST /api/nodes", p.addNode)
+	mux.HandleFunc("GET /api/nodes/{id}/probe", p.getProbe)
 	mux.HandleFunc("POST /api/nodes/{id}/token/reset", p.resetNodeToken)
 	mux.HandleFunc("POST /api/nodes/{id}/token/revoke", p.revokeNodeToken)
 	mux.HandleFunc("PUT /api/nodes/{id}/maintenance", p.maintainNode)

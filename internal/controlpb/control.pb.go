@@ -125,8 +125,11 @@ type NodeReport struct {
 	ProtocolVersion uint32                 `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	SoftwareVersion string                 `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
 	AppliedRevision uint64                 `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	Probe           *ProbeSample           `protobuf:"bytes,14,opt,name=probe,proto3" json:"probe,omitempty"`
+	// 探针独立上报不推进 10 秒活性时间，也不改变配置应用状态。
+	ProbeOnly     bool `protobuf:"varint,15,opt,name=probe_only,json=probeOnly,proto3" json:"probe_only,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *NodeReport) Reset() {
@@ -194,6 +197,73 @@ func (x *NodeReport) GetAppliedRevision() uint64 {
 	return 0
 }
 
+func (x *NodeReport) GetProbe() *ProbeSample {
+	if x != nil {
+		return x.Probe
+	}
+	return nil
+}
+
+func (x *NodeReport) GetProbeOnly() bool {
+	if x != nil {
+		return x.ProbeOnly
+	}
+	return false
+}
+
+type ProbeSample struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Sequence uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	// 缺少的 key 表示缺测；单位及允许字段由 internal/probe 定义。
+	Values        map[string]float64 `protobuf:"bytes,2,rep,name=values,proto3" json:"values,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"fixed64,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ProbeSample) Reset() {
+	*x = ProbeSample{}
+	mi := &file_control_v1_control_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ProbeSample) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ProbeSample) ProtoMessage() {}
+
+func (x *ProbeSample) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ProbeSample.ProtoReflect.Descriptor instead.
+func (*ProbeSample) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ProbeSample) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *ProbeSample) GetValues() map[string]float64 {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
 // revision 仅为接缝元数据，本票不下发或应用配置快照。
 type PanelMessage struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
@@ -205,7 +275,7 @@ type PanelMessage struct {
 
 func (x *PanelMessage) Reset() {
 	*x = PanelMessage{}
-	mi := &file_control_v1_control_proto_msgTypes[3]
+	mi := &file_control_v1_control_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -217,7 +287,7 @@ func (x *PanelMessage) String() string {
 func (*PanelMessage) ProtoMessage() {}
 
 func (x *PanelMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[3]
+	mi := &file_control_v1_control_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -230,7 +300,7 @@ func (x *PanelMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PanelMessage.ProtoReflect.Descriptor instead.
 func (*PanelMessage) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{3}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *PanelMessage) GetProtocolVersion() uint32 {
@@ -256,14 +326,23 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\xd1\x01\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\xa6\x02\n" +
 	"\n" +
 	"NodeReport\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
 	"\x10process_instance\x18\x02 \x01(\tR\x0fprocessInstance\x12)\n" +
 	"\x10protocol_version\x18\x03 \x01(\rR\x0fprotocolVersion\x12)\n" +
 	"\x10software_version\x18\x04 \x01(\tR\x0fsoftwareVersion\x12)\n" +
-	"\x10applied_revision\x18\x05 \x01(\x04R\x0fappliedRevision\"d\n" +
+	"\x10applied_revision\x18\x05 \x01(\x04R\x0fappliedRevision\x124\n" +
+	"\x05probe\x18\x0e \x01(\v2\x1e.nbpass.control.v1.ProbeSampleR\x05probe\x12\x1d\n" +
+	"\n" +
+	"probe_only\x18\x0f \x01(\bR\tprobeOnly\"\xa8\x01\n" +
+	"\vProbeSample\x12\x1a\n" +
+	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12B\n" +
+	"\x06values\x18\x02 \x03(\v2*.nbpass.control.v1.ProbeSample.ValuesEntryR\x06values\x1a9\n" +
+	"\vValuesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"d\n" +
 	"\fPanelMessage\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12)\n" +
 	"\x10desired_revision\x18\x02 \x01(\x04R\x0fdesiredRevision2\xae\x01\n" +
@@ -283,23 +362,27 @@ func file_control_v1_control_proto_rawDescGZIP() []byte {
 	return file_control_v1_control_proto_rawDescData
 }
 
-var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_control_v1_control_proto_goTypes = []any{
 	(*EnrollRequest)(nil),  // 0: nbpass.control.v1.EnrollRequest
 	(*EnrollResponse)(nil), // 1: nbpass.control.v1.EnrollResponse
 	(*NodeReport)(nil),     // 2: nbpass.control.v1.NodeReport
-	(*PanelMessage)(nil),   // 3: nbpass.control.v1.PanelMessage
+	(*ProbeSample)(nil),    // 3: nbpass.control.v1.ProbeSample
+	(*PanelMessage)(nil),   // 4: nbpass.control.v1.PanelMessage
+	nil,                    // 5: nbpass.control.v1.ProbeSample.ValuesEntry
 }
 var file_control_v1_control_proto_depIdxs = []int32{
-	0, // 0: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
-	2, // 1: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
-	1, // 2: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
-	3, // 3: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	3, // 0: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
+	5, // 1: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
+	0, // 2: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
+	2, // 3: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
+	1, // 4: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
+	4, // 5: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
+	4, // [4:6] is the sub-list for method output_type
+	2, // [2:4] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_control_v1_control_proto_init() }
@@ -313,7 +396,7 @@ func file_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_v1_control_proto_rawDesc), len(file_control_v1_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   4,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
