@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
+import { TunnelRotation } from './TunnelRotation';
 
 type Group = { id: string; name: string; strategy: 'primary_backup'; members: string[] };
 type Member = { id: string; name: string };
@@ -71,7 +72,7 @@ export function ExitGroups({ onSessionExpired }: { onSessionExpired: () => void 
       { title: '出口节点', render: (_, row) => nodeName(row.node_id) },
       { title: 'WSS 端点', render: (_, row) => `${row.address}:${row.listen_port}` },
       { title: '证书身份', dataIndex: 'server_name', render: value => <Typography.Text copyable style={{ wordBreak: 'break-all' }}>{value}</Typography.Text> },
-      { title: '操作', render: (_, row) => <Button size="small" onClick={() => configure(row)}>编辑地址与端口</Button> },
+      { title: '操作', render: (_, row) => <Space wrap><Button size="small" onClick={() => configure(row)}>编辑地址与端口</Button><TunnelRotation nodeID={row.node_id} onSessionExpired={onSessionExpired} onChanged={() => void load()} /></Space> },
     ]} /></Card>
     <Typography.Paragraph type="secondary" style={{ marginTop: 16 }}>面板自动生成有效期 5 年的出口证书，更换地址会保留证书身份。保存后请在节点页面核对配置同步结果，并放行出口监听端口。</Typography.Paragraph>
     <Modal title={editing ? '编辑出口组' : '创建出口组'} open={editing !== undefined} onCancel={() => { setEditing(undefined); form.resetFields(); }} footer={null} forceRender>

@@ -109,6 +109,9 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 			}
 		}
 	}
+	if err := p.compileTunnelRotations(ctx, tx, compiled); err != nil {
+		return err
+	}
 	return gateTunnelRules(ctx, tx, compiled, capable, generations, byGroup, legacyReady)
 }
 func (p *Panel) pairCredential(ctx context.Context, tx *sql.Tx, entry, exit string) (string, error) {

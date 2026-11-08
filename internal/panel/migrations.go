@@ -95,6 +95,7 @@ var migrations = []string{
 	tunnelAuthorizationMigration,
 	trafficMigration,
 	rotationFreezeMigration,
+	tunnelRotationMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

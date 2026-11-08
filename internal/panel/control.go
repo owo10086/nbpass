@@ -311,6 +311,17 @@ func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, sess
 	if retired != 0 {
 		return status.Error(codes.FailedPrecondition, "旧进程实例已被替代")
 	}
+	if first.TunnelRotationVersion != 1 {
+		var activeRotations int
+		err := tx.QueryRowContext(ctx, `SELECT count(*) FROM tunnel_rotations r WHERE r.phase<>'complete'
+         AND (r.exit_id=? OR EXISTS(SELECT 1 FROM tunnel_rotation_pairs p WHERE p.exit_id=r.exit_id AND p.entry_id=?))`, id, id).Scan(&activeRotations)
+		if err != nil {
+			return status.Error(codes.Unavailable, "存储暂不可用")
+		}
+		if activeRotations > 0 {
+			return status.Error(codes.FailedPrecondition, "进行中的出口轮换需要支持轮换的节点版本")
+		}
+	}
 	if previous != "" && previous != first.ProcessInstance {
 		_, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO retired_control_instances(node_id, process_instance) VALUES(?, ?)", id, previous)
 	}
@@ -324,6 +335,9 @@ func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, sess
 		} else {
 			_, err = tx.ExecContext(ctx, "UPDATE nodes SET process_instance=? WHERE id=?", first.ProcessInstance, id)
 		}
+	}
+	if err == nil {
+		_, err = tx.ExecContext(ctx, "UPDATE nodes SET tunnel_rotation_version=? WHERE id=?", first.TunnelRotationVersion, id)
 	}
 	var authorizationChanges []string
 	if err == nil {
@@ -457,6 +471,11 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 	var authorizationChanges []string
 	if err == nil {
 		authorizationChanges, err = p.confirmTunnelAuthorizations(ctx, tx, id, report, uint64(desired), expectedDigest)
+	}
+	if err == nil {
+		var rotationChanges []string
+		rotationChanges, err = p.confirmTunnelRotation(ctx, tx, id, report, uint64(desired), expectedDigest)
+		authorizationChanges = append(authorizationChanges, rotationChanges...)
 	}
 	if err == nil {
 		err = tx.Commit()

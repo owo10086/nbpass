@@ -36,6 +36,8 @@ type exitGroupView struct {
 
 func (p *Panel) tunnelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/tunnel-exits", p.listTunnelExits)
+	mux.HandleFunc("POST /api/nodes/{id}/tunnel/rotation", p.startTunnelRotation)
+	mux.HandleFunc("GET /api/nodes/{id}/tunnel/rotation", p.getTunnelRotation)
 	mux.HandleFunc("PUT /api/nodes/{id}/tunnel", p.saveTunnelExit)
 	mux.HandleFunc("GET /api/exit-groups", p.listExitGroups)
 	mux.HandleFunc("POST /api/exit-groups", p.saveExitGroup)
@@ -119,26 +121,31 @@ func (p *Panel) newExitIdentity() (string, []byte, []byte, error) {
 	}
 	sum := sha256.Sum256([]byte(identity))
 	name := "exit-" + hex.EncodeToString(sum[:16]) + ".nbpass.internal"
+	cert, key, err := p.newExitCertificate(name)
+	return name, cert, key, err
+}
+
+func (p *Panel) newExitCertificate(name string) ([]byte, []byte, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), p.deps.Random)
 	if err != nil {
-		return "", nil, nil, err
+		return nil, nil, err
 	}
 	now := p.deps.Clock.Now().UTC().Truncate(1e9)
 	serialBytes := make([]byte, 16)
 	if _, err := io.ReadFull(p.deps.Random, serialBytes); err != nil {
-		return "", nil, nil, err
+		return nil, nil, err
 	}
 	serialBytes[0] |= 1
 	template := &x509.Certificate{SerialNumber: new(big.Int).SetBytes(serialBytes), Subject: pkix.Name{CommonName: name}, DNSNames: []string{name}, NotBefore: now, NotAfter: now.AddDate(5, 0, 0), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, BasicConstraintsValid: true}
 	der, err := x509.CreateCertificate(p.deps.Random, template, template, &key.PublicKey, key)
 	if err != nil {
-		return "", nil, nil, err
+		return nil, nil, err
 	}
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
-		return "", nil, nil, err
+		return nil, nil, err
 	}
-	return name, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), nil
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), nil
 }
 func loadExitGroups(ctx context.Context, q queryer) ([]exitGroupView, error) {
 	rows, err := q.QueryContext(ctx, "SELECT g.id,g.name,g.strategy,m.node_id FROM exit_groups g JOIN exit_group_members m ON g.id=m.group_id ORDER BY g.id,m.position")
