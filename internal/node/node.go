@@ -27,6 +27,7 @@ import (
 	"nbpass/internal/forwarding"
 	"nbpass/internal/probe"
 	"nbpass/internal/publicip"
+	"nbpass/internal/rotation"
 	"nbpass/internal/timing"
 )
 
@@ -51,16 +52,21 @@ type Config struct {
 }
 
 type Dependencies struct {
-	Probe       probe.Collector
-	Connections probe.Connections
-	Clock       timing.Clock
-	Store       Store
-	Random      io.Reader
-	RootCAs     *x509.CertPool
-	DialContext func(context.Context, string) (net.Conn, error)
-	PublicIPv4  func(context.Context) (string, error)
-	Events      *EventQueue
-	Forwarding  forwarding.Dependencies
+	RotationStore       RotationStore
+	RotationIPv4Sources [2]func(context.Context) (string, error)
+	RotationLocalIPv4   func(context.Context) ([]string, error)
+	RotationHTTP        func(context.Context, rotation.Config, rotation.Variables) error
+	rotations           *rotationRunner
+	Probe               probe.Collector
+	Connections         probe.Connections
+	Clock               timing.Clock
+	Store               Store
+	Random              io.Reader
+	RootCAs             *x509.CertPool
+	DialContext         func(context.Context, string) (net.Conn, error)
+	PublicIPv4          func(context.Context) (string, error)
+	Events              *EventQueue
+	Forwarding          forwarding.Dependencies
 }
 
 func Run(ctx context.Context, config Config, deps Dependencies) error {
@@ -73,6 +79,23 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 	if deps.PublicIPv4 == nil {
 		deps.PublicIPv4 = defaultPublicIPv4.Query
+	}
+	if deps.RotationStore == nil {
+		deps.RotationStore, _ = deps.Store.(RotationStore)
+	}
+	if deps.RotationIPv4Sources[0] == nil {
+		deps.RotationIPv4Sources[0] = deps.PublicIPv4
+	}
+	if deps.RotationIPv4Sources[1] == nil {
+		secondary := defaultPublicIPv4
+		secondary.URL = "https://ifconfig.me/ip"
+		deps.RotationIPv4Sources[1] = secondary.Query
+	}
+	if deps.RotationLocalIPv4 == nil {
+		deps.RotationLocalIPv4 = localPublicIPv4
+	}
+	if deps.RotationHTTP == nil {
+		deps.RotationHTTP = (rotation.HTTPExecutor{}).Do
 	}
 	started := deps.Clock.Now()
 	address := u.Host
@@ -147,6 +170,18 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	if deps.Connections == nil {
 		deps.Connections = engine
 	}
+	rotationCtx, stopRotations := context.WithCancel(ctx)
+	deps.rotations, err = openRotations(rotationCtx, deps)
+	if err != nil {
+		stopRotations()
+		return errors.New("无法打开换 IP 动作缓存")
+	}
+	defer func() {
+		stopRotations()
+		if deps.rotations != nil {
+			deps.rotations.wg.Wait()
+		}
+	}()
 	report := &controlpb.NodeReport{NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
 	probeCtx, stopProbe := context.WithCancel(ctx)
 	defer stopProbe()
@@ -176,6 +211,8 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	clock := deps.Clock
 	streamCtx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token))
 	defer cancel()
+	onlineCtx, markOffline := context.WithCancel(streamCtx)
+	defer markOffline()
 	stream, err := service.Connect(streamCtx)
 	if err != nil {
 		return err
@@ -188,6 +225,9 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	go func() {
 		for {
 			m, err := stream.Recv()
+			if err != nil {
+				markOffline()
+			} // 断流证据即时撤销许可，不等待主循环消费错误。
 			select {
 			case messages <- incoming{m, err}:
 			case <-streamCtx.Done():
@@ -218,21 +258,29 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		probeReport
 		eventReport
 		configReport
+		rotationReport
 	)
 	send := func(kind reportKind, sample *controlpb.ProbeSample) error {
 		outgoing := proto.Clone(report).(*controlpb.NodeReport)
 		outgoing.Probe, outgoing.ProbeOnly, outgoing.EventsOnly = sample, kind == probeReport, kind == eventReport
 		outgoing.Events, outgoing.PublicIpv4 = nil, ""
+		outgoing.Rotation = nil
+		outgoing.RotationOnly = kind == rotationReport
+		if kind == rotationReport {
+			outgoing.Rotation = deps.rotations.snapshot()
+		}
 		if kind != configReport {
 			outgoing.AttemptedRevision, outgoing.ApplyError = 0, ""
 		}
-		if kind == probeReport || kind == eventReport {
+		if kind == probeReport || kind == eventReport || kind == rotationReport {
 			outgoing.AppliedRevision, outgoing.AppliedDigest = 0, ""
 		}
 		if kind == heartbeatReport {
 			queryCtx, queryCancel := timeout(ctx, clock, 5*time.Second)
 			if value, err := deps.PublicIPv4(queryCtx); err == nil && queryCtx.Err() == nil {
-				outgoing.PublicIpv4, _ = publicip.Parse(value)
+				if !deps.rotations.blocksIPObservation() {
+					outgoing.PublicIpv4, _ = publicip.Parse(value)
+				}
 			}
 			queryCancel()
 		}
@@ -275,9 +323,18 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		}
 		return nil
 	}
+	var rotationWake <-chan struct{}
+	if deps.rotations != nil {
+		rotationWake = deps.rotations.wake
+	}
 	nextHeartbeat := clock.Now().Add(10 * time.Second)
 	if err := send(heartbeatReport, nil); err != nil {
 		return err
+	}
+	if deps.rotations != nil && deps.rotations.snapshot() != nil {
+		if err := send(rotationReport, nil); err != nil {
+			return err
+		}
 	}
 	heartbeat := clock.NewTimer(nextHeartbeat.Sub(clock.Now()))
 	defer func() { heartbeat.Stop() }()
@@ -317,6 +374,10 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-rotationWake:
+			if err := send(rotationReport, nil); err != nil {
+				return err
+			}
 		case <-responseC:
 			return errors.New("控制响应超时")
 		case <-eventAckC:
@@ -355,6 +416,9 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 					eventAckC = nil
 					drainEvents = drainEvents || pendingFull
 				}
+			}
+			if m.RotationCommand != nil {
+				deps.rotations.submit(onlineCtx, report.NodeId, m.RotationCommand)
 			}
 			snapshot := m.Snapshot
 			if snapshot == nil {

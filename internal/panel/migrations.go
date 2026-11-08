@@ -88,6 +88,7 @@ var migrations = []string{
 	tunnelMigration,
 	managedDNSMigration,
 	offlineMigration + telegramMigration,
+	rotationMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {
