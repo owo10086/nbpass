@@ -70,6 +70,9 @@ type Dependencies struct {
 }
 
 func Run(ctx context.Context, config Config, deps Dependencies) error {
+	if err := deps.Forwarding.Limits.Validate(); err != nil {
+		return err
+	}
 	u, err := url.Parse(config.ControlURL)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return errors.New("控制地址必须是不带路径的 HTTPS 地址")
@@ -176,6 +179,9 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 			}
 			return deps.ConfigStore.SaveConfig(ctx, data)
 		}
+	}
+	if deps.Forwarding.Clock == nil {
+		deps.Forwarding.Clock = deps.Clock
 	}
 	engine := forwarding.NewEngine(deps.Forwarding)
 	defer engine.Close()
