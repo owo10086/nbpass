@@ -1,0 +1,307 @@
+package panel
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"errors"
+	"strings"
+	"sync"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
+
+	"nbpass/internal/controlpb"
+)
+
+type controlSession struct {
+	done     chan struct{}
+	once     sync.Once
+	instance string
+}
+
+func (s *controlSession) stop() { s.once.Do(func() { close(s.done) }) }
+
+type controlService struct {
+	controlpb.UnimplementedControlServiceServer
+	p *Panel
+}
+
+// RegisterControl 只注册明文 gRPC 服务；TLS 由部署边界负责。
+func (p *Panel) RegisterControl(server grpc.ServiceRegistrar) {
+	controlpb.RegisterControlServiceServer(server, &controlService{p: p})
+}
+
+func (s *controlService) Enroll(ctx context.Context, request *controlpb.EnrollRequest) (*controlpb.EnrollResponse, error) {
+	if len(request.InstallationTicket) != 43 {
+		return nil, status.Error(codes.Unauthenticated, "安装票据无效或过期")
+	}
+	p := s.p
+	p.controlMu.Lock()
+	defer p.controlMu.Unlock()
+	token, digest, err := p.randomCredential()
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, "无法创建节点凭据")
+	}
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	defer tx.Rollback()
+	ticketHash := sha256.Sum256([]byte(request.InstallationTicket))
+	var id string
+	// 消费票据与保存 token 必须在同一事务；失败时可安全重试，成功只返回一次。
+	err = tx.QueryRowContext(ctx, "DELETE FROM installation_tickets WHERE ticket_hash = ? AND expires_at > ? RETURNING node_id", ticketHash[:], p.deps.Clock.Now().UnixNano()).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.Unauthenticated, "安装票据无效或过期")
+	}
+	if err == nil {
+		_, err = tx.ExecContext(ctx, "UPDATE nodes SET token_hash = ? WHERE id = ?", digest, id)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	return &controlpb.EnrollResponse{NodeId: id, Token: token}, nil
+}
+
+func tokenDigest(ctx context.Context) ([]byte, error) {
+	values := metadata.ValueFromIncomingContext(ctx, "authorization")
+	if len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") || len(values[0]) != 50 {
+		return nil, status.Error(codes.Unauthenticated, "节点凭据无效")
+	}
+	digest := sha256.Sum256([]byte(strings.TrimPrefix(values[0], "Bearer ")))
+	return digest[:], nil
+}
+
+type controlReport struct {
+	report *controlpb.NodeReport
+	err    error
+}
+
+func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeReport, controlpb.PanelMessage]) error {
+	digest, err := tokenDigest(stream.Context())
+	if err != nil {
+		return err
+	}
+	p := s.p
+	session := &controlSession{done: make(chan struct{})}
+	var id string
+	p.controlMu.Lock()
+	err = p.db.QueryRowContext(stream.Context(), "SELECT id FROM nodes WHERE token_hash = ?", digest).Scan(&id)
+	if err == nil {
+		if p.pendingControls[id] == nil {
+			p.pendingControls[id] = make(map[*controlSession]struct{})
+		}
+		p.pendingControls[id][session] = struct{}{}
+	}
+	p.controlMu.Unlock()
+	if errors.Is(err, sql.ErrNoRows) {
+		return status.Error(codes.Unauthenticated, "节点凭据无效")
+	}
+	if err != nil {
+		return status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	defer func() {
+		p.controlMu.Lock()
+		delete(p.pendingControls[id], session)
+		if len(p.pendingControls[id]) == 0 {
+			delete(p.pendingControls, id)
+		}
+		p.controlMu.Unlock()
+		session.stop()
+	}()
+	incoming := make(chan controlReport)
+	go func() {
+		for {
+			report, err := stream.Recv()
+			select {
+			case incoming <- controlReport{report, err}:
+			case <-session.done:
+				return
+			case <-stream.Context().Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	receive := func(d time.Duration) (*controlpb.NodeReport, error) {
+		timer := p.deps.Clock.NewTimer(d)
+		defer timer.Stop()
+		select {
+		case <-session.done:
+			return nil, status.Error(codes.Unauthenticated, "控制会话已撤销或被新会话替代")
+		case <-stream.Context().Done():
+			return nil, stream.Context().Err()
+		case <-timer.C():
+			return nil, status.Error(codes.DeadlineExceeded, "节点活性超时")
+		case message := <-incoming:
+			return message.report, message.err
+		}
+	}
+	first, err := receive(15 * time.Second)
+	if err != nil {
+		return err
+	}
+	if err := p.admitControl(stream.Context(), id, digest, session, first); err != nil {
+		return err
+	}
+	defer func() {
+		p.controlMu.Lock()
+		defer p.controlMu.Unlock()
+		if p.controls[id] == session {
+			delete(p.controls, id)
+			now := p.deps.Clock.Now()
+			_, _ = p.db.Exec(`UPDATE nodes SET disconnected_at = CASE
+				WHEN last_seen_at <= ? THEN last_seen_at ELSE ? END WHERE id = ?`, now.Add(-90*time.Second).UnixNano(), now.UnixNano(), id)
+		}
+	}()
+	report := first
+	for {
+		response, err := p.acceptReport(stream.Context(), id, digest, session, report)
+		if err != nil {
+			return err
+		}
+		p.controlMu.Lock()
+		err = p.validControl(stream.Context(), id, digest, session)
+		p.controlMu.Unlock()
+		if err != nil {
+			return err
+		}
+		sent := make(chan error, 1)
+		go func() { sent <- stream.Send(response) }()
+		timer := p.deps.Clock.NewTimer(15 * time.Second)
+		select {
+		case <-session.done:
+			timer.Stop()
+			return status.Error(codes.Unauthenticated, "控制会话已撤销")
+		case <-stream.Context().Done():
+			timer.Stop()
+			return stream.Context().Err()
+		case <-timer.C():
+			return status.Error(codes.DeadlineExceeded, "控制发送超时")
+		case err := <-sent:
+			timer.Stop()
+			if err != nil {
+				return err
+			}
+		}
+		report, err = receive(90 * time.Second)
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func validateReport(report *controlpb.NodeReport) error {
+	if report.ProtocolVersion != 1 {
+		return status.Error(codes.FailedPrecondition, "控制协议不兼容")
+	}
+	if len(report.ProcessInstance) == 0 || len(report.ProcessInstance) > 128 || len(report.SoftwareVersion) > 128 {
+		return status.Error(codes.InvalidArgument, "节点报告无效")
+	}
+	return nil
+}
+
+// 首报告通过后才替换已有会话；已被替代的进程实例不能重连夺回控制权。
+func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, session *controlSession, first *controlpb.NodeReport) error {
+	if err := validateReport(first); err != nil {
+		return err
+	}
+	p.controlMu.Lock()
+	defer p.controlMu.Unlock()
+	tx, err := p.db.BeginTx(ctx, nil)
+	if err != nil {
+		return status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	defer tx.Rollback()
+	var previous string
+	err = tx.QueryRowContext(ctx, "SELECT process_instance FROM nodes WHERE id = ? AND token_hash = ?", id, digest).Scan(&previous)
+	if errors.Is(err, sql.ErrNoRows) {
+		return status.Error(codes.Unauthenticated, "节点凭据无效")
+	}
+	if err != nil {
+		return status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	var retired int
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM retired_control_instances WHERE node_id = ? AND process_instance = ?", id, first.ProcessInstance).Scan(&retired); err != nil {
+		return status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	if retired != 0 {
+		return status.Error(codes.FailedPrecondition, "旧进程实例已被替代")
+	}
+	if previous != "" && previous != first.ProcessInstance {
+		_, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO retired_control_instances(node_id, process_instance) VALUES(?, ?)", id, previous)
+	}
+	if err == nil {
+		_, err = tx.ExecContext(ctx, "UPDATE nodes SET process_instance = ? WHERE id = ?", first.ProcessInstance, id)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		return status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	session.instance = first.ProcessInstance
+	delete(p.pendingControls[id], session)
+	if len(p.pendingControls[id]) == 0 {
+		delete(p.pendingControls, id)
+	}
+	if old := p.controls[id]; old != nil {
+		old.stop()
+	}
+	p.controls[id] = session
+	return nil
+}
+
+func (p *Panel) validControl(ctx context.Context, id string, digest []byte, session *controlSession) error {
+	if p.controls[id] != session {
+		return status.Error(codes.Unauthenticated, "控制会话已失效")
+	}
+	var exists int
+	err := p.db.QueryRowContext(ctx, "SELECT 1 FROM nodes WHERE id = ? AND token_hash = ?", id, digest).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return status.Error(codes.Unauthenticated, "节点凭据已撤销")
+	}
+	if err != nil {
+		return status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	return nil
+}
+
+func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, session *controlSession, report *controlpb.NodeReport) (*controlpb.PanelMessage, error) {
+	p.controlMu.Lock()
+	defer p.controlMu.Unlock()
+	if err := p.validControl(ctx, id, digest, session); err != nil {
+		return nil, err
+	}
+	if err := validateReport(report); err != nil {
+		return nil, err
+	}
+	if session.instance != "" && session.instance != report.ProcessInstance {
+		return nil, status.Error(codes.FailedPrecondition, "旧进程实例报告无效")
+	}
+	session.instance = report.ProcessInstance
+	var desired, applied int64
+	if err := p.db.QueryRowContext(ctx, "SELECT desired_revision, applied_revision FROM nodes WHERE id = ?", id).Scan(&desired, &applied); err != nil {
+		return nil, status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	// 旧版本只能证明活性；不能降低已应用版本，也不能声明面板尚未发出的版本。
+	if report.AppliedRevision <= uint64(desired) && report.AppliedRevision > uint64(applied) {
+		applied = int64(report.AppliedRevision)
+	}
+	_, err := p.db.ExecContext(ctx, `UPDATE nodes SET last_seen_at = ?, disconnected_at = NULL,
+		process_instance = ?, software_version = ?, applied_revision = ? WHERE id = ? AND token_hash = ?`,
+		p.deps.Clock.Now().UnixNano(), session.instance, report.SoftwareVersion, applied, id, digest)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	return &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired)}, nil
+}

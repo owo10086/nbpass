@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package nbpass.control.v1;
+option go_package = "nbpass/internal/controlpb";
+
+service ControlService {
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+  rpc Connect(stream NodeReport) returns (stream PanelMessage);
+}
+
+message EnrollRequest { string installation_ticket = 1; }
+message EnrollResponse { string node_id = 1; string token = 2; }
+
+// 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
+message NodeReport {
+  string node_id = 1;
+  string process_instance = 2;
+  uint32 protocol_version = 3;
+  string software_version = 4;
+  uint64 applied_revision = 5;
+}
+
+// revision 仅为接缝元数据，本票不下发或应用配置快照。
+message PanelMessage {
+  uint32 protocol_version = 1;
+  uint64 desired_revision = 2;
+}

@@ -1,0 +1,5 @@
+/bin/
+/data/
+/web/node_modules/
+/web/*.tsbuildinfo
+.DS_Store
