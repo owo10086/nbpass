@@ -72,17 +72,20 @@ type RuleKind int32
 const (
 	RuleKind_RULE_KIND_UNSPECIFIED RuleKind = 0
 	RuleKind_RULE_KIND_DIRECT      RuleKind = 1
+	RuleKind_RULE_KIND_TUNNEL      RuleKind = 40
 )
 
 // Enum value maps for RuleKind.
 var (
 	RuleKind_name = map[int32]string{
-		0: "RULE_KIND_UNSPECIFIED",
-		1: "RULE_KIND_DIRECT",
+		0:  "RULE_KIND_UNSPECIFIED",
+		1:  "RULE_KIND_DIRECT",
+		40: "RULE_KIND_TUNNEL",
 	}
 	RuleKind_value = map[string]int32{
 		"RULE_KIND_UNSPECIFIED": 0,
 		"RULE_KIND_DIRECT":      1,
+		"RULE_KIND_TUNNEL":      40,
 	}
 )
 
@@ -111,6 +114,98 @@ func (x RuleKind) Number() protoreflect.EnumNumber {
 // Deprecated: Use RuleKind.Descriptor instead.
 func (RuleKind) EnumDescriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{1}
+}
+
+type TunnelTransport int32
+
+const (
+	TunnelTransport_TUNNEL_TRANSPORT_UNSPECIFIED TunnelTransport = 0
+	TunnelTransport_TUNNEL_TRANSPORT_WSS         TunnelTransport = 40
+)
+
+// Enum value maps for TunnelTransport.
+var (
+	TunnelTransport_name = map[int32]string{
+		0:  "TUNNEL_TRANSPORT_UNSPECIFIED",
+		40: "TUNNEL_TRANSPORT_WSS",
+	}
+	TunnelTransport_value = map[string]int32{
+		"TUNNEL_TRANSPORT_UNSPECIFIED": 0,
+		"TUNNEL_TRANSPORT_WSS":         40,
+	}
+)
+
+func (x TunnelTransport) Enum() *TunnelTransport {
+	p := new(TunnelTransport)
+	*p = x
+	return p
+}
+
+func (x TunnelTransport) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TunnelTransport) Descriptor() protoreflect.EnumDescriptor {
+	return file_control_v1_control_proto_enumTypes[2].Descriptor()
+}
+
+func (TunnelTransport) Type() protoreflect.EnumType {
+	return &file_control_v1_control_proto_enumTypes[2]
+}
+
+func (x TunnelTransport) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TunnelTransport.Descriptor instead.
+func (TunnelTransport) EnumDescriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+type ExitStrategy int32
+
+const (
+	ExitStrategy_EXIT_STRATEGY_UNSPECIFIED    ExitStrategy = 0
+	ExitStrategy_EXIT_STRATEGY_PRIMARY_BACKUP ExitStrategy = 40
+)
+
+// Enum value maps for ExitStrategy.
+var (
+	ExitStrategy_name = map[int32]string{
+		0:  "EXIT_STRATEGY_UNSPECIFIED",
+		40: "EXIT_STRATEGY_PRIMARY_BACKUP",
+	}
+	ExitStrategy_value = map[string]int32{
+		"EXIT_STRATEGY_UNSPECIFIED":    0,
+		"EXIT_STRATEGY_PRIMARY_BACKUP": 40,
+	}
+)
+
+func (x ExitStrategy) Enum() *ExitStrategy {
+	p := new(ExitStrategy)
+	*p = x
+	return p
+}
+
+func (x ExitStrategy) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ExitStrategy) Descriptor() protoreflect.EnumDescriptor {
+	return file_control_v1_control_proto_enumTypes[3].Descriptor()
+}
+
+func (ExitStrategy) Type() protoreflect.EnumType {
+	return &file_control_v1_control_proto_enumTypes[3]
+}
+
+func (x ExitStrategy) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ExitStrategy.Descriptor instead.
+func (ExitStrategy) EnumDescriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{3}
 }
 
 type EnrollRequest struct {
@@ -632,6 +727,8 @@ type ConfigSnapshot struct {
 	Revision      uint64                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
 	Digest        string                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
 	Rules         []*ForwardRule         `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
+	ExitGroups    []*ExitGroup           `protobuf:"bytes,40,rep,name=exit_groups,json=exitGroups,proto3" json:"exit_groups,omitempty"`
+	TunnelServer  *TunnelServer          `protobuf:"bytes,41,opt,name=tunnel_server,json=tunnelServer,proto3" json:"tunnel_server,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -687,6 +784,20 @@ func (x *ConfigSnapshot) GetRules() []*ForwardRule {
 	return nil
 }
 
+func (x *ConfigSnapshot) GetExitGroups() []*ExitGroup {
+	if x != nil {
+		return x.ExitGroups
+	}
+	return nil
+}
+
+func (x *ConfigSnapshot) GetTunnelServer() *TunnelServer {
+	if x != nil {
+		return x.TunnelServer
+	}
+	return nil
+}
+
 type ForwardRule struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -697,6 +808,7 @@ type ForwardRule struct {
 	TargetPort    uint32                 `protobuf:"varint,6,opt,name=target_port,json=targetPort,proto3" json:"target_port,omitempty"`
 	AllowPrivate  bool                   `protobuf:"varint,7,opt,name=allow_private,json=allowPrivate,proto3" json:"allow_private,omitempty"`
 	Kind          RuleKind               `protobuf:"varint,8,opt,name=kind,proto3,enum=nbpass.control.v1.RuleKind" json:"kind,omitempty"`
+	ExitGroupId   string                 `protobuf:"bytes,40,opt,name=exit_group_id,json=exitGroupId,proto3" json:"exit_group_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -787,6 +899,370 @@ func (x *ForwardRule) GetKind() RuleKind {
 	return RuleKind_RULE_KIND_UNSPECIFIED
 }
 
+func (x *ForwardRule) GetExitGroupId() string {
+	if x != nil {
+		return x.ExitGroupId
+	}
+	return ""
+}
+
+// 票 08 使用字段号 40–59；授权代次与确认由票 09 扩展。
+type TunnelEndpoint struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	NodeId         string                 `protobuf:"bytes,40,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	Address        string                 `protobuf:"bytes,41,opt,name=address,proto3" json:"address,omitempty"`
+	Port           uint32                 `protobuf:"varint,42,opt,name=port,proto3" json:"port,omitempty"`
+	Transport      TunnelTransport        `protobuf:"varint,43,opt,name=transport,proto3,enum=nbpass.control.v1.TunnelTransport" json:"transport,omitempty"`
+	ServerName     string                 `protobuf:"bytes,44,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
+	CertificatePem []byte                 `protobuf:"bytes,45,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"`
+	EntryId        string                 `protobuf:"bytes,46,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	Credential     string                 `protobuf:"bytes,47,opt,name=credential,proto3" json:"credential,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *TunnelEndpoint) Reset() {
+	*x = TunnelEndpoint{}
+	mi := &file_control_v1_control_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelEndpoint) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelEndpoint) ProtoMessage() {}
+
+func (x *TunnelEndpoint) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelEndpoint.ProtoReflect.Descriptor instead.
+func (*TunnelEndpoint) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *TunnelEndpoint) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *TunnelEndpoint) GetAddress() string {
+	if x != nil {
+		return x.Address
+	}
+	return ""
+}
+
+func (x *TunnelEndpoint) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *TunnelEndpoint) GetTransport() TunnelTransport {
+	if x != nil {
+		return x.Transport
+	}
+	return TunnelTransport_TUNNEL_TRANSPORT_UNSPECIFIED
+}
+
+func (x *TunnelEndpoint) GetServerName() string {
+	if x != nil {
+		return x.ServerName
+	}
+	return ""
+}
+
+func (x *TunnelEndpoint) GetCertificatePem() []byte {
+	if x != nil {
+		return x.CertificatePem
+	}
+	return nil
+}
+
+func (x *TunnelEndpoint) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
+}
+
+func (x *TunnelEndpoint) GetCredential() string {
+	if x != nil {
+		return x.Credential
+	}
+	return ""
+}
+
+type ExitGroup struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,40,opt,name=id,proto3" json:"id,omitempty"`
+	Strategy      ExitStrategy           `protobuf:"varint,41,opt,name=strategy,proto3,enum=nbpass.control.v1.ExitStrategy" json:"strategy,omitempty"`
+	Exits         []*TunnelEndpoint      `protobuf:"bytes,42,rep,name=exits,proto3" json:"exits,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExitGroup) Reset() {
+	*x = ExitGroup{}
+	mi := &file_control_v1_control_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExitGroup) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExitGroup) ProtoMessage() {}
+
+func (x *ExitGroup) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExitGroup.ProtoReflect.Descriptor instead.
+func (*ExitGroup) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ExitGroup) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ExitGroup) GetStrategy() ExitStrategy {
+	if x != nil {
+		return x.Strategy
+	}
+	return ExitStrategy_EXIT_STRATEGY_UNSPECIFIED
+}
+
+func (x *ExitGroup) GetExits() []*TunnelEndpoint {
+	if x != nil {
+		return x.Exits
+	}
+	return nil
+}
+
+type TunnelPeer struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EntryId       string                 `protobuf:"bytes,40,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	Credential    string                 `protobuf:"bytes,41,opt,name=credential,proto3" json:"credential,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelPeer) Reset() {
+	*x = TunnelPeer{}
+	mi := &file_control_v1_control_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelPeer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelPeer) ProtoMessage() {}
+
+func (x *TunnelPeer) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelPeer.ProtoReflect.Descriptor instead.
+func (*TunnelPeer) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *TunnelPeer) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
+}
+
+func (x *TunnelPeer) GetCredential() string {
+	if x != nil {
+		return x.Credential
+	}
+	return ""
+}
+
+type TunnelGrant struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	EntryId       string                 `protobuf:"bytes,40,opt,name=entry_id,json=entryId,proto3" json:"entry_id,omitempty"`
+	Rule          *ForwardRule           `protobuf:"bytes,41,opt,name=rule,proto3" json:"rule,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelGrant) Reset() {
+	*x = TunnelGrant{}
+	mi := &file_control_v1_control_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelGrant) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelGrant) ProtoMessage() {}
+
+func (x *TunnelGrant) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelGrant.ProtoReflect.Descriptor instead.
+func (*TunnelGrant) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *TunnelGrant) GetEntryId() string {
+	if x != nil {
+		return x.EntryId
+	}
+	return ""
+}
+
+func (x *TunnelGrant) GetRule() *ForwardRule {
+	if x != nil {
+		return x.Rule
+	}
+	return nil
+}
+
+type TunnelServer struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	ListenPort     uint32                 `protobuf:"varint,40,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
+	Transport      TunnelTransport        `protobuf:"varint,41,opt,name=transport,proto3,enum=nbpass.control.v1.TunnelTransport" json:"transport,omitempty"`
+	ServerName     string                 `protobuf:"bytes,42,opt,name=server_name,json=serverName,proto3" json:"server_name,omitempty"`
+	CertificatePem []byte                 `protobuf:"bytes,43,opt,name=certificate_pem,json=certificatePem,proto3" json:"certificate_pem,omitempty"`
+	PrivateKeyPem  []byte                 `protobuf:"bytes,44,opt,name=private_key_pem,json=privateKeyPem,proto3" json:"private_key_pem,omitempty"`
+	Peers          []*TunnelPeer          `protobuf:"bytes,45,rep,name=peers,proto3" json:"peers,omitempty"`
+	Grants         []*TunnelGrant         `protobuf:"bytes,46,rep,name=grants,proto3" json:"grants,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *TunnelServer) Reset() {
+	*x = TunnelServer{}
+	mi := &file_control_v1_control_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelServer) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelServer) ProtoMessage() {}
+
+func (x *TunnelServer) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelServer.ProtoReflect.Descriptor instead.
+func (*TunnelServer) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *TunnelServer) GetListenPort() uint32 {
+	if x != nil {
+		return x.ListenPort
+	}
+	return 0
+}
+
+func (x *TunnelServer) GetTransport() TunnelTransport {
+	if x != nil {
+		return x.Transport
+	}
+	return TunnelTransport_TUNNEL_TRANSPORT_UNSPECIFIED
+}
+
+func (x *TunnelServer) GetServerName() string {
+	if x != nil {
+		return x.ServerName
+	}
+	return ""
+}
+
+func (x *TunnelServer) GetCertificatePem() []byte {
+	if x != nil {
+		return x.CertificatePem
+	}
+	return nil
+}
+
+func (x *TunnelServer) GetPrivateKeyPem() []byte {
+	if x != nil {
+		return x.PrivateKeyPem
+	}
+	return nil
+}
+
+func (x *TunnelServer) GetPeers() []*TunnelPeer {
+	if x != nil {
+		return x.Peers
+	}
+	return nil
+}
+
+func (x *TunnelServer) GetGrants() []*TunnelGrant {
+	if x != nil {
+		return x.Grants
+	}
+	return nil
+}
+
 var File_control_v1_control_proto protoreflect.FileDescriptor
 
 const file_control_v1_control_proto_rawDesc = "" +
@@ -839,11 +1315,14 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\x12\x12\n" +
 	"\x04from\x18\x02 \x01(\tR\x04from\x12\x0e\n" +
 	"\x02to\x18\x03 \x01(\tR\x02to\x12\x16\n" +
-	"\x06reason\x18\x04 \x01(\tR\x06reason\"z\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xff\x01\n" +
 	"\x0eConfigSnapshot\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\x04R\brevision\x12\x16\n" +
 	"\x06digest\x18\x02 \x01(\tR\x06digest\x124\n" +
-	"\x05rules\x18\x03 \x03(\v2\x1e.nbpass.control.v1.ForwardRuleR\x05rules\"\xc9\x02\n" +
+	"\x05rules\x18\x03 \x03(\v2\x1e.nbpass.control.v1.ForwardRuleR\x05rules\x12=\n" +
+	"\vexit_groups\x18( \x03(\v2\x1c.nbpass.control.v1.ExitGroupR\n" +
+	"exitGroups\x12D\n" +
+	"\rtunnel_server\x18) \x01(\v2\x1f.nbpass.control.v1.TunnelServerR\ftunnelServer\"\xed\x02\n" +
 	"\vForwardRule\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12$\n" +
 	"\x0eentry_group_id\x18\x02 \x01(\tR\fentryGroupId\x12\x1f\n" +
@@ -854,13 +1333,56 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\vtarget_port\x18\x06 \x01(\rR\n" +
 	"targetPort\x12#\n" +
 	"\rallow_private\x18\a \x01(\bR\fallowPrivate\x12/\n" +
-	"\x04kind\x18\b \x01(\x0e2\x1b.nbpass.control.v1.RuleKindR\x04kind*H\n" +
+	"\x04kind\x18\b \x01(\x0e2\x1b.nbpass.control.v1.RuleKindR\x04kind\x12\"\n" +
+	"\rexit_group_id\x18( \x01(\tR\vexitGroupId\"\x9e\x02\n" +
+	"\x0eTunnelEndpoint\x12\x17\n" +
+	"\anode_id\x18( \x01(\tR\x06nodeId\x12\x18\n" +
+	"\aaddress\x18) \x01(\tR\aaddress\x12\x12\n" +
+	"\x04port\x18* \x01(\rR\x04port\x12@\n" +
+	"\ttransport\x18+ \x01(\x0e2\".nbpass.control.v1.TunnelTransportR\ttransport\x12\x1f\n" +
+	"\vserver_name\x18, \x01(\tR\n" +
+	"serverName\x12'\n" +
+	"\x0fcertificate_pem\x18- \x01(\fR\x0ecertificatePem\x12\x19\n" +
+	"\bentry_id\x18. \x01(\tR\aentryId\x12\x1e\n" +
+	"\n" +
+	"credential\x18/ \x01(\tR\n" +
+	"credential\"\x91\x01\n" +
+	"\tExitGroup\x12\x0e\n" +
+	"\x02id\x18( \x01(\tR\x02id\x12;\n" +
+	"\bstrategy\x18) \x01(\x0e2\x1f.nbpass.control.v1.ExitStrategyR\bstrategy\x127\n" +
+	"\x05exits\x18* \x03(\v2!.nbpass.control.v1.TunnelEndpointR\x05exits\"G\n" +
+	"\n" +
+	"TunnelPeer\x12\x19\n" +
+	"\bentry_id\x18( \x01(\tR\aentryId\x12\x1e\n" +
+	"\n" +
+	"credential\x18) \x01(\tR\n" +
+	"credential\"\\\n" +
+	"\vTunnelGrant\x12\x19\n" +
+	"\bentry_id\x18( \x01(\tR\aentryId\x122\n" +
+	"\x04rule\x18) \x01(\v2\x1e.nbpass.control.v1.ForwardRuleR\x04rule\"\xd0\x02\n" +
+	"\fTunnelServer\x12\x1f\n" +
+	"\vlisten_port\x18( \x01(\rR\n" +
+	"listenPort\x12@\n" +
+	"\ttransport\x18) \x01(\x0e2\".nbpass.control.v1.TunnelTransportR\ttransport\x12\x1f\n" +
+	"\vserver_name\x18* \x01(\tR\n" +
+	"serverName\x12'\n" +
+	"\x0fcertificate_pem\x18+ \x01(\fR\x0ecertificatePem\x12&\n" +
+	"\x0fprivate_key_pem\x18, \x01(\fR\rprivateKeyPem\x123\n" +
+	"\x05peers\x18- \x03(\v2\x1d.nbpass.control.v1.TunnelPeerR\x05peers\x126\n" +
+	"\x06grants\x18. \x03(\v2\x1e.nbpass.control.v1.TunnelGrantR\x06grants*H\n" +
 	"\rAddressFamily\x12\x1e\n" +
 	"\x1aADDRESS_FAMILY_UNSPECIFIED\x10\x00\x12\x17\n" +
-	"\x13ADDRESS_FAMILY_IPV4\x10\x01*;\n" +
+	"\x13ADDRESS_FAMILY_IPV4\x10\x01*Q\n" +
 	"\bRuleKind\x12\x19\n" +
 	"\x15RULE_KIND_UNSPECIFIED\x10\x00\x12\x14\n" +
-	"\x10RULE_KIND_DIRECT\x10\x012\xae\x01\n" +
+	"\x10RULE_KIND_DIRECT\x10\x01\x12\x14\n" +
+	"\x10RULE_KIND_TUNNEL\x10(*M\n" +
+	"\x0fTunnelTransport\x12 \n" +
+	"\x1cTUNNEL_TRANSPORT_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14TUNNEL_TRANSPORT_WSS\x10(*O\n" +
+	"\fExitStrategy\x12\x1d\n" +
+	"\x19EXIT_STRATEGY_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cEXIT_STRATEGY_PRIMARY_BACKUP\x10(2\xae\x01\n" +
 	"\x0eControlService\x12M\n" +
 	"\x06Enroll\x12 .nbpass.control.v1.EnrollRequest\x1a!.nbpass.control.v1.EnrollResponse\x12M\n" +
 	"\aConnect\x12\x1d.nbpass.control.v1.NodeReport\x1a\x1f.nbpass.control.v1.PanelMessage(\x010\x01B\x1bZ\x19nbpass/internal/controlpbb\x06proto3"
@@ -877,40 +1399,56 @@ func file_control_v1_control_proto_rawDescGZIP() []byte {
 	return file_control_v1_control_proto_rawDescData
 }
 
-var file_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_control_v1_control_proto_goTypes = []any{
 	(AddressFamily)(0),     // 0: nbpass.control.v1.AddressFamily
 	(RuleKind)(0),          // 1: nbpass.control.v1.RuleKind
-	(*EnrollRequest)(nil),  // 2: nbpass.control.v1.EnrollRequest
-	(*EnrollResponse)(nil), // 3: nbpass.control.v1.EnrollResponse
-	(*NodeReport)(nil),     // 4: nbpass.control.v1.NodeReport
-	(*ProbeSample)(nil),    // 5: nbpass.control.v1.ProbeSample
-	(*PanelMessage)(nil),   // 6: nbpass.control.v1.PanelMessage
-	(*Event)(nil),          // 7: nbpass.control.v1.Event
-	(*EventGap)(nil),       // 8: nbpass.control.v1.EventGap
-	(*ConfigSnapshot)(nil), // 9: nbpass.control.v1.ConfigSnapshot
-	(*ForwardRule)(nil),    // 10: nbpass.control.v1.ForwardRule
-	nil,                    // 11: nbpass.control.v1.ProbeSample.ValuesEntry
+	(TunnelTransport)(0),   // 2: nbpass.control.v1.TunnelTransport
+	(ExitStrategy)(0),      // 3: nbpass.control.v1.ExitStrategy
+	(*EnrollRequest)(nil),  // 4: nbpass.control.v1.EnrollRequest
+	(*EnrollResponse)(nil), // 5: nbpass.control.v1.EnrollResponse
+	(*NodeReport)(nil),     // 6: nbpass.control.v1.NodeReport
+	(*ProbeSample)(nil),    // 7: nbpass.control.v1.ProbeSample
+	(*PanelMessage)(nil),   // 8: nbpass.control.v1.PanelMessage
+	(*Event)(nil),          // 9: nbpass.control.v1.Event
+	(*EventGap)(nil),       // 10: nbpass.control.v1.EventGap
+	(*ConfigSnapshot)(nil), // 11: nbpass.control.v1.ConfigSnapshot
+	(*ForwardRule)(nil),    // 12: nbpass.control.v1.ForwardRule
+	(*TunnelEndpoint)(nil), // 13: nbpass.control.v1.TunnelEndpoint
+	(*ExitGroup)(nil),      // 14: nbpass.control.v1.ExitGroup
+	(*TunnelPeer)(nil),     // 15: nbpass.control.v1.TunnelPeer
+	(*TunnelGrant)(nil),    // 16: nbpass.control.v1.TunnelGrant
+	(*TunnelServer)(nil),   // 17: nbpass.control.v1.TunnelServer
+	nil,                    // 18: nbpass.control.v1.ProbeSample.ValuesEntry
 }
 var file_control_v1_control_proto_depIdxs = []int32{
-	5,  // 0: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
-	7,  // 1: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
-	11, // 2: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
-	9,  // 3: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
-	8,  // 4: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
-	10, // 5: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
-	0,  // 6: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
-	1,  // 7: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
-	2,  // 8: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
-	4,  // 9: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
-	3,  // 10: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
-	6,  // 11: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
-	10, // [10:12] is the sub-list for method output_type
-	8,  // [8:10] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	7,  // 0: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
+	9,  // 1: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
+	18, // 2: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
+	11, // 3: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
+	10, // 4: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
+	12, // 5: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
+	14, // 6: nbpass.control.v1.ConfigSnapshot.exit_groups:type_name -> nbpass.control.v1.ExitGroup
+	17, // 7: nbpass.control.v1.ConfigSnapshot.tunnel_server:type_name -> nbpass.control.v1.TunnelServer
+	0,  // 8: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
+	1,  // 9: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
+	2,  // 10: nbpass.control.v1.TunnelEndpoint.transport:type_name -> nbpass.control.v1.TunnelTransport
+	3,  // 11: nbpass.control.v1.ExitGroup.strategy:type_name -> nbpass.control.v1.ExitStrategy
+	13, // 12: nbpass.control.v1.ExitGroup.exits:type_name -> nbpass.control.v1.TunnelEndpoint
+	12, // 13: nbpass.control.v1.TunnelGrant.rule:type_name -> nbpass.control.v1.ForwardRule
+	2,  // 14: nbpass.control.v1.TunnelServer.transport:type_name -> nbpass.control.v1.TunnelTransport
+	15, // 15: nbpass.control.v1.TunnelServer.peers:type_name -> nbpass.control.v1.TunnelPeer
+	16, // 16: nbpass.control.v1.TunnelServer.grants:type_name -> nbpass.control.v1.TunnelGrant
+	4,  // 17: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
+	6,  // 18: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
+	5,  // 19: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
+	8,  // 20: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
+	19, // [19:21] is the sub-list for method output_type
+	17, // [17:19] is the sub-list for method input_type
+	17, // [17:17] is the sub-list for extension type_name
+	17, // [17:17] is the sub-list for extension extendee
+	0,  // [0:17] is the sub-list for field type_name
 }
 
 func init() { file_control_v1_control_proto_init() }
@@ -923,8 +1461,8 @@ func file_control_v1_control_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_v1_control_proto_rawDesc), len(file_control_v1_control_proto_rawDesc)),
-			NumEnums:      2,
-			NumMessages:   10,
+			NumEnums:      4,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

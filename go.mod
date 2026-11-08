@@ -3,6 +3,8 @@ module nbpass
 go 1.26.3
 
 require (
+	github.com/coder/websocket v1.8.15
+	github.com/hashicorp/yamux v0.1.2
 	github.com/lionsoul2014/ip2region/binding/golang v0.0.0-20261028042204-6a276cc7c4f9
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0

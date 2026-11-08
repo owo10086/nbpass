@@ -181,13 +181,13 @@ func (p *Panel) deleteEntryGroup(w http.ResponseWriter, r *http.Request) {
 	respond(w, 204, nil)
 }
 
-const ruleColumns = "r.id,r.name,r.entry_group_id,r.kind,r.listen_port,r.target_address,r.target_family,r.target_port,r.allow_private,r.enabled"
+const ruleColumns = "r.id,r.name,r.entry_group_id,r.kind,r.listen_port,r.target_address,r.target_family,r.target_port,r.allow_private,r.enabled,r.exit_group_id"
 
 type scanner interface{ Scan(...any) error }
 
 func scanRule(row scanner) (forwarding.Rule, error) {
 	var r forwarding.Rule
-	err := row.Scan(&r.ID, &r.Name, &r.EntryGroupID, &r.Kind, &r.ListenPort, &r.TargetAddress, &r.TargetFamily, &r.TargetPort, &r.AllowPrivate, &r.Enabled)
+	err := row.Scan(&r.ID, &r.Name, &r.EntryGroupID, &r.Kind, &r.ListenPort, &r.TargetAddress, &r.TargetFamily, &r.TargetPort, &r.AllowPrivate, &r.Enabled, &r.ExitGroupID)
 	return r, err
 }
 func (p *Panel) listRules(w http.ResponseWriter, r *http.Request) {
@@ -246,12 +246,20 @@ func (p *Panel) saveRule(w http.ResponseWriter, r *http.Request) {
 		if n != 1 {
 			return &forwardingError{400, "入口组不存在"}
 		}
-		args := []any{body.Name, body.EntryGroupID, body.Kind, body.ListenPort, body.TargetAddress, body.TargetFamily, body.TargetPort, body.AllowPrivate, body.Enabled, body.ID}
+		if body.Kind == forwarding.Tunnel {
+			if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM exit_groups WHERE id=?", body.ExitGroupID).Scan(&n); err != nil {
+				return err
+			}
+			if n != 1 {
+				return &forwardingError{400, "出口组不存在"}
+			}
+		}
+		args := []any{body.Name, body.EntryGroupID, body.Kind, body.ListenPort, body.TargetAddress, body.TargetFamily, body.TargetPort, body.AllowPrivate, body.Enabled, body.ExitGroupID, body.ID}
 		if creating {
-			_, err := tx.ExecContext(r.Context(), `INSERT INTO forward_rules(name,entry_group_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled,id) VALUES(?,?,?,?,?,?,?,?,?,?)`, args...)
+			_, err := tx.ExecContext(r.Context(), `INSERT INTO forward_rules(name,entry_group_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled,exit_group_id,id) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, args...)
 			return err
 		}
-		return missingResult(tx.ExecContext(r.Context(), `UPDATE forward_rules SET name=?,entry_group_id=?,kind=?,listen_port=?,target_address=?,target_family=?,target_port=?,allow_private=?,enabled=? WHERE id=?`, args...))
+		return missingResult(tx.ExecContext(r.Context(), `UPDATE forward_rules SET name=?,entry_group_id=?,kind=?,listen_port=?,target_address=?,target_family=?,target_port=?,allow_private=?,enabled=?,exit_group_id=? WHERE id=?`, args...))
 	}) {
 		return
 	}

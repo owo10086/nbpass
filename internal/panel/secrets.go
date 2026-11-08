@@ -39,14 +39,21 @@ func newSecrets(db *sql.DB, key []byte, random io.Reader) (SecretStore, error) {
 }
 
 func (s *sealedSecrets) Put(ctx context.Context, name string, value []byte) error {
-	nonce := make([]byte, s.aead.NonceSize())
-	if _, err := io.ReadFull(s.random, nonce); err != nil {
+	sealed, err := s.seal(name, value)
+	if err != nil {
 		return err
 	}
-	// 以秘密名称作为关联数据，数据库中调换两行密文也不能调换凭据。
-	sealed := s.aead.Seal(nonce, nonce, value, []byte(name))
-	_, err := s.db.ExecContext(ctx, "INSERT INTO secrets(name, ciphertext) VALUES(?, ?) ON CONFLICT(name) DO UPDATE SET ciphertext = excluded.ciphertext", name, sealed)
+	_, err = s.db.ExecContext(ctx, "INSERT INTO secrets(name, ciphertext) VALUES(?, ?) ON CONFLICT(name) DO UPDATE SET ciphertext = excluded.ciphertext", name, sealed)
 	return err
+}
+
+func (s *sealedSecrets) seal(name string, value []byte) ([]byte, error) {
+	nonce := make([]byte, s.aead.NonceSize())
+	if _, err := io.ReadFull(s.random, nonce); err != nil {
+		return nil, err
+	}
+	// 以秘密名称作为关联数据，数据库中调换两行密文也不能调换凭据。
+	return s.aead.Seal(nonce, nonce, value, []byte(name)), nil
 }
 
 func (s *sealedSecrets) Get(ctx context.Context, name string) ([]byte, error) {
@@ -54,6 +61,9 @@ func (s *sealedSecrets) Get(ctx context.Context, name string) ([]byte, error) {
 	if err := s.db.QueryRowContext(ctx, "SELECT ciphertext FROM secrets WHERE name = ?", name).Scan(&sealed); err != nil {
 		return nil, err
 	}
+	return s.open(name, sealed)
+}
+func (s *sealedSecrets) open(name string, sealed []byte) ([]byte, error) {
 	if len(sealed) < s.aead.NonceSize() {
 		return nil, errors.New("秘密密文损坏")
 	}

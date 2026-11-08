@@ -138,6 +138,10 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	if _, err := io.ReadFull(deps.Random, instance); err != nil {
 		return errors.New("无法生成节点进程实例")
 	}
+	if deps.Forwarding.Now == nil {
+		deps.Forwarding.Now = deps.Clock.Now
+	}
+	deps.Forwarding.NodeID = credential.NodeID
 	engine := forwarding.NewEngine(deps.Forwarding)
 	defer engine.Close()
 	if deps.Connections == nil {

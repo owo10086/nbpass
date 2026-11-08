@@ -65,6 +65,8 @@ message ConfigSnapshot {
   uint64 revision = 1;
   string digest = 2;
   repeated ForwardRule rules = 3;
+  repeated ExitGroup exit_groups = 40;
+  TunnelServer tunnel_server = 41;
 }
 
 message ForwardRule {
@@ -76,7 +78,44 @@ message ForwardRule {
   uint32 target_port = 6;
   bool allow_private = 7;
   RuleKind kind = 8;
+  string exit_group_id = 40;
 }
 
 enum AddressFamily { ADDRESS_FAMILY_UNSPECIFIED = 0; ADDRESS_FAMILY_IPV4 = 1; }
-enum RuleKind { RULE_KIND_UNSPECIFIED = 0; RULE_KIND_DIRECT = 1; }
+enum RuleKind { RULE_KIND_UNSPECIFIED = 0; RULE_KIND_DIRECT = 1; RULE_KIND_TUNNEL = 40; }
+
+// 票 08 使用字段号 40–59；授权代次与确认由票 09 扩展。
+message TunnelEndpoint {
+  string node_id = 40;
+  string address = 41;
+  uint32 port = 42;
+  TunnelTransport transport = 43;
+  string server_name = 44;
+  bytes certificate_pem = 45;
+  string entry_id = 46;
+  string credential = 47;
+}
+message ExitGroup {
+  string id = 40;
+  ExitStrategy strategy = 41;
+  repeated TunnelEndpoint exits = 42;
+}
+message TunnelPeer {
+  string entry_id = 40;
+  string credential = 41;
+}
+message TunnelGrant {
+  string entry_id = 40;
+  ForwardRule rule = 41;
+}
+message TunnelServer {
+  uint32 listen_port = 40;
+  TunnelTransport transport = 41;
+  string server_name = 42;
+  bytes certificate_pem = 43;
+  bytes private_key_pem = 44;
+  repeated TunnelPeer peers = 45;
+  repeated TunnelGrant grants = 46;
+}
+enum TunnelTransport { TUNNEL_TRANSPORT_UNSPECIFIED = 0; TUNNEL_TRANSPORT_WSS = 40; }
+enum ExitStrategy { EXIT_STRATEGY_UNSPECIFIED = 0; EXIT_STRATEGY_PRIMARY_BACKUP = 40; }

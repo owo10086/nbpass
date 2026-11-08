@@ -6,6 +6,7 @@ import 'antd/dist/reset.css';
 import './style.css';
 import { api } from './api';
 import { EntryGroups } from './EntryGroups';
+import { ExitGroups } from './ExitGroups';
 import { Rules } from './Rules';
 import { Nodes } from './Nodes';
 import { Events } from './Events';
@@ -69,13 +70,13 @@ function App() {
     <Layout className="panel-layout">
       <Layout.Sider breakpoint="lg" collapsedWidth="0" className="sidebar">
         <div className="brand"><span className="brand-mark">n</span><strong>nbpass</strong></div>
-        <Menu theme="dark" selectedKeys={[page]} onClick={({ key }) => setPage(key)} items={[{ key: 'overview', label: '面板概览' }, { key: 'nodes', label: '节点' }, { key: 'entry-groups', label: '入口组' }, { key: 'rules', label: '转发规则' }, { key: 'events', label: '事件日志' }, { key: 'security', label: '安全设置' }]} />
+        <Menu theme="dark" selectedKeys={[page]} onClick={({ key }) => setPage(key)} items={[{ key: 'overview', label: '面板概览' }, { key: 'nodes', label: '节点' }, { key: 'entry-groups', label: '入口组' }, { key: 'exit-groups', label: '出口组' }, { key: 'rules', label: '转发规则' }, { key: 'events', label: '事件日志' }, { key: 'security', label: '安全设置' }]} />
         <div className="sidebar-caption">流量转发，由你掌控</div>
       </Layout.Sider>
       <Layout>
-        <Layout.Header className="panel-header"><span>{{ nodes: '节点', 'entry-groups': '入口组', rules: '转发规则', security: '安全设置', events: '事件日志', overview: '面板概览' }[page]}</span><Space><span className="admin-label">管理员</span><Button loading={busy} onClick={() => void endSession()}>退出登录</Button></Space></Layout.Header>
+        <Layout.Header className="panel-header"><span>{{ nodes: '节点', 'entry-groups': '入口组', 'exit-groups': '出口组', rules: '转发规则', security: '安全设置', events: '事件日志', overview: '面板概览' }[page]}</span><Space><span className="admin-label">管理员</span><Button loading={busy} onClick={() => void endSession()}>退出登录</Button></Space></Layout.Header>
         <Layout.Content className="panel-content">
-          {page === 'nodes' ? <Nodes onSessionExpired={() => void refresh()} /> : page === 'entry-groups' ? <EntryGroups onSessionExpired={() => void refresh()} /> : page === 'rules' ? <Rules onSessionExpired={() => void refresh()} /> : page === 'events' ? <Events onSessionExpired={() => void refresh()} /> : page === 'security' ? <Security onSessionExpired={() => void refresh()} onPasswordChanged={() => { setNotice('密码已修改，全部会话已退出，请使用新密码登录。'); void refresh(); }} /> : <><Typography.Title level={2}>欢迎使用 nbpass</Typography.Title>
+          {page === 'nodes' ? <Nodes onSessionExpired={() => void refresh()} /> : page === 'entry-groups' ? <EntryGroups onSessionExpired={() => void refresh()} /> : page === 'exit-groups' ? <ExitGroups onSessionExpired={() => void refresh()} /> : page === 'rules' ? <Rules onSessionExpired={() => void refresh()} /> : page === 'events' ? <Events onSessionExpired={() => void refresh()} /> : page === 'security' ? <Security onSessionExpired={() => void refresh()} onPasswordChanged={() => { setNotice('密码已修改，全部会话已退出，请使用新密码登录。'); void refresh(); }} /> : <><Typography.Title level={2}>欢迎使用 nbpass</Typography.Title>
           <Typography.Paragraph type="secondary">在这里管理你的节点与转发规则。</Typography.Paragraph>
           {error && <Alert title={error} type="error" showIcon className="message" />}
           <Card className="empty-panel"><Empty description="面板已就绪，暂无配置" image={Empty.PRESENTED_IMAGE_SIMPLE} /></Card></>}

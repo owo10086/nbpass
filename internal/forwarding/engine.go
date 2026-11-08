@@ -1,10 +1,10 @@
 package forwarding
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/netip"
 	"strconv"
@@ -17,13 +17,20 @@ import (
 )
 
 type Dependencies struct {
+	// NodeID 用于兼任入口和出口时去重本机业务流；由认证后的节点核心赋值。
+	NodeID     string
 	LookupIPv4 func(context.Context, string) ([]netip.Addr, error)
 	DialTarget func(context.Context, string) (net.Conn, error)
 	Listen     func(string, string) (net.Listener, error)
+	DialTunnel func(context.Context, string) (net.Conn, error)
+	Now        func() time.Time
 }
 
 type Engine struct {
 	businessConnections atomic.Uint64
+	tunnelConnections   atomic.Uint64
+	tunnelServer        *tunnelServer
+	tunnelClients       map[string]*tunnelClient
 	deps                Dependencies
 	rules               map[string]*listenerRule
 	revision            uint64
@@ -33,6 +40,14 @@ type Engine struct {
 }
 
 func NewEngine(deps Dependencies) *Engine {
+	if deps.Now == nil {
+		deps.Now = time.Now
+	}
+	if deps.DialTunnel == nil {
+		deps.DialTunnel = func(ctx context.Context, address string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
+		}
+	}
 	if deps.LookupIPv4 == nil {
 		deps.LookupIPv4 = func(ctx context.Context, host string) ([]netip.Addr, error) {
 			return net.DefaultResolver.LookupNetIP(ctx, "ip4", host)
@@ -46,11 +61,13 @@ func NewEngine(deps Dependencies) *Engine {
 	if deps.Listen == nil {
 		deps.Listen = net.Listen
 	}
-	return &Engine{deps: deps, rules: map[string]*listenerRule{}}
+	return &Engine{deps: deps, rules: map[string]*listenerRule{}, tunnelClients: map[string]*tunnelClient{}}
 }
 
 // Connections 返回逻辑业务连接数；目标侧 TCP 和控制连接不重复计数。
-func (e *Engine) Connections() (business, tunnel uint64) { return e.businessConnections.Load(), 0 }
+func (e *Engine) Connections() (business, tunnel uint64) {
+	return e.businessConnections.Load(), e.tunnelConnections.Load()
+}
 
 func (e *Engine) Applied() (uint64, string) { return e.revision, e.digest }
 
@@ -64,17 +81,44 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 		return errors.New("拒绝旧版本或同版本不同内容的快照")
 	}
 	e.highest, e.highestDigest = s.Revision, s.Digest
+	var failures []error
+	if err := e.applyTunnelServer(s.TunnelServer); err != nil {
+		failures = append(failures, fmt.Errorf("出口隧道监听失败: %w", err))
+	}
+	endpoints := map[string]*controlpb.TunnelEndpoint{}
+	groups := map[string]*controlpb.TunnelEndpoint{}
+	for _, g := range s.ExitGroups {
+		for _, ep := range g.Exits {
+			endpoints[ep.NodeId] = ep
+			groups[g.Id] = ep
+		}
+	}
+	for id, client := range e.tunnelClients {
+		if !proto.Equal(client.endpoint, endpoints[id]) {
+			client.close()
+			delete(e.tunnelClients, id)
+		}
+	}
+	for id, ep := range endpoints {
+		if e.tunnelClients[id] == nil {
+			e.tunnelClients[id] = &tunnelClient{endpoint: proto.Clone(ep).(*controlpb.TunnelEndpoint), engine: e}
+		}
+	}
 	desired := map[string]*controlpb.ForwardRule{}
 	for _, r := range s.Rules {
 		desired[r.Id] = r
 	}
 	for id, current := range e.rules {
-		if !proto.Equal(current.config, desired[id]) {
+		next := desired[id]
+		var ep *controlpb.TunnelEndpoint
+		if next != nil {
+			ep = groups[next.ExitGroupId]
+		}
+		if !proto.Equal(current.config, next) || !proto.Equal(current.exit, ep) {
 			current.stop()
 			delete(e.rules, id)
 		}
 	}
-	var failures []error
 	for _, r := range s.Rules {
 		if e.rules[r.Id] != nil {
 			continue
@@ -85,7 +129,12 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 			continue
 		}
 		ctx, cancel := context.WithCancel(context.Background())
-		current := &listenerRule{config: proto.Clone(r).(*controlpb.ForwardRule), listener: listener, ctx: ctx, cancel: cancel, connections: map[net.Conn]struct{}{}, engine: e}
+		var client *tunnelClient
+		ep := groups[r.ExitGroupId]
+		if ep != nil {
+			client = e.tunnelClients[ep.NodeId]
+		}
+		current := &listenerRule{exit: ep, tunnel: client, config: proto.Clone(r).(*controlpb.ForwardRule), listener: listener, ctx: ctx, cancel: cancel, connections: map[net.Conn]struct{}{}, engine: e}
 		e.rules[r.Id] = current
 		current.wg.Add(1)
 		go current.accept()
@@ -97,6 +146,12 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 	return nil
 }
 func (e *Engine) Close() {
+	for _, client := range e.tunnelClients {
+		client.close()
+	}
+	if e.tunnelServer != nil {
+		e.tunnelServer.close()
+	}
 	for _, r := range e.rules {
 		r.stop()
 	}
@@ -105,6 +160,8 @@ func (e *Engine) Close() {
 
 type listenerRule struct {
 	config      *controlpb.ForwardRule
+	exit        *controlpb.TunnelEndpoint
+	tunnel      *tunnelClient
 	listener    net.Listener
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -161,7 +218,16 @@ func (r *listenerRule) accept() {
 	}
 }
 func (r *listenerRule) serve(client net.Conn) {
-	target, err := r.engine.dialTarget(r.ctx, r.config)
+	var target net.Conn
+	var err error
+	if r.config.Kind == controlpb.RuleKind_RULE_KIND_TUNNEL {
+		if r.tunnel == nil {
+			return
+		}
+		target, err = r.tunnel.dial(r.ctx, r.config.Id)
+	} else {
+		target, err = r.engine.dialTarget(r.ctx, r.config)
+	}
 	if err != nil {
 		return
 	}
@@ -169,20 +235,7 @@ func (r *listenerRule) serve(client net.Conn) {
 		return
 	}
 	defer r.untrack(target)
-	done := make(chan struct{}, 1)
-	copyHalf := func(dst, src net.Conn) {
-		_, err := io.Copy(dst, src)
-		if closer, ok := dst.(interface{ CloseWrite() error }); ok {
-			_ = closer.CloseWrite()
-		}
-		if err != nil {
-			client.Close()
-			target.Close()
-		}
-	}
-	go func() { copyHalf(target, client); done <- struct{}{} }()
-	copyHalf(client, target)
-	<-done
+	proxyTCP(client, target)
 }
 
 // 每个新连接最多尝试三个不同 IPv4，总预算 10 秒；只在交付业务数据前重试。
@@ -224,4 +277,26 @@ func (e *Engine) dialTarget(ctx context.Context, r *controlpb.ForwardRule) (net.
 		last = errors.New("没有被规则允许的 IPv4 目标")
 	}
 	return nil, last
+}
+
+func (e *Engine) applyTunnelServer(config *controlpb.TunnelServer) error {
+	if e.tunnelServer != nil {
+		old := e.tunnelServer.config
+		if config == nil || old.ListenPort != config.ListenPort || !bytes.Equal(old.CertificatePem, config.CertificatePem) || !bytes.Equal(old.PrivateKeyPem, config.PrivateKeyPem) {
+			e.tunnelServer.close()
+			e.tunnelServer = nil
+		} else {
+			e.tunnelServer.update(config)
+			return nil
+		}
+	}
+	if config == nil {
+		return nil
+	}
+	server, err := e.startTunnelServer(config)
+	if err != nil {
+		return err
+	}
+	e.tunnelServer = server
+	return nil
 }

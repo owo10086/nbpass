@@ -157,8 +157,8 @@ func TestDirectMigrationPreservesVersionSixEventsAndCredentials(t *testing.T) {
 	for _, query := range []string{
 		"INSERT INTO entry_groups(id,name) VALUES('g','入口组')",
 		"INSERT INTO entry_group_members VALUES('g','existing',0)",
-		"INSERT INTO forward_rules VALUES('r','规则','g','direct',12345,'8.8.8.8','ipv4',443,0,1)",
-		"INSERT INTO node_snapshots VALUES('existing',X'','digest')",
+		"INSERT INTO forward_rules(id,name,entry_group_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled) VALUES('r','规则','g','direct',12345,'8.8.8.8','ipv4',443,0,1)",
+		"INSERT INTO node_snapshots(node_id,snapshot,digest) VALUES('existing',X'','digest')",
 		"UPDATE nodes SET applied_digest='digest',attempted_revision=1,apply_error='' WHERE id='existing'",
 	} {
 		if _, err := p.db.Exec(query); err != nil {
