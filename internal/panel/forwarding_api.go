@@ -35,6 +35,7 @@ func (p *Panel) listEntryGroups(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 	groups := []entryGroupView{}
+	positions := map[string]int{}
 	for rows.Next() {
 		var g entryGroupView
 		var member string
@@ -42,8 +43,13 @@ func (p *Panel) listEntryGroups(w http.ResponseWriter, r *http.Request) {
 			problem(w, 503, "存储暂不可用")
 			return
 		}
-		g.Members = []string{member}
-		groups = append(groups, g)
+		if index, ok := positions[g.ID]; ok {
+			groups[index].Members = append(groups[index].Members, member)
+		} else {
+			positions[g.ID] = len(groups)
+			g.Members = []string{member}
+			groups = append(groups, g)
+		}
 	}
 	if rows.Err() != nil {
 		problem(w, 503, "存储暂不可用")
@@ -123,8 +129,8 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Name = strings.TrimSpace(body.Name)
-	if body.Name == "" || len(body.Name) > 200 || len(body.Members) != 1 {
-		problem(w, 400, "本阶段入口组须有名称且只有一个成员")
+	if body.Name == "" || len(body.Name) > 200 || len(body.Members) == 0 {
+		problem(w, 400, "入口组须有名称且至少包含一个成员")
 		return
 	}
 	id := r.PathValue("id")
@@ -139,12 +145,8 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	publicationStatus := "未发布"
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
-		var exists int
-		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM nodes WHERE id=?", body.Members[0]).Scan(&exists); err != nil {
+		if err := validateEntryMembers(r.Context(), tx, body.Members); err != nil {
 			return err
-		}
-		if exists != 1 {
-			return &forwardingError{400, "入口成员不存在"}
 		}
 		if !creating {
 			var active string
@@ -152,8 +154,11 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return err
 			}
-			if active != "" && active != body.Members[0] {
+			if active != "" && !containsEntryMember(body.Members, active) {
 				return &forwardingError{409, "请先通过入口动作切换活动入口，再移除该成员"}
+			}
+			if err := protectPendingEntryMembers(r.Context(), tx, id, body.Members); err != nil {
+				return err
 			}
 		}
 		if creating {
@@ -168,9 +173,10 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 		if _, err := tx.ExecContext(r.Context(), "DELETE FROM entry_group_members WHERE group_id=?", id); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(r.Context(), "INSERT INTO entry_group_members(group_id,node_id,position) VALUES(?,?,0)", id, body.Members[0])
-		if err != nil {
-			return err
+		for position, member := range body.Members {
+			if _, err := tx.ExecContext(r.Context(), "INSERT INTO entry_group_members(group_id,node_id,position) VALUES(?,?,?)", id, member, position); err != nil {
+				return err
+			}
 		}
 		return tx.QueryRowContext(r.Context(), "SELECT publication_status FROM entry_groups WHERE id=?", id).Scan(&publicationStatus)
 	}) {
