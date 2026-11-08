@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -40,6 +41,7 @@ type Dependencies struct {
 	Assets       fs.FS
 	NodeBinary   func() (io.ReadCloser, error)
 	RegionLookup func(context.Context, string) (Region, error)
+	LookupIPv4   func(context.Context, string) ([]netip.Addr, error)
 }
 
 type Config struct {

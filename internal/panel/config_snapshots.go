@@ -35,6 +35,9 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 	if err != nil {
 		return nil, err
 	}
+	if err := p.validateConfiguration(ctx, tx, rules, members); err != nil {
+		return nil, err
+	}
 	rows, err = tx.QueryContext(ctx, "SELECT id,desired_revision FROM nodes ORDER BY id")
 	if err != nil {
 		return nil, err
