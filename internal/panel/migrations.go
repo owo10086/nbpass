@@ -51,6 +51,7 @@ var migrations = []string{
 	CREATE TABLE auth_trusted_proxies (
 		prefix TEXT PRIMARY KEY
 	);`,
+	probeMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

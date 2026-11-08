@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"nbpass/internal/controlpb"
+	"nbpass/internal/probe"
 	"nbpass/internal/publicip"
 	"nbpass/internal/timing"
 )
@@ -46,6 +47,8 @@ type Config struct {
 }
 
 type Dependencies struct {
+	Probe       probe.Collector
+	Connections probe.Connections
 	Clock       timing.Clock
 	Store       Store
 	Random      io.Reader
@@ -65,6 +68,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	if deps.PublicIPv4 == nil {
 		deps.PublicIPv4 = defaultPublicIPv4.Query
 	}
+	started := deps.Clock.Now()
 	address := u.Host
 	if u.Port() == "" {
 		address = net.JoinHostPort(u.Hostname(), "443")
@@ -116,13 +120,17 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 		return errors.New("无法生成节点进程实例")
 	}
 	report := &controlpb.NodeReport{NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
+	probeCtx, stopProbe := context.WithCancel(ctx)
+	defer stopProbe()
+	updates := make(chan probeUpdate, 1)
+	go sampleProbe(probeCtx, deps, started, updates)
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 		// 由注入时钟控制重试，不额外等待 gRPC 内部的墙上时钟退避。
 		client.ResetConnectBackoff()
-		err := exchange(ctx, service, credential.Token, report, deps)
+		err := exchange(ctx, service, credential.Token, report, deps, updates)
 		if status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.FailedPrecondition {
 			return errors.New("节点凭据或进程实例已失效，请检查面板状态")
 		}
@@ -136,7 +144,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 }
 
-func exchange(ctx context.Context, service controlpb.ControlServiceClient, token string, report *controlpb.NodeReport, deps Dependencies) error {
+func exchange(ctx context.Context, service controlpb.ControlServiceClient, token string, report *controlpb.NodeReport, deps Dependencies, updates <-chan probeUpdate) error {
 	clock := deps.Clock
 	streamCtx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token))
 	defer cancel()
@@ -144,18 +152,24 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	if err != nil {
 		return err
 	}
+	// 每条新流先发活性；探针有自己的周期，不改变既有活性节奏。
+	report.Probe, report.ProbeOnly = nil, false
+	nextHeartbeat := clock.Now().Add(10 * time.Second)
 	for {
-		next := clock.Now().Add(10 * time.Second)
-		current := proto.Clone(report).(*controlpb.NodeReport)
-		queryCtx, queryCancel := timeout(ctx, clock, 5*time.Second)
-		if value, err := deps.PublicIPv4(queryCtx); err == nil && queryCtx.Err() == nil {
-			current.PublicIpv4, _ = publicip.Parse(value)
-		}
-		queryCancel()
 		// 每次请求得到确认才开始下一活性周期，未响应的流也必须超时重连。
 		result := make(chan error, 1)
+		// 超时取消与传输退出并非同步；旧流只能持有本轮不可变的报告。
+		outgoing := proto.Clone(report).(*controlpb.NodeReport)
+		// 公网 IP 属于 10 秒活性周期；独立探针不查询，避免被外部查询拖住。
+		if !outgoing.ProbeOnly {
+			queryCtx, queryCancel := timeout(ctx, clock, 5*time.Second)
+			if value, err := deps.PublicIPv4(queryCtx); err == nil && queryCtx.Err() == nil {
+				outgoing.PublicIpv4, _ = publicip.Parse(value)
+			}
+			queryCancel()
+		}
 		go func() {
-			if err := stream.Send(current); err != nil && !errors.Is(err, io.EOF) {
+			if err := stream.Send(outgoing); err != nil && !errors.Is(err, io.EOF) {
 				result <- err
 				return
 			}
@@ -178,12 +192,27 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				return err
 			}
 		}
-		timer = clock.NewTimer(next.Sub(clock.Now()))
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C():
+		report.Probe = nil
+		for {
+			timer = clock.NewTimer(nextHeartbeat.Sub(clock.Now()))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C():
+				report.ProbeOnly = false
+			case update := <-updates:
+				timer.Stop()
+				if clock.Now().Sub(update.at) >= 2*probe.IntervalSeconds*time.Second {
+					continue
+				}
+				report.Probe = update.sample
+				report.ProbeOnly = clock.Now().Before(nextHeartbeat)
+			}
+			if !report.ProbeOnly {
+				nextHeartbeat = clock.Now().Add(10 * time.Second)
+			}
+			break
 		}
 	}
 }

@@ -18,8 +18,17 @@ message NodeReport {
   uint32 protocol_version = 3;
   string software_version = 4;
   uint64 applied_revision = 5;
+  ProbeSample probe = 14;
+  // 探针独立上报不推进 10 秒活性时间，也不改变配置应用状态。
+  bool probe_only = 15;
   // 节点查询的出站公网 IPv4，不作为已验证可入站的业务地址。
   string public_ipv4 = 17;
+}
+
+message ProbeSample {
+  uint64 sequence = 1;
+  // 缺少的 key 表示缺测；单位及允许字段由 internal/probe 定义。
+  map<string, double> values = 2;
 }
 
 // revision 仅为接缝元数据，本票不下发或应用配置快照。

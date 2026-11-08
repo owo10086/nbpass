@@ -295,11 +295,18 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, status.Error(codes.FailedPrecondition, "旧进程实例报告无效")
 	}
 	session.instance = report.ProcessInstance
-	if err := p.recordNodeIP(ctx, id, report.PublicIpv4); err != nil {
-		return nil, status.Error(codes.Unavailable, "存储暂不可用")
+	if err := p.storeProbe(ctx, id, session.instance, report.Probe); err != nil {
+		return nil, status.Error(codes.Unavailable, "探针存储暂不可用")
 	}
 	var desired, applied int64
 	if err := p.db.QueryRowContext(ctx, "SELECT desired_revision, applied_revision FROM nodes WHERE id = ?", id).Scan(&desired, &applied); err != nil {
+		return nil, status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	if report.ProbeOnly {
+		return &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired)}, nil
+	}
+	// 独立探针只存指标；IP、地区与活性由正常活性报告更新。
+	if err := p.recordNodeIP(ctx, id, report.PublicIpv4); err != nil {
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
 	// 旧版本只能证明活性；不能降低已应用版本，也不能声明面板尚未发出的版本。

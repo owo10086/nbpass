@@ -56,6 +56,7 @@ func (h *Harness) StartNode(ticket string, options ...func(*node.Config, *node.D
 	n.deps = node.Dependencies{Clock: h.Clock, Store: n.store, Random: rand.Reader, RootCAs: roots, DialContext: n.dial}
 	// 测试台始终替换外部公网 IP 查询，不访问公网；地区用例按需注入地址。
 	n.deps.PublicIPv4 = func(context.Context) (string, error) { return "", errors.New("测试台未配置公网 IP") }
+	n.deps.Probe = emptyProbe{}
 	for _, option := range options {
 		option(&n.config, &n.deps)
 	}
@@ -96,7 +97,7 @@ func (n *Node) Restore() { n.mu.Lock(); n.blocked = false; n.mu.Unlock() }
 // Blackhole 丢弃后续控制数据，不主动关闭连接，模拟没有 FIN/RST 的失联。
 func (n *Node) Blackhole() { n.mu.Lock(); n.silent = true; n.mu.Unlock() }
 
-func (h *Harness) CloneNode(original *Node, claimedID string) *Node {
+func (h *Harness) CloneNode(original *Node, claimedID string, options ...func(*node.Config, *node.Dependencies)) *Node {
 	h.t.Helper()
 	value, err := original.deps.Store.Load(context.Background())
 	if err != nil {
@@ -105,7 +106,8 @@ func (h *Harness) CloneNode(original *Node, claimedID string) *Node {
 	if claimedID != "" {
 		value.NodeID = claimedID
 	}
-	return h.StartNode("", func(_ *node.Config, deps *node.Dependencies) { deps.Store = &memoryCredentials{value: value} })
+	settings := []func(*node.Config, *node.Dependencies){func(_ *node.Config, deps *node.Dependencies) { deps.Store = &memoryCredentials{value: value} }}
+	return h.StartNode("", append(settings, options...)...)
 }
 
 type controlLink struct {
