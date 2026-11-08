@@ -95,7 +95,10 @@ func (n *Node) RecordEvent(kind, message string, revision uint64) error {
 	}
 	return n.deps.Events.Record(context.Background(), kind, message, revision)
 }
-func (n *Node) Stop()    { n.cancel(); <-n.finished }
+func (n *Node) Stop() { n.cancel(); <-n.finished }
+
+// Restart 丢弃节点运行核心并保留磁盘、网络开关和外部依赖，重新打开持久队列与配置。
+// 不复用旧引擎、监听器、进程实例或探针计数。
 func (n *Node) Restart() { n.Stop(); n.start() }
 
 // Credentials 返回节点自身存储的副本，供模拟凭据重放，绝不读取面板内部状态。

@@ -295,6 +295,10 @@ func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, sess
 	if err == nil {
 		if previous != first.ProcessInstance {
 			_, err = tx.ExecContext(ctx, "UPDATE nodes SET process_instance=?,applied_revision=0,applied_digest='',attempted_revision=0,apply_error='' WHERE id=?", first.ProcessInstance, id)
+			if err == nil {
+				_, err = tx.ExecContext(ctx, "DELETE FROM node_rule_reports WHERE node_id=?", id)
+			}
+			// 保留历史实际规则以展示未完成的删除/移组撤销；清除报告确认已使其失效。
 		} else {
 			_, err = tx.ExecContext(ctx, "UPDATE nodes SET process_instance=? WHERE id=?", first.ProcessInstance, id)
 		}
@@ -379,19 +383,34 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
+	alreadyConfirmed := applied == desired
 	if desired > 0 && expectedDigest != "" {
 		if report.AppliedRevision == uint64(desired) && report.AppliedDigest == expectedDigest && report.ApplyError == "" {
 			applied, appliedDigest, attempted, applyError = desired, expectedDigest, desired, ""
-		} else if report.AttemptedRevision == uint64(desired) && applied != desired && report.ApplyError != "" {
+		} else if report.AttemptedRevision == uint64(desired) && (report.AttemptedDigest == "" || report.AttemptedDigest == expectedDigest) && applied != desired && report.ApplyError != "" {
 			attempted, applyError = desired, report.ApplyError
 			if len(applyError) > 1024 {
 				applyError = applyError[:1024]
 			}
 		}
 	}
-	_, err = p.db.ExecContext(ctx, `UPDATE nodes SET applied_revision=?,applied_digest=?,attempted_revision=?,apply_error=? WHERE id=? AND token_hash=?`,
-		applied, appliedDigest, attempted, applyError, id, digest)
+	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
+		return nil, status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `UPDATE nodes SET applied_revision=?,applied_digest=?,attempted_revision=?,apply_error=? WHERE id=? AND token_hash=?`,
+		applied, appliedDigest, attempted, applyError, id, digest)
+	if err == nil {
+		err = p.storeRuleResults(ctx, tx, id, report, uint64(desired), expectedDigest, alreadyConfirmed)
+	}
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		if status.Code(err) == codes.InvalidArgument {
+			return nil, err
+		}
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
 

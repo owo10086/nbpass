@@ -16,14 +16,14 @@ const listenerPortsMigration = `ALTER TABLE nodes ADD COLUMN tunnel_listen_port 
 ALTER TABLE nodes ADD COLUMN check_port INTEGER NOT NULL DEFAULT 18080 CHECK(check_port BETWEEN 1 AND 65535);`
 
 func (p *Panel) validateConfiguration(ctx context.Context, tx *sql.Tx, rules []forwarding.Rule, members map[string][]string) error {
-	rows, err := tx.QueryContext(ctx, `SELECT n.id,n.name,n.tunnel_listen_port,n.check_port,COALESCE(r.public_ipv4,'') FROM nodes n LEFT JOIN node_regions r ON r.node_id=n.id ORDER BY n.id`)
+	rows, err := tx.QueryContext(ctx, `SELECT n.id,n.name,n.tunnel_listen_port,n.check_port,COALESCE(r.public_ipv4,''),COALESCE(t.listen_port,0) FROM nodes n LEFT JOIN node_regions r ON r.node_id=n.id LEFT JOIN tunnel_exits t ON t.node_id=n.id ORDER BY n.id`)
 	if err != nil {
 		return err
 	}
 	nodes := []forwarding.ValidationNode{}
 	for rows.Next() {
 		var n forwarding.ValidationNode
-		if err := rows.Scan(&n.ID, &n.Name, &n.TunnelListenPort, &n.CheckPort, &n.ObservedIPv4); err != nil {
+		if err := rows.Scan(&n.ID, &n.Name, &n.TunnelListenPort, &n.CheckPort, &n.ObservedIPv4, &n.ActiveTunnelListenPort); err != nil {
 			rows.Close()
 			return err
 		}

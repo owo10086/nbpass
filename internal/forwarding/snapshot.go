@@ -22,6 +22,10 @@ func ValidateSnapshot(s *controlpb.ConfigSnapshot) error {
 		return errors.New("配置快照版本或摘要无效")
 	}
 	ids := map[string]bool{}
+	ports := map[uint32]bool{}
+	if s.TunnelServer != nil {
+		ports[s.TunnelServer.ListenPort] = true
+	}
 	for _, r := range s.Rules {
 		if r == nil || r.Id == "" || ids[r.Id] || (r.Kind != controlpb.RuleKind_RULE_KIND_DIRECT && r.Kind != controlpb.RuleKind_RULE_KIND_TUNNEL) || r.TargetFamily != controlpb.AddressFamily_ADDRESS_FAMILY_IPV4 || r.ListenPort < 1 || r.ListenPort > 65535 || r.TargetPort < 1 || r.TargetPort > 65535 {
 			return errors.New("转发配置无效")
@@ -29,6 +33,10 @@ func ValidateSnapshot(s *controlpb.ConfigSnapshot) error {
 		if err := ValidateTarget(r.TargetAddress, r.AllowPrivate); err != nil {
 			return err
 		}
+		if ports[r.ListenPort] {
+			return errors.New("转发配置监听端口冲突")
+		}
+		ports[r.ListenPort] = true
 		ids[r.Id] = true
 	}
 	return validateTunnelSnapshot(s)

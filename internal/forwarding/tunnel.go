@@ -249,6 +249,8 @@ func (s *tunnelServer) close() {
 	}
 	s.mu.Unlock()
 	s.http.Close()
+	// Close 可能早于 Serve 注册监听器；仍须同步释放实际端口供重启恢复。
+	s.listener.Close()
 	s.wg.Wait()
 }
 func (s *tunnelServer) authorized(entry, credential, ruleID string) *controlpb.ForwardRule {

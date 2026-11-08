@@ -273,11 +273,12 @@ func TestNewNodeProcessMustConfirmConfigurationAgain(t *testing.T) {
 	select {
 	case <-blocked:
 	case <-time.After(5 * time.Second):
-		t.Fatal("新进程未收到快照")
+		t.Fatal("新进程未恢复缓存监听")
 	}
 	row := nodeRow(t, c, id)
-	if row["config_status"] != "未同步" || row["applied_revision"] != float64(0) {
-		t.Fatalf("新进程继承旧进程应用确认: %v", row)
+	// 缓存监听恢复完成前尚未连接面板，旧确认只作为历史保留，不能显示正常。
+	if row["config_status"] != "待确认" || connected(row) {
+		t.Fatalf("新进程恢复完成前错误确认配置: %v", row)
 	}
 	unblock()
 	awaitRevision(t, c, id, 0)

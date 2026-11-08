@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
 import { ManagedDNS } from './ManagedDNS';
+import { GroupSyncDetails, SyncTag, type GroupSyncMember } from './ConfigSync';
 
-type EntryGroup = { id: string; name: string; members: string[]; publication_status: string };
+type EntryGroup = { id: string; name: string; members: string[]; publication_status: string; sync_status: string; sync_members: GroupSyncMember[] };
 type Member = { id: string; name: string };
 
 export function EntryGroups({ onSessionExpired }: { onSessionExpired: () => void }) {
@@ -28,7 +29,7 @@ export function EntryGroups({ onSessionExpired }: { onSessionExpired: () => void
     } catch (e) { failed(e); }
     finally { setLoading(false); }
   }
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void load(); const timer = window.setInterval(() => void load(), 10_000); return () => window.clearInterval(timer); }, []);
   function edit(row: EntryGroup | null) {
     setError(''); form.resetFields(); form.setFieldsValue(row ? { name: row.name, member: row.members[0] } : {}); setEditing(row);
   }
@@ -46,10 +47,11 @@ export function EntryGroups({ onSessionExpired }: { onSessionExpired: () => void
   return <>
     <div className="nodes-heading"><div><Typography.Title level={2}>入口组</Typography.Title><Typography.Paragraph type="secondary">将转发规则应用到入口节点。单成员入口组无需绑定 DNS 即可使用。</Typography.Paragraph></div><Space><Button onClick={() => void load()}>刷新</Button><Button type="primary" onClick={() => edit(null)}>创建入口组</Button></Space></div>
     {error && <Alert title={error} type="error" showIcon className="message" />}
-    <Card styles={{ body: { padding: 0 } }}><Table<EntryGroup> rowKey="id" dataSource={rows} loading={loading} scroll={{ x: 680 }} locale={{ emptyText: '暂无入口组，请先添加节点，再创建入口组。' }} columns={[
+    <Card styles={{ body: { padding: 0 } }}><Table<EntryGroup> rowKey="id" dataSource={rows} loading={loading} scroll={{ x: 800 }} locale={{ emptyText: '暂无入口组，请先添加节点，再创建入口组。' }} expandable={{ expandedRowRender: row => <GroupSyncDetails members={row.sync_members} /> }} columns={[
       { title: '入口组', dataIndex: 'name' },
       { title: '成员（首选入口）', render: (_, row) => row.members.map(id => nodes.find(n => n.id === id)?.name ?? id).join('、') },
       { title: '受管记录', render: (_, row) => <Tag>{row.publication_status}</Tag> },
+      { title: '同步状态', render: (_, row) => <SyncTag status={row.sync_status} /> },
       { title: '操作', render: (_, row) => <Space><Button size="small" onClick={() => edit(row)}>编辑</Button><Button size="small" onClick={() => setManagingDNS(row)}>受管记录与发布</Button><Popconfirm title="删除入口组？" description="须先删除该入口组的转发规则。" onConfirm={() => remove(row.id)}><Button danger size="small">删除</Button></Popconfirm></Space> },
     ]} /></Card>
     {managingDNS && <ManagedDNS key={managingDNS.id} group={managingDNS} nodes={nodes} onClose={() => { setManagingDNS(null); void load(); }} onSessionExpired={onSessionExpired} />}

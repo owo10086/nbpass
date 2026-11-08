@@ -11,10 +11,12 @@ import (
 )
 
 type entryGroupView struct {
-	ID                string   `json:"id"`
-	Name              string   `json:"name"`
-	Members           []string `json:"members"`
-	PublicationStatus string   `json:"publication_status"`
+	ID                string            `json:"id"`
+	Name              string            `json:"name"`
+	Members           []string          `json:"members"`
+	PublicationStatus string            `json:"publication_status"`
+	SyncStatus        string            `json:"sync_status"`
+	SyncMembers       []groupSyncMember `json:"sync_members"`
 }
 
 func (p *Panel) forwardingRoutes(mux *http.ServeMux) {
@@ -28,28 +30,48 @@ func (p *Panel) forwardingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/rules/{id}", p.deleteRule)
 }
 func (p *Panel) listEntryGroups(w http.ResponseWriter, r *http.Request) {
-	rows, err := p.db.QueryContext(r.Context(), `SELECT g.id,g.name,g.publication_status,m.node_id FROM entry_groups g JOIN entry_group_members m ON m.group_id=g.id ORDER BY g.id,m.position`)
+	groups, err := p.entryGroupViews(r.Context())
 	if err != nil {
 		problem(w, 503, "存储暂不可用")
 		return
+	}
+	respond(w, 200, map[string]any{"entry_groups": groups})
+}
+
+func (p *Panel) entryGroupViews(ctx context.Context) ([]entryGroupView, error) {
+	p.controlMu.Lock()
+	defer p.controlMu.Unlock()
+	rows, err := p.db.QueryContext(ctx, `SELECT id,name,publication_status FROM entry_groups ORDER BY id`)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
 	groups := []entryGroupView{}
 	for rows.Next() {
 		var g entryGroupView
-		var member string
-		if err := rows.Scan(&g.ID, &g.Name, &g.PublicationStatus, &member); err != nil {
-			problem(w, 503, "存储暂不可用")
-			return
+		if err := rows.Scan(&g.ID, &g.Name, &g.PublicationStatus); err != nil {
+			return nil, err
 		}
-		g.Members = []string{member}
 		groups = append(groups, g)
 	}
-	if rows.Err() != nil {
-		problem(w, 503, "存储暂不可用")
-		return
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
 	}
-	respond(w, 200, map[string]any{"entry_groups": groups})
+	nodes, members, err := p.loadSyncNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range groups {
+		groups[i].Members = members[groups[i].ID]
+	}
+	rules, err := loadRules(ctx, p.db)
+	if err != nil {
+		return nil, err
+	}
+	attachGroupSync(groups, buildRuleViews(rules, nodes, members), nodes)
+	return groups, nil
 }
 
 // mutateForwarding 把业务改动和所有受影响节点的完整快照原子提交，然后通知控制流。
@@ -217,12 +239,26 @@ func scanRule(row scanner) (forwarding.Rule, error) {
 	return r, err
 }
 func (p *Panel) listRules(w http.ResponseWriter, r *http.Request) {
-	rules, err := loadRules(r.Context(), p.db)
+	rules, err := p.ruleSyncViews(r.Context())
 	if err != nil {
 		problem(w, 503, "存储暂不可用")
 		return
 	}
 	respond(w, 200, map[string]any{"rules": rules})
+}
+
+func (p *Panel) ruleSyncViews(ctx context.Context) ([]ruleView, error) {
+	p.controlMu.Lock()
+	defer p.controlMu.Unlock()
+	rules, err := loadRules(ctx, p.db)
+	if err != nil {
+		return nil, err
+	}
+	nodes, groups, err := p.loadSyncNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return buildRuleViews(rules, nodes, groups), nil
 }
 
 type queryer interface {

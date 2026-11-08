@@ -322,9 +322,14 @@ type NodeReport struct {
 	PublicIpv4 string   `protobuf:"bytes,17,opt,name=public_ipv4,json=publicIpv4,proto3" json:"public_ipv4,omitempty"`
 	Events     []*Event `protobuf:"bytes,18,rep,name=events,proto3" json:"events,omitempty"`
 	// 独立补报只处理事件，不改变活性、探针或配置状态。
-	EventsOnly    bool `protobuf:"varint,19,opt,name=events_only,json=eventsOnly,proto3" json:"events_only,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	EventsOnly bool `protobuf:"varint,19,opt,name=events_only,json=eventsOnly,proto3" json:"events_only,omitempty"`
+	// 仅配置报告携带；逐规则结果绑定本次完整快照的版本与摘要。
+	RuleResults     []*RuleApplyResult `protobuf:"bytes,20,rep,name=rule_results,json=ruleResults,proto3" json:"rule_results,omitempty"`
+	AttemptedDigest string             `protobuf:"bytes,21,opt,name=attempted_digest,json=attemptedDigest,proto3" json:"attempted_digest,omitempty"`
+	// 停用/删除在磁盘检查点及运行时均已撤销；不能只根据快照缺失推断。
+	RevocationsApplied bool `protobuf:"varint,22,opt,name=revocations_applied,json=revocationsApplied,proto3" json:"revocations_applied,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *NodeReport) Reset() {
@@ -448,6 +453,87 @@ func (x *NodeReport) GetEventsOnly() bool {
 	return false
 }
 
+func (x *NodeReport) GetRuleResults() []*RuleApplyResult {
+	if x != nil {
+		return x.RuleResults
+	}
+	return nil
+}
+
+func (x *NodeReport) GetAttemptedDigest() string {
+	if x != nil {
+		return x.AttemptedDigest
+	}
+	return ""
+}
+
+func (x *NodeReport) GetRevocationsApplied() bool {
+	if x != nil {
+		return x.RevocationsApplied
+	}
+	return false
+}
+
+type RuleApplyResult struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	RuleId          string                 `protobuf:"bytes,1,opt,name=rule_id,json=ruleId,proto3" json:"rule_id,omitempty"`
+	AppliedRevision uint64                 `protobuf:"varint,2,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
+	ApplyError      string                 `protobuf:"bytes,3,opt,name=apply_error,json=applyError,proto3" json:"apply_error,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *RuleApplyResult) Reset() {
+	*x = RuleApplyResult{}
+	mi := &file_control_v1_control_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuleApplyResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuleApplyResult) ProtoMessage() {}
+
+func (x *RuleApplyResult) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuleApplyResult.ProtoReflect.Descriptor instead.
+func (*RuleApplyResult) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *RuleApplyResult) GetRuleId() string {
+	if x != nil {
+		return x.RuleId
+	}
+	return ""
+}
+
+func (x *RuleApplyResult) GetAppliedRevision() uint64 {
+	if x != nil {
+		return x.AppliedRevision
+	}
+	return 0
+}
+
+func (x *RuleApplyResult) GetApplyError() string {
+	if x != nil {
+		return x.ApplyError
+	}
+	return ""
+}
+
 type ProbeSample struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Sequence uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
@@ -459,7 +545,7 @@ type ProbeSample struct {
 
 func (x *ProbeSample) Reset() {
 	*x = ProbeSample{}
-	mi := &file_control_v1_control_proto_msgTypes[3]
+	mi := &file_control_v1_control_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -471,7 +557,7 @@ func (x *ProbeSample) String() string {
 func (*ProbeSample) ProtoMessage() {}
 
 func (x *ProbeSample) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[3]
+	mi := &file_control_v1_control_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -484,7 +570,7 @@ func (x *ProbeSample) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeSample.ProtoReflect.Descriptor instead.
 func (*ProbeSample) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{3}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ProbeSample) GetSequence() uint64 {
@@ -514,7 +600,7 @@ type PanelMessage struct {
 
 func (x *PanelMessage) Reset() {
 	*x = PanelMessage{}
-	mi := &file_control_v1_control_proto_msgTypes[4]
+	mi := &file_control_v1_control_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -526,7 +612,7 @@ func (x *PanelMessage) String() string {
 func (*PanelMessage) ProtoMessage() {}
 
 func (x *PanelMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[4]
+	mi := &file_control_v1_control_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -539,7 +625,7 @@ func (x *PanelMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PanelMessage.ProtoReflect.Descriptor instead.
 func (*PanelMessage) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{4}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *PanelMessage) GetProtocolVersion() uint32 {
@@ -584,7 +670,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_control_v1_control_proto_msgTypes[5]
+	mi := &file_control_v1_control_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -596,7 +682,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[5]
+	mi := &file_control_v1_control_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -609,7 +695,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{5}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Event) GetEventId() string {
@@ -666,7 +752,7 @@ type EventGap struct {
 
 func (x *EventGap) Reset() {
 	*x = EventGap{}
-	mi := &file_control_v1_control_proto_msgTypes[6]
+	mi := &file_control_v1_control_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -678,7 +764,7 @@ func (x *EventGap) String() string {
 func (*EventGap) ProtoMessage() {}
 
 func (x *EventGap) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[6]
+	mi := &file_control_v1_control_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -691,7 +777,7 @@ func (x *EventGap) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventGap.ProtoReflect.Descriptor instead.
 func (*EventGap) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{6}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *EventGap) GetCount() uint64 {
@@ -735,7 +821,7 @@ type ConfigSnapshot struct {
 
 func (x *ConfigSnapshot) Reset() {
 	*x = ConfigSnapshot{}
-	mi := &file_control_v1_control_proto_msgTypes[7]
+	mi := &file_control_v1_control_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -747,7 +833,7 @@ func (x *ConfigSnapshot) String() string {
 func (*ConfigSnapshot) ProtoMessage() {}
 
 func (x *ConfigSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[7]
+	mi := &file_control_v1_control_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -760,7 +846,7 @@ func (x *ConfigSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ConfigSnapshot.ProtoReflect.Descriptor instead.
 func (*ConfigSnapshot) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{7}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ConfigSnapshot) GetRevision() uint64 {
@@ -815,7 +901,7 @@ type ForwardRule struct {
 
 func (x *ForwardRule) Reset() {
 	*x = ForwardRule{}
-	mi := &file_control_v1_control_proto_msgTypes[8]
+	mi := &file_control_v1_control_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -827,7 +913,7 @@ func (x *ForwardRule) String() string {
 func (*ForwardRule) ProtoMessage() {}
 
 func (x *ForwardRule) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[8]
+	mi := &file_control_v1_control_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -840,7 +926,7 @@ func (x *ForwardRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForwardRule.ProtoReflect.Descriptor instead.
 func (*ForwardRule) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{8}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ForwardRule) GetId() string {
@@ -923,7 +1009,7 @@ type TunnelEndpoint struct {
 
 func (x *TunnelEndpoint) Reset() {
 	*x = TunnelEndpoint{}
-	mi := &file_control_v1_control_proto_msgTypes[9]
+	mi := &file_control_v1_control_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -935,7 +1021,7 @@ func (x *TunnelEndpoint) String() string {
 func (*TunnelEndpoint) ProtoMessage() {}
 
 func (x *TunnelEndpoint) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[9]
+	mi := &file_control_v1_control_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -948,7 +1034,7 @@ func (x *TunnelEndpoint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelEndpoint.ProtoReflect.Descriptor instead.
 func (*TunnelEndpoint) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{9}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *TunnelEndpoint) GetNodeId() string {
@@ -1018,7 +1104,7 @@ type ExitGroup struct {
 
 func (x *ExitGroup) Reset() {
 	*x = ExitGroup{}
-	mi := &file_control_v1_control_proto_msgTypes[10]
+	mi := &file_control_v1_control_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1030,7 +1116,7 @@ func (x *ExitGroup) String() string {
 func (*ExitGroup) ProtoMessage() {}
 
 func (x *ExitGroup) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[10]
+	mi := &file_control_v1_control_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1043,7 +1129,7 @@ func (x *ExitGroup) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ExitGroup.ProtoReflect.Descriptor instead.
 func (*ExitGroup) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{10}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *ExitGroup) GetId() string {
@@ -1077,7 +1163,7 @@ type TunnelPeer struct {
 
 func (x *TunnelPeer) Reset() {
 	*x = TunnelPeer{}
-	mi := &file_control_v1_control_proto_msgTypes[11]
+	mi := &file_control_v1_control_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1089,7 +1175,7 @@ func (x *TunnelPeer) String() string {
 func (*TunnelPeer) ProtoMessage() {}
 
 func (x *TunnelPeer) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[11]
+	mi := &file_control_v1_control_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1102,7 +1188,7 @@ func (x *TunnelPeer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelPeer.ProtoReflect.Descriptor instead.
 func (*TunnelPeer) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{11}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *TunnelPeer) GetEntryId() string {
@@ -1129,7 +1215,7 @@ type TunnelGrant struct {
 
 func (x *TunnelGrant) Reset() {
 	*x = TunnelGrant{}
-	mi := &file_control_v1_control_proto_msgTypes[12]
+	mi := &file_control_v1_control_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1141,7 +1227,7 @@ func (x *TunnelGrant) String() string {
 func (*TunnelGrant) ProtoMessage() {}
 
 func (x *TunnelGrant) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[12]
+	mi := &file_control_v1_control_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1154,7 +1240,7 @@ func (x *TunnelGrant) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelGrant.ProtoReflect.Descriptor instead.
 func (*TunnelGrant) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{12}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *TunnelGrant) GetEntryId() string {
@@ -1186,7 +1272,7 @@ type TunnelServer struct {
 
 func (x *TunnelServer) Reset() {
 	*x = TunnelServer{}
-	mi := &file_control_v1_control_proto_msgTypes[13]
+	mi := &file_control_v1_control_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1198,7 +1284,7 @@ func (x *TunnelServer) String() string {
 func (*TunnelServer) ProtoMessage() {}
 
 func (x *TunnelServer) ProtoReflect() protoreflect.Message {
-	mi := &file_control_v1_control_proto_msgTypes[13]
+	mi := &file_control_v1_control_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1211,7 +1297,7 @@ func (x *TunnelServer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelServer.ProtoReflect.Descriptor instead.
 func (*TunnelServer) Descriptor() ([]byte, []int) {
-	return file_control_v1_control_proto_rawDescGZIP(), []int{13}
+	return file_control_v1_control_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *TunnelServer) GetListenPort() uint32 {
@@ -1272,7 +1358,7 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\x91\x04\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\xb4\x05\n" +
 	"\n" +
 	"NodeReport\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
@@ -1291,7 +1377,15 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"publicIpv4\x120\n" +
 	"\x06events\x18\x12 \x03(\v2\x18.nbpass.control.v1.EventR\x06events\x12\x1f\n" +
 	"\vevents_only\x18\x13 \x01(\bR\n" +
-	"eventsOnly\"\xa8\x01\n" +
+	"eventsOnly\x12E\n" +
+	"\frule_results\x18\x14 \x03(\v2\".nbpass.control.v1.RuleApplyResultR\vruleResults\x12)\n" +
+	"\x10attempted_digest\x18\x15 \x01(\tR\x0fattemptedDigest\x12/\n" +
+	"\x13revocations_applied\x18\x16 \x01(\bR\x12revocationsApplied\"v\n" +
+	"\x0fRuleApplyResult\x12\x17\n" +
+	"\arule_id\x18\x01 \x01(\tR\x06ruleId\x12)\n" +
+	"\x10applied_revision\x18\x02 \x01(\x04R\x0fappliedRevision\x12\x1f\n" +
+	"\vapply_error\x18\x03 \x01(\tR\n" +
+	"applyError\"\xa8\x01\n" +
 	"\vProbeSample\x12\x1a\n" +
 	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12B\n" +
 	"\x06values\x18\x02 \x03(\v2*.nbpass.control.v1.ProbeSample.ValuesEntryR\x06values\x1a9\n" +
@@ -1400,55 +1494,57 @@ func file_control_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_control_v1_control_proto_goTypes = []any{
-	(AddressFamily)(0),     // 0: nbpass.control.v1.AddressFamily
-	(RuleKind)(0),          // 1: nbpass.control.v1.RuleKind
-	(TunnelTransport)(0),   // 2: nbpass.control.v1.TunnelTransport
-	(ExitStrategy)(0),      // 3: nbpass.control.v1.ExitStrategy
-	(*EnrollRequest)(nil),  // 4: nbpass.control.v1.EnrollRequest
-	(*EnrollResponse)(nil), // 5: nbpass.control.v1.EnrollResponse
-	(*NodeReport)(nil),     // 6: nbpass.control.v1.NodeReport
-	(*ProbeSample)(nil),    // 7: nbpass.control.v1.ProbeSample
-	(*PanelMessage)(nil),   // 8: nbpass.control.v1.PanelMessage
-	(*Event)(nil),          // 9: nbpass.control.v1.Event
-	(*EventGap)(nil),       // 10: nbpass.control.v1.EventGap
-	(*ConfigSnapshot)(nil), // 11: nbpass.control.v1.ConfigSnapshot
-	(*ForwardRule)(nil),    // 12: nbpass.control.v1.ForwardRule
-	(*TunnelEndpoint)(nil), // 13: nbpass.control.v1.TunnelEndpoint
-	(*ExitGroup)(nil),      // 14: nbpass.control.v1.ExitGroup
-	(*TunnelPeer)(nil),     // 15: nbpass.control.v1.TunnelPeer
-	(*TunnelGrant)(nil),    // 16: nbpass.control.v1.TunnelGrant
-	(*TunnelServer)(nil),   // 17: nbpass.control.v1.TunnelServer
-	nil,                    // 18: nbpass.control.v1.ProbeSample.ValuesEntry
+	(AddressFamily)(0),      // 0: nbpass.control.v1.AddressFamily
+	(RuleKind)(0),           // 1: nbpass.control.v1.RuleKind
+	(TunnelTransport)(0),    // 2: nbpass.control.v1.TunnelTransport
+	(ExitStrategy)(0),       // 3: nbpass.control.v1.ExitStrategy
+	(*EnrollRequest)(nil),   // 4: nbpass.control.v1.EnrollRequest
+	(*EnrollResponse)(nil),  // 5: nbpass.control.v1.EnrollResponse
+	(*NodeReport)(nil),      // 6: nbpass.control.v1.NodeReport
+	(*RuleApplyResult)(nil), // 7: nbpass.control.v1.RuleApplyResult
+	(*ProbeSample)(nil),     // 8: nbpass.control.v1.ProbeSample
+	(*PanelMessage)(nil),    // 9: nbpass.control.v1.PanelMessage
+	(*Event)(nil),           // 10: nbpass.control.v1.Event
+	(*EventGap)(nil),        // 11: nbpass.control.v1.EventGap
+	(*ConfigSnapshot)(nil),  // 12: nbpass.control.v1.ConfigSnapshot
+	(*ForwardRule)(nil),     // 13: nbpass.control.v1.ForwardRule
+	(*TunnelEndpoint)(nil),  // 14: nbpass.control.v1.TunnelEndpoint
+	(*ExitGroup)(nil),       // 15: nbpass.control.v1.ExitGroup
+	(*TunnelPeer)(nil),      // 16: nbpass.control.v1.TunnelPeer
+	(*TunnelGrant)(nil),     // 17: nbpass.control.v1.TunnelGrant
+	(*TunnelServer)(nil),    // 18: nbpass.control.v1.TunnelServer
+	nil,                     // 19: nbpass.control.v1.ProbeSample.ValuesEntry
 }
 var file_control_v1_control_proto_depIdxs = []int32{
-	7,  // 0: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
-	9,  // 1: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
-	18, // 2: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
-	11, // 3: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
-	10, // 4: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
-	12, // 5: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
-	14, // 6: nbpass.control.v1.ConfigSnapshot.exit_groups:type_name -> nbpass.control.v1.ExitGroup
-	17, // 7: nbpass.control.v1.ConfigSnapshot.tunnel_server:type_name -> nbpass.control.v1.TunnelServer
-	0,  // 8: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
-	1,  // 9: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
-	2,  // 10: nbpass.control.v1.TunnelEndpoint.transport:type_name -> nbpass.control.v1.TunnelTransport
-	3,  // 11: nbpass.control.v1.ExitGroup.strategy:type_name -> nbpass.control.v1.ExitStrategy
-	13, // 12: nbpass.control.v1.ExitGroup.exits:type_name -> nbpass.control.v1.TunnelEndpoint
-	12, // 13: nbpass.control.v1.TunnelGrant.rule:type_name -> nbpass.control.v1.ForwardRule
-	2,  // 14: nbpass.control.v1.TunnelServer.transport:type_name -> nbpass.control.v1.TunnelTransport
-	15, // 15: nbpass.control.v1.TunnelServer.peers:type_name -> nbpass.control.v1.TunnelPeer
-	16, // 16: nbpass.control.v1.TunnelServer.grants:type_name -> nbpass.control.v1.TunnelGrant
-	4,  // 17: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
-	6,  // 18: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
-	5,  // 19: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
-	8,  // 20: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
-	19, // [19:21] is the sub-list for method output_type
-	17, // [17:19] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	8,  // 0: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
+	10, // 1: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
+	7,  // 2: nbpass.control.v1.NodeReport.rule_results:type_name -> nbpass.control.v1.RuleApplyResult
+	19, // 3: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
+	12, // 4: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
+	11, // 5: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
+	13, // 6: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
+	15, // 7: nbpass.control.v1.ConfigSnapshot.exit_groups:type_name -> nbpass.control.v1.ExitGroup
+	18, // 8: nbpass.control.v1.ConfigSnapshot.tunnel_server:type_name -> nbpass.control.v1.TunnelServer
+	0,  // 9: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
+	1,  // 10: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
+	2,  // 11: nbpass.control.v1.TunnelEndpoint.transport:type_name -> nbpass.control.v1.TunnelTransport
+	3,  // 12: nbpass.control.v1.ExitGroup.strategy:type_name -> nbpass.control.v1.ExitStrategy
+	14, // 13: nbpass.control.v1.ExitGroup.exits:type_name -> nbpass.control.v1.TunnelEndpoint
+	13, // 14: nbpass.control.v1.TunnelGrant.rule:type_name -> nbpass.control.v1.ForwardRule
+	2,  // 15: nbpass.control.v1.TunnelServer.transport:type_name -> nbpass.control.v1.TunnelTransport
+	16, // 16: nbpass.control.v1.TunnelServer.peers:type_name -> nbpass.control.v1.TunnelPeer
+	17, // 17: nbpass.control.v1.TunnelServer.grants:type_name -> nbpass.control.v1.TunnelGrant
+	4,  // 18: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
+	6,  // 19: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
+	5,  // 20: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
+	9,  // 21: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
+	20, // [20:22] is the sub-list for method output_type
+	18, // [18:20] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_control_v1_control_proto_init() }
@@ -1462,7 +1558,7 @@ func file_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_v1_control_proto_rawDesc), len(file_control_v1_control_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   15,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
