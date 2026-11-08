@@ -64,6 +64,8 @@ func (h *Harness) StartNode(ticket string, options ...func(*node.Config, *node.D
 	n.deps.DNSWatchLookup = func(context.Context, string, dnswatch.Resolver) ([]string, error) {
 		return nil, errors.New("测试台未配置 DNS 解析器")
 	}
+	// 多节点共享测试进程：保持逻辑端口，物理监听分配独立环回地址。
+	n.deps.Forwarding.CheckListen = func(network, address string) (net.Listener, error) { return net.Listen(network, "127.0.0.1:0") }
 	for _, option := range options {
 		option(&n.config, &n.deps)
 	}

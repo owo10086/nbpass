@@ -14,6 +14,9 @@ import (
 // State 只缓存实际生效的规则；高水位独立于最后完整成功版本。
 // Persist 必须先原子保存撤销检查点，再保存实际应用结果。
 type State struct {
+	CheckConfigured bool                         `json:"check_configured,omitempty"`
+	CheckPort       uint32                       `json:"check_port,omitempty"`
+	CheckError      string                       `json:"check_error,omitempty"`
 	HighestRevision uint64                       `json:"highest_revision"`
 	HighestDigest   string                       `json:"highest_digest"`
 	AppliedRevision uint64                       `json:"applied_revision"`
@@ -39,6 +42,8 @@ func ErrorSummary(message string, limit int) string {
 func (e *Engine) State() State {
 	s := State{HighestRevision: e.highest, HighestDigest: e.highestDigest, AppliedRevision: e.revision, AppliedDigest: e.digest}
 	s.TunnelError = e.tunnelError
+	s.CheckPort, s.CheckError = e.checkPort, e.checkError
+	s.CheckConfigured = e.checkConfigured
 	if e.tunnelServer != nil {
 		s.TunnelServer = proto.Clone(e.tunnelServer.config).(*controlpb.TunnelServer)
 	}
@@ -75,7 +80,7 @@ func (e *Engine) Restore(s State) error {
 	if s.HighestRevision == 0 || len(s.HighestDigest) != 64 || s.AppliedRevision > s.HighestRevision || s.AppliedRevision > 0 && len(s.AppliedDigest) != 64 {
 		return errors.New("配置缓存版本无效")
 	}
-	snapshot := &controlpb.ConfigSnapshot{Revision: s.HighestRevision, Rules: s.Rules, ExitGroups: s.ExitGroups, TunnelServer: s.TunnelServer}
+	snapshot := &controlpb.ConfigSnapshot{Revision: s.HighestRevision, Rules: s.Rules, ExitGroups: s.ExitGroups, TunnelServer: s.TunnelServer, CheckPort: s.CheckPort}
 	snapshot.Digest = SnapshotDigest(snapshot)
 	if err := ValidateSnapshot(snapshot); err != nil {
 		return err
@@ -96,6 +101,26 @@ func (e *Engine) Restore(s State) error {
 	e.highest, e.highestDigest = s.HighestRevision, s.HighestDigest
 	e.revision, e.digest = s.AppliedRevision, s.AppliedDigest
 	e.results, e.tunnelError = s.Results, s.TunnelError
+	port := s.CheckPort
+	if !s.CheckConfigured {
+		port = e.effectiveCheckPort(port)
+		// 旧版自定义检测端口尚未进入缓存；默认端口可能已有合法业务监听。
+		for _, rule := range s.Rules {
+			if rule.ListenPort == port {
+				port = 0
+				break
+			}
+		}
+		if s.TunnelServer != nil && s.TunnelServer.ListenPort == port {
+			port = 0
+		}
+	}
+	if err := e.ListenCheckPort(port); err != nil {
+		e.revision, e.digest = 0, ""
+	}
+	if s.CheckPort == 0 && s.CheckConfigured && s.CheckError != "" {
+		e.checkError = s.CheckError
+	}
 	if err := e.applyTunnelServer(s.TunnelServer); err != nil {
 		e.tunnelError = ErrorSummary(fmt.Sprintf("出口隧道监听失败: %v", err), 1024)
 		e.revision, e.digest = 0, ""
@@ -114,6 +139,9 @@ func (e *Engine) Restore(s State) error {
 
 func (e *Engine) ApplyError() string {
 	var failures []error
+	if e.checkError != "" {
+		failures = append(failures, errors.New(e.checkError))
+	}
 	if e.tunnelError != "" {
 		failures = append(failures, errors.New(e.tunnelError))
 	}

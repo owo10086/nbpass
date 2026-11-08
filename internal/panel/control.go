@@ -186,6 +186,7 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 			if response != nil && ack != nil {
 				response.AcknowledgedEventIds = ack.AcknowledgedEventIds
 				response.AcknowledgedSelfCheckIds = ack.AcknowledgedSelfCheckIds
+				response.AcknowledgedCheckerIds = ack.AcknowledgedCheckerIds
 			}
 		}
 		p.controlMu.Unlock()
@@ -197,16 +198,21 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 		defer timer.Stop()
 		go func() {
 			// 命令独立发送：不占快照空间，也不能阻塞后续完整配置/撤权同步。
-			tasks := response.DnsWatchTasks
+			dnsTasks := response.DnsWatchTasks
 			response.DnsWatchTasks = nil
+			checkerTasks := response.CheckerTasks
+			response.CheckerTasks = nil
 			command := response.RotationCommand
 			response.RotationCommand = nil
 			err := stream.Send(response)
 			if err == nil && command != nil {
 				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: response.DesiredRevision, RotationCommand: command})
 			}
-			if err == nil && len(tasks) > 0 {
-				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, DnsWatchTasks: tasks})
+			if err == nil && len(dnsTasks) > 0 {
+				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, DnsWatchTasks: dnsTasks})
+			}
+			if err == nil && len(checkerTasks) > 0 {
+				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, CheckerTasks: checkerTasks})
 			}
 			sent <- err
 		}()
@@ -254,13 +260,13 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 				return err
 			}
 			report := message.report
-			heartbeat := !report.ProbeOnly && !report.EventsOnly && !report.RotationOnly && !report.SelfCheckOnly && !report.DnsWatchOnly && !report.TrafficOnly && report.AttemptedRevision == 0
+			heartbeat := !report.ProbeOnly && !report.EventsOnly && !report.RotationOnly && !report.SelfCheckOnly && !report.DnsWatchOnly && !report.TrafficOnly && !report.CheckerOnly && report.AttemptedRevision == 0
 			if heartbeat {
 				alive.Stop()
 				alive = p.deps.Clock.NewTimer(90 * time.Second)
 			}
 			// 配置确认没有回包；探针/事件回包不附配置，避免相互触发同步。
-			if heartbeat || report.ProbeOnly || report.EventsOnly || report.RotationOnly || report.SelfCheckOnly || report.DnsWatchOnly || report.TrafficOnly || len(response.AcknowledgedEventIds) > 0 {
+			if heartbeat || report.ProbeOnly || report.EventsOnly || report.RotationOnly || report.SelfCheckOnly || report.DnsWatchOnly || report.TrafficOnly || report.CheckerOnly || len(response.AcknowledgedEventIds) > 0 {
 				if err := send(response, heartbeat); err != nil {
 					return err
 				}
@@ -377,6 +383,13 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, status.Error(codes.FailedPrecondition, "旧进程实例报告无效")
 	}
 	session.instance = report.ProcessInstance
+	if report.CheckerOnly {
+		ack, err := p.acceptCheckerResults(ctx, id, report.CheckerResults)
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, "检测点结果无效")
+		}
+		return &controlpb.PanelMessage{ProtocolVersion: 1, AcknowledgedCheckerIds: ack}, nil
+	}
 	if report.SelfCheckOnly {
 		ack, err := p.acceptSelfChecks(ctx, id, report.SelfCheckResults)
 		if err != nil {

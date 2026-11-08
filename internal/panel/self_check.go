@@ -68,8 +68,14 @@ func (p *Panel) acceptSelfChecks(ctx context.Context, nodeID string, batch [][]b
 		if !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
+		eligible := 0
+		if round.Sequence <= last {
+			eligible = -1
+		} else if enabled && round.ConfigKey == currentKey {
+			eligible = 1
+		}
 		data, _ := json.Marshal(round)
-		_, err = tx.ExecContext(ctx, `INSERT INTO self_check_rounds(node_id,round_id,sequence,config_revision,started_at,finished_at,received_at,result,final_result,evidence_source,raw) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, nodeID, round.ID, round.Sequence, round.ConfigRevision, round.StartedAt.UnixNano(), round.FinishedAt.UnixNano(), now.UnixNano(), round.Result, round.Result, "self_check", data)
+		_, err = tx.ExecContext(ctx, `INSERT INTO self_check_rounds(node_id,round_id,sequence,config_revision,started_at,finished_at,received_at,result,final_result,evidence_source,raw,decision_eligible) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, nodeID, round.ID, round.Sequence, round.ConfigRevision, round.StartedAt.UnixNano(), round.FinishedAt.UnixNano(), now.UnixNano(), round.Result, round.Result, "self_check", data, eligible)
 		if err != nil {
 			return nil, err
 		}
@@ -87,23 +93,12 @@ func (p *Panel) acceptSelfChecks(ctx context.Context, nodeID string, batch [][]b
 			consecutive = 0
 			continue
 		}
-		switch round.Result {
-		case "unknown":
-			consecutive = 0
-		case "normal":
-			consecutive = 0
-			state = "normal"
-		case "abnormal":
-			consecutive++
-			if consecutive > 3 {
-				consecutive = 3
-			}
-			if consecutive >= 3 {
-				state = "blocked"
-			} else if state != "blocked" {
-				state = "suspected"
+		if round.Result == "unknown" {
+			if err = p.scheduleCheckers(ctx, tx, nodeID, round); err != nil {
+				return nil, err
 			}
 		}
+		state, consecutive = advanceSelfCheckState(state, consecutive, round.Result)
 		kind, message := "", ""
 		if old != "blocked" && state == "blocked" {
 			kind = "node_blocked"
@@ -131,6 +126,7 @@ func (p *Panel) acceptSelfChecks(ctx context.Context, nodeID string, batch [][]b
 	if err != nil {
 		return nil, err
 	}
+	p.wakeCheckerSessions()
 	// 事务中的持久待办保证提交后崩溃也能重试，外部通知绝不阻塞状态事务。
 	if err = p.flushSelfCheckNotifications(ctx); err != nil {
 		return nil, err
@@ -187,6 +183,7 @@ func (p *Panel) startSelfCheckNotifications(ctx context.Context) {
 	go func() {
 		defer p.background.Done()
 		for ctx.Err() == nil {
+			_ = p.expireCheckerRounds(ctx)
 			_ = p.flushSelfCheckNotifications(ctx)
 			timer := p.deps.Clock.NewTimer(time.Second)
 			select {

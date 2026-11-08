@@ -306,7 +306,9 @@ func (x *EnrollResponse) GetToken() string {
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 type NodeReport struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	CheckerOnly    bool                   `protobuf:"varint,140,opt,name=checker_only,json=checkerOnly,proto3" json:"checker_only,omitempty"`
+	CheckerResults [][]byte               `protobuf:"bytes,141,rep,name=checker_results,json=checkerResults,proto3" json:"checker_results,omitempty"`
 	// 自测独立补报，只消费自测结果，不推进活性、探针、事件或配置确认。
 	SelfCheckOnly    bool     `protobuf:"varint,90,opt,name=self_check_only,json=selfCheckOnly,proto3" json:"self_check_only,omitempty"`
 	SelfCheckResults [][]byte `protobuf:"bytes,91,rep,name=self_check_results,json=selfCheckResults,proto3" json:"self_check_results,omitempty"`
@@ -374,6 +376,20 @@ func (x *NodeReport) ProtoReflect() protoreflect.Message {
 // Deprecated: Use NodeReport.ProtoReflect.Descriptor instead.
 func (*NodeReport) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *NodeReport) GetCheckerOnly() bool {
+	if x != nil {
+		return x.CheckerOnly
+	}
+	return false
+}
+
+func (x *NodeReport) GetCheckerResults() [][]byte {
+	if x != nil {
+		return x.CheckerResults
+	}
+	return nil
 }
 
 func (x *NodeReport) GetSelfCheckOnly() bool {
@@ -674,6 +690,8 @@ func (x *ProbeSample) GetValues() map[string]float64 {
 // 配置为完整快照；缺失规则表示撤销，摘要覆盖版本与全部内容。
 type PanelMessage struct {
 	state                    protoimpl.MessageState `protogen:"open.v1"`
+	CheckerTasks             [][]byte               `protobuf:"bytes,140,rep,name=checker_tasks,json=checkerTasks,proto3" json:"checker_tasks,omitempty"`
+	AcknowledgedCheckerIds   []string               `protobuf:"bytes,141,rep,name=acknowledged_checker_ids,json=acknowledgedCheckerIds,proto3" json:"acknowledged_checker_ids,omitempty"`
 	AcknowledgedSelfCheckIds []string               `protobuf:"bytes,90,rep,name=acknowledged_self_check_ids,json=acknowledgedSelfCheckIds,proto3" json:"acknowledged_self_check_ids,omitempty"`
 	DnsWatchTasks            []*DNSWatchTask        `protobuf:"bytes,100,rep,name=dns_watch_tasks,json=dnsWatchTasks,proto3" json:"dns_watch_tasks,omitempty"`
 	RotationCommand          *RotationCommand       `protobuf:"bytes,80,opt,name=rotation_command,json=rotationCommand,proto3" json:"rotation_command,omitempty"`
@@ -715,6 +733,20 @@ func (x *PanelMessage) ProtoReflect() protoreflect.Message {
 // Deprecated: Use PanelMessage.ProtoReflect.Descriptor instead.
 func (*PanelMessage) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *PanelMessage) GetCheckerTasks() [][]byte {
+	if x != nil {
+		return x.CheckerTasks
+	}
+	return nil
+}
+
+func (x *PanelMessage) GetAcknowledgedCheckerIds() []string {
+	if x != nil {
+		return x.AcknowledgedCheckerIds
+	}
+	return nil
 }
 
 func (x *PanelMessage) GetAcknowledgedSelfCheckIds() []string {
@@ -1087,6 +1119,7 @@ func (x *EventGap) GetReason() string {
 
 type ConfigSnapshot struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
+	CheckPort       uint32                 `protobuf:"varint,140,opt,name=check_port,json=checkPort,proto3" json:"check_port,omitempty"`
 	SelfCheckConfig []byte                 `protobuf:"bytes,90,opt,name=self_check_config,json=selfCheckConfig,proto3" json:"self_check_config,omitempty"`
 	Revision        uint64                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
 	Digest          string                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
@@ -1125,6 +1158,13 @@ func (x *ConfigSnapshot) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ConfigSnapshot.ProtoReflect.Descriptor instead.
 func (*ConfigSnapshot) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{10}
+}
+
+func (x *ConfigSnapshot) GetCheckPort() uint32 {
+	if x != nil {
+		return x.CheckPort
+	}
+	return 0
 }
 
 func (x *ConfigSnapshot) GetSelfCheckConfig() []byte {
@@ -2022,9 +2062,11 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\xb0\t\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\xfe\t\n" +
 	"\n" +
-	"NodeReport\x12&\n" +
+	"NodeReport\x12\"\n" +
+	"\fchecker_only\x18\x8c\x01 \x01(\bR\vcheckerOnly\x12(\n" +
+	"\x0fchecker_results\x18\x8d\x01 \x03(\fR\x0echeckerResults\x12&\n" +
 	"\x0fself_check_only\x18Z \x01(\bR\rselfCheckOnly\x12,\n" +
 	"\x12self_check_results\x18[ \x03(\fR\x10selfCheckResults\x12$\n" +
 	"\x0edns_watch_only\x18d \x01(\bR\fdnsWatchOnly\x12M\n" +
@@ -2065,8 +2107,10 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x06values\x18\x02 \x03(\v2*.nbpass.control.v1.ProbeSample.ValuesEntryR\x06values\x1a9\n" +
 	"\vValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xa5\x04\n" +
-	"\fPanelMessage\x12=\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\x86\x05\n" +
+	"\fPanelMessage\x12$\n" +
+	"\rchecker_tasks\x18\x8c\x01 \x03(\fR\fcheckerTasks\x129\n" +
+	"\x18acknowledged_checker_ids\x18\x8d\x01 \x03(\tR\x16acknowledgedCheckerIds\x12=\n" +
 	"\x1backnowledged_self_check_ids\x18Z \x03(\tR\x18acknowledgedSelfCheckIds\x12G\n" +
 	"\x0fdns_watch_tasks\x18d \x03(\v2\x1f.nbpass.control.v1.DNSWatchTaskR\rdnsWatchTasks\x12M\n" +
 	"\x10rotation_command\x18P \x01(\v2\".nbpass.control.v1.RotationCommandR\x0frotationCommand\x12)\n" +
@@ -2103,8 +2147,10 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\x12\x12\n" +
 	"\x04from\x18\x02 \x01(\tR\x04from\x12\x0e\n" +
 	"\x02to\x18\x03 \x01(\tR\x02to\x12\x16\n" +
-	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xab\x02\n" +
-	"\x0eConfigSnapshot\x12*\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xcb\x02\n" +
+	"\x0eConfigSnapshot\x12\x1e\n" +
+	"\n" +
+	"check_port\x18\x8c\x01 \x01(\rR\tcheckPort\x12*\n" +
 	"\x11self_check_config\x18Z \x01(\fR\x0fselfCheckConfig\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\x04R\brevision\x12\x16\n" +
 	"\x06digest\x18\x02 \x01(\tR\x06digest\x124\n" +

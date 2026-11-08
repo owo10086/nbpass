@@ -95,6 +95,7 @@ var migrations = []string{
 	tunnelAuthorizationMigration,
 	trafficMigration,
 	rotationFreezeMigration,
+	checkerMigration,
 	entryManualSwitchMigration,
 }
 

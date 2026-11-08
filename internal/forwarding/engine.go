@@ -18,8 +18,10 @@ import (
 )
 
 type Dependencies struct {
-	Limits ResourceLimits
-	Clock  timing.Clock
+	DefaultCheckPort uint32
+	CheckListen      func(string, string) (net.Listener, error)
+	Limits           ResourceLimits
+	Clock            timing.Clock
 	// NodeID 用于兼任入口和出口时去重本机业务流；由认证后的节点核心赋值。
 	NodeID     string
 	LookupIPv4 func(context.Context, string) ([]netip.Addr, error)
@@ -32,6 +34,10 @@ type Dependencies struct {
 
 type Engine struct {
 	traffic             trafficMeter
+	checkConfigured     bool
+	checkListener       net.Listener
+	checkPort           uint32
+	checkError          string
 	resources           *resourceLimiter
 	businessConnections atomic.Uint64
 	tunnelConnections   atomic.Uint64
@@ -106,6 +112,12 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 	checkpoint.Rules, checkpoint.Results = nil, nil
 	checkpoint.ExitGroups = s.ExitGroups
 	checkpoint.TunnelError = ""
+	checkpoint.CheckError = ""
+	checkpoint.CheckConfigured = true
+	if checkpoint.CheckPort != e.effectiveCheckPort(s.CheckPort) {
+		checkpoint.CheckPort = 0
+		checkpoint.CheckError = "检测端口配置应用尚未完成"
+	}
 	if !proto.Equal(checkpoint.TunnelServer, s.TunnelServer) {
 		// 更新授权也属于撤销：最终写盘失败后不能恢复旧凭据或旧授权。
 		checkpoint.TunnelServer = nil
@@ -137,6 +149,9 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 		}
 	}
 	var failures []error
+	if err := e.ListenCheckPort(e.effectiveCheckPort(s.CheckPort)); err != nil {
+		failures = append(failures, err)
+	}
 	e.tunnelError = ""
 	if err := e.applyTunnelServer(s.TunnelServer); err != nil {
 		e.tunnelError = ErrorSummary(fmt.Sprintf("出口隧道监听失败: %v", err), 1024)
@@ -223,6 +238,10 @@ func (e *Engine) startRule(r *controlpb.ForwardRule, ep *controlpb.TunnelEndpoin
 }
 
 func (e *Engine) Close() {
+	if e.checkListener != nil {
+		e.checkListener.Close()
+		e.checkListener = nil
+	}
 	for _, client := range e.tunnelClients {
 		client.close()
 	}

@@ -169,7 +169,7 @@ func TestTunnelAuthorizationMigrationPreservesVersionThirteenData(t *testing.T) 
 		}
 	}
 	for _, query := range []string{
-		"INSERT INTO nodes(id,name,created_at,desired_revision,tunnel_listen_port,check_port) VALUES('n','已有节点',0,8,23443,23080)",
+		"INSERT INTO nodes(id,name,created_at,desired_revision,tunnel_listen_port,check_port) VALUES('n','已有节点',0,8,23443,18080)",
 		"INSERT INTO entry_groups(id,name) VALUES('g','已有入口组')",
 		"INSERT INTO forward_rules(id,name,entry_group_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled) VALUES('r','已有规则','g','direct',23444,'8.8.8.8','ipv4',443,0,1)",
 		"INSERT INTO node_snapshots(node_id,snapshot,digest) VALUES('n',X'010203','原摘要')",

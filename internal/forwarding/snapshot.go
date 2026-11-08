@@ -23,7 +23,16 @@ func ValidateSnapshot(s *controlpb.ConfigSnapshot) error {
 	}
 	ids := map[string]bool{}
 	ports := map[uint32]bool{}
+	if s.CheckPort > 65535 {
+		return errors.New("检测端口无效")
+	}
+	if s.CheckPort > 0 {
+		ports[s.CheckPort] = true
+	}
 	if s.TunnelServer != nil {
+		if ports[s.TunnelServer.ListenPort] {
+			return errors.New("检测端口与隧道监听冲突")
+		}
 		ports[s.TunnelServer.ListenPort] = true
 	}
 	for _, r := range s.Rules {
