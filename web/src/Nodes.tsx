@@ -5,7 +5,7 @@ import { api, APIError } from './api';
 type NodeRow = {
   id: string; name: string; status: string; status_label: string; connected: boolean;
   last_seen_at: string | null; maintenance_until: string | null;
-  desired_revision: number; applied_revision: number; config_status: string; software_version: string;
+  desired_revision: number; applied_revision: number; config_status: string; software_version: string; apply_error: string;
 };
 type Installation = { id: string; installation_command: string; ticket_expires_at: string };
 
@@ -73,7 +73,7 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
         { title: '节点', key: 'name', render: (_, row) => <Space orientation="vertical" size={0}><Typography.Text strong>{row.name}</Typography.Text><Typography.Text type="secondary">{row.software_version || '尚未接入'}</Typography.Text></Space> },
         { title: '状态', key: 'status', render: (_, row) => <Space orientation="vertical" size={2}><Tag color={{ online: 'green', offline: 'default', maintenance: 'blue', pending: 'orange' }[row.status]}>{row.status_label}</Tag>{row.status === 'online' && !row.connected && <Typography.Text type="secondary">控制连接已中断</Typography.Text>}{row.status === 'maintenance' && row.maintenance_until && <Typography.Text type="secondary">至 {new Date(row.maintenance_until).toLocaleTimeString()}</Typography.Text>}</Space> },
         { title: '最近活性', dataIndex: 'last_seen_at', render: (value: string | null) => value ? new Date(value).toLocaleString() : '—' },
-        { title: '配置版本', key: 'revision', render: (_, row) => <Space orientation="vertical" size={0}><span>期望 {row.desired_revision} / 已应用 {row.applied_revision}</span><Typography.Text type={row.config_status === '正常' ? 'success' : 'secondary'}>{row.config_status}</Typography.Text></Space> },
+        { title: '配置版本', key: 'revision', render: (_, row) => <Space orientation="vertical" size={0}><span>期望 {row.desired_revision} / 已应用 {row.applied_revision}</span><Typography.Text type={row.config_status === '正常' ? 'success' : 'secondary'}>{row.config_status}</Typography.Text>{row.apply_error && <Typography.Text type="danger">{row.apply_error}</Typography.Text>}</Space> },
         { title: '操作', key: 'actions', render: (_, row) => <Space wrap>
           <Button size="small" onClick={() => void maintenance(row)}>{row.status === 'maintenance' ? '结束维护' : '维护 10 分钟'}</Button>
           <Popconfirm title="重置节点 token？" description="当前控制连接将断开，需要重新执行安装命令。" onConfirm={() => credential(row, 'reset')}><Button size="small">重置 token</Button></Popconfirm>
