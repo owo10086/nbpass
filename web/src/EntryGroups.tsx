@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
+import { ManagedDNS } from './ManagedDNS';
 
 type EntryGroup = { id: string; name: string; members: string[]; publication_status: string };
 type Member = { id: string; name: string };
@@ -9,6 +10,7 @@ export function EntryGroups({ onSessionExpired }: { onSessionExpired: () => void
   const [rows, setRows] = useState<EntryGroup[]>([]);
   const [nodes, setNodes] = useState<Member[]>([]);
   const [editing, setEditing] = useState<EntryGroup | null>();
+  const [managingDNS, setManagingDNS] = useState<EntryGroup | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -48,8 +50,9 @@ export function EntryGroups({ onSessionExpired }: { onSessionExpired: () => void
       { title: '入口组', dataIndex: 'name' },
       { title: '成员（首选入口）', render: (_, row) => row.members.map(id => nodes.find(n => n.id === id)?.name ?? id).join('、') },
       { title: '受管记录', render: (_, row) => <Tag>{row.publication_status}</Tag> },
-      { title: '操作', render: (_, row) => <Space><Button size="small" onClick={() => edit(row)}>编辑</Button><Popconfirm title="删除入口组？" description="须先删除该入口组的转发规则。" onConfirm={() => remove(row.id)}><Button danger size="small">删除</Button></Popconfirm></Space> },
+      { title: '操作', render: (_, row) => <Space><Button size="small" onClick={() => edit(row)}>编辑</Button><Button size="small" onClick={() => setManagingDNS(row)}>受管记录与发布</Button><Popconfirm title="删除入口组？" description="须先删除该入口组的转发规则。" onConfirm={() => remove(row.id)}><Button danger size="small">删除</Button></Popconfirm></Space> },
     ]} /></Card>
+    {managingDNS && <ManagedDNS key={managingDNS.id} group={managingDNS} nodes={nodes} onClose={() => { setManagingDNS(null); void load(); }} onSessionExpired={onSessionExpired} />}
     <Modal title={editing ? '编辑入口组' : '创建入口组'} open={editing !== undefined} onCancel={() => { setEditing(undefined); form.resetFields(); }} footer={null} forceRender>
       <Form form={form} layout="vertical" onFinish={save} clearOnDestroy>
         {error && <Alert title={error} type="error" showIcon className="message" />}
