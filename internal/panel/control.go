@@ -185,7 +185,16 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 			return err
 		}
 		sent := make(chan error, 1)
-		go func() { sent <- stream.Send(response) }()
+		go func() {
+			// 命令独立发送：不占快照空间，也不能阻塞后续完整配置/撤权同步。
+			command := response.RotationCommand
+			response.RotationCommand = nil
+			err := stream.Send(response)
+			if err == nil && command != nil {
+				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: response.DesiredRevision, RotationCommand: command})
+			}
+			sent <- err
+		}()
 		timer := p.deps.Clock.NewTimer(15 * time.Second)
 		defer timer.Stop()
 		select {
@@ -232,13 +241,13 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 				return err
 			}
 			report := message.report
-			heartbeat := !report.ProbeOnly && !report.EventsOnly && report.AttemptedRevision == 0
+			heartbeat := !report.ProbeOnly && !report.EventsOnly && !report.RotationOnly && report.AttemptedRevision == 0
 			if heartbeat {
 				alive.Stop()
 				alive = p.deps.Clock.NewTimer(90 * time.Second)
 			}
 			// 配置确认没有回包；探针/事件回包不附配置，避免相互触发同步。
-			if heartbeat || report.ProbeOnly || report.EventsOnly || len(response.AcknowledgedEventIds) > 0 {
+			if heartbeat || report.ProbeOnly || report.EventsOnly || report.RotationOnly || len(response.AcknowledgedEventIds) > 0 {
 				if err := send(response, heartbeat); err != nil {
 					return err
 				}
@@ -345,6 +354,12 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, status.Error(codes.FailedPrecondition, "旧进程实例报告无效")
 	}
 	session.instance = report.ProcessInstance
+	if report.RotationOnly {
+		if err := p.acceptRotation(ctx, id, report.Rotation); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "换 IP 进度无法保存")
+		}
+		return &controlpb.PanelMessage{ProtocolVersion: 1}, nil
+	}
 	if !report.EventsOnly && report.AttemptedRevision == 0 {
 		if err := p.storeProbe(ctx, id, session.instance, report.Probe); err != nil {
 			return nil, status.Error(codes.Unavailable, "探针存储暂不可用")

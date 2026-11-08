@@ -13,6 +13,8 @@ message EnrollResponse { string node_id = 1; string token = 2; }
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 message NodeReport {
+  bool rotation_only = 80;
+  RotationProgress rotation = 81;
   string node_id = 1;
   string process_instance = 2;
   uint32 protocol_version = 3;
@@ -39,6 +41,7 @@ message ProbeSample {
 
 // 配置为完整快照；缺失规则表示撤销，摘要覆盖版本与全部内容。
 message PanelMessage {
+  RotationCommand rotation_command = 80;
   uint32 protocol_version = 1;
   uint64 desired_revision = 2;
   ConfigSnapshot snapshot = 3;
@@ -80,3 +83,24 @@ message ForwardRule {
 
 enum AddressFamily { ADDRESS_FAMILY_UNSPECIFIED = 0; ADDRESS_FAMILY_IPV4 = 1; }
 enum RuleKind { RULE_KIND_UNSPECIFIED = 0; RULE_KIND_DIRECT = 1; }
+
+// 一次性命令独立于配置；秘密仅经已认证的执行节点控制流传输。
+message RotationCommand {
+ string action_id = 80;
+ string node_id = 81;
+ string old_ip = 82;
+ int64 expires_at = 83;
+ bytes config_json = 84;
+ string node_name = 85;
+ int64 issued_at = 86;
+}
+message RotationProgress {
+ string action_id = 80;
+ uint64 sequence = 81;
+ string state = 82;
+ string old_ip = 83;
+ string new_ip = 84;
+ uint32 attempts = 85;
+ string reason = 86;
+ bool unsafe_network = 87;
+}
