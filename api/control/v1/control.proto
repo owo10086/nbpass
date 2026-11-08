@@ -45,6 +45,9 @@ message NodeReport {
   string attempted_digest = 21;
   // 停用/删除在磁盘检查点及运行时均已撤销；不能只根据快照缺失推断。
   bool revocations_applied = 22;
+  // 流量只消费自身载荷与确认，不推进其他控制状态。
+  bool traffic_only = 60;
+  repeated RuleTraffic traffic = 61;
 }
 
 message RuleApplyResult {
@@ -68,6 +71,24 @@ message PanelMessage {
   uint64 desired_revision = 2;
   ConfigSnapshot snapshot = 3;
   repeated string acknowledged_event_ids = 15;
+  repeated TrafficAck acknowledged_traffic = 60;
+  bool traffic_only = 61;
+}
+
+// 每个进程、规则、分钟桶内的累计业务字节；桶起点决定 24 小时补报期限。
+message RuleTraffic {
+  string process_instance = 60;
+  uint64 sequence = 61;
+  string rule_id = 62;
+  int64 bucket_unix = 63;
+  uint64 upload_bytes = 64;
+  uint64 download_bytes = 65;
+  uint64 active_connections = 66;
+  string sampled_at = 67;
+}
+message TrafficAck {
+  string process_instance = 60;
+  uint64 sequence = 61;
 }
 
 message Event {
