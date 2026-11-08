@@ -116,3 +116,23 @@ func (p *Panel) decodeSnapshot(id string, data []byte, encrypted bool, snapshot 
 	}
 	return proto.Unmarshal(data, snapshot)
 }
+
+func tunnelEntries(ctx context.Context, tx *sql.Tx, exit string) ([]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT em.node_id FROM forward_rules r
+ JOIN entry_group_members em ON em.group_id=r.entry_group_id
+ JOIN exit_group_members xm ON xm.group_id=r.exit_group_id
+ WHERE r.enabled=1 AND r.kind='tunnel' AND xm.node_id=?`, exit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var entries []string
+	for rows.Next() {
+		var entry string
+		if err := rows.Scan(&entry); err != nil {
+			return nil, err
+		}
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
+}

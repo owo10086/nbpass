@@ -11,19 +11,16 @@ import (
 
 // 缓存高水位不能随着整份已应用版本回退，否则旧完整快照可复活撤销规则。
 func TestRestoredHighWaterRejectsOldSnapshotAfterPartialApply(t *testing.T) {
-	reserve, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := uint32(reserve.Addr().(*net.TCPAddr).Port)
-	reserve.Close()
+	deps := Dependencies{}
+	port := reserveTestPort(t, &deps)
 	occupied, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer occupied.Close()
 	var disk []byte
-	e := NewEngine(Dependencies{Persist: func(s State) error { var err error; disk, err = json.Marshal(s); return err }})
+	deps.Persist = func(s State) error { var err error; disk, err = json.Marshal(s); return err }
+	e := NewEngine(deps)
 	defer e.Close()
 	old := &controlpb.ConfigSnapshot{Revision: 1, Rules: []*controlpb.ForwardRule{{Id: "old", EntryGroupId: "g", Kind: controlpb.RuleKind_RULE_KIND_DIRECT, ListenPort: port, TargetAddress: "8.8.8.8", TargetFamily: controlpb.AddressFamily_ADDRESS_FAMILY_IPV4, TargetPort: 443}}}
 	old.Digest = SnapshotDigest(old)

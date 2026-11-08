@@ -468,7 +468,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			}
 			report.AttemptedRevision = snapshot.Revision
 			report.AttemptedDigest = snapshot.Digest
-			err := engine.Apply(snapshot)
+			err := engine.ApplyContext(onlineCtx, snapshot)
 			report.AppliedRevision, report.AppliedDigest = engine.Applied()
 			state := engine.State()
 			report.RuleResults = state.Results

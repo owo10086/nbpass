@@ -419,6 +419,10 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 	if err == nil {
 		err = p.storeRuleResults(ctx, tx, id, report, uint64(desired), expectedDigest, alreadyConfirmed)
 	}
+	var entries []string
+	if err == nil && desired > 0 && applied == desired && !alreadyConfirmed {
+		entries, err = tunnelEntries(ctx, tx, id)
+	}
 	if err == nil {
 		err = tx.Commit()
 	}
@@ -427,6 +431,15 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 			return nil, err
 		}
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	// 出口确认是入口重试未就绪规则的条件；无需等待下一次心跳。
+	for _, entry := range entries {
+		if session := p.controls[entry]; session != nil {
+			select {
+			case session.changed <- struct{}{}:
+			default:
+			}
+		}
 	}
 
 	return response, nil

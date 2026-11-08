@@ -125,13 +125,9 @@ func TestForwardingPreservesTCPHalfClose(t *testing.T) {
 		b, _ := io.ReadAll(c)
 		c.Write(append([]byte("reply:"), b...))
 	}()
-	reserve, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := reserve.Addr().(*net.TCPAddr).Port
-	reserve.Close()
-	e := NewEngine(Dependencies{})
+	deps := Dependencies{}
+	port := int(reserveTestPort(t, &deps))
+	e := NewEngine(deps)
 	defer e.Close()
 	s := &controlpb.ConfigSnapshot{Revision: 1, Rules: []*controlpb.ForwardRule{{Id: "rule", EntryGroupId: "g", Kind: controlpb.RuleKind_RULE_KIND_DIRECT, ListenPort: uint32(port), TargetAddress: "127.0.0.1", TargetFamily: controlpb.AddressFamily_ADDRESS_FAMILY_IPV4, TargetPort: uint32(target.Addr().(*net.TCPAddr).Port), AllowPrivate: true}}}
 	s.Digest = SnapshotDigest(s)

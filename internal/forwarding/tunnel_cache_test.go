@@ -1,12 +1,14 @@
 package forwarding
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,18 +17,29 @@ import (
 	"nbpass/internal/controlpb"
 )
 
-func cacheTestPort(t *testing.T) uint32 {
+func reserveTestPort(t *testing.T, deps *Dependencies) uint32 {
 	t.Helper()
-	l, err := net.Listen("tcp4", "127.0.0.1:0")
+	l, err := net.Listen("tcp4", "0.0.0.0:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	port := uint32(l.Addr().(*net.TCPAddr).Port)
-	l.Close()
+	t.Cleanup(func() { l.Close() })
+	previous := deps.Listen
+	var handed atomic.Bool
+	deps.Listen = func(network, address string) (net.Listener, error) {
+		if network == "tcp4" && address == net.JoinHostPort("0.0.0.0", strconv.Itoa(int(port))) && handed.CompareAndSwap(false, true) {
+			return l, nil
+		}
+		if previous != nil {
+			return previous(network, address)
+		}
+		return net.Listen(network, address)
+	}
 	return port
 }
 
-func cachedTunnelFixture(t *testing.T) *controlpb.ConfigSnapshot {
+func cachedTunnelFixture(t *testing.T, deps *Dependencies) *controlpb.ConfigSnapshot {
 	t.Helper()
 	target, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -43,8 +56,8 @@ func cachedTunnelFixture(t *testing.T) *controlpb.ConfigSnapshot {
 		}
 	}()
 	cert, key, _, _ := tunnelTestIdentity(t, "exit.test", false)
-	rule := &controlpb.ForwardRule{Id: "tunnel", EntryGroupId: "entry", Kind: controlpb.RuleKind_RULE_KIND_TUNNEL, ExitGroupId: "exit", ListenPort: cacheTestPort(t), TargetAddress: "127.0.0.1", TargetFamily: controlpb.AddressFamily_ADDRESS_FAMILY_IPV4, TargetPort: uint32(target.Addr().(*net.TCPAddr).Port), AllowPrivate: true}
-	ep := &controlpb.TunnelEndpoint{NodeId: "node", EntryId: "node", Address: "127.0.0.1", Port: cacheTestPort(t), Transport: controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS, ServerName: "exit.test", CertificatePem: cert, Credential: strings.Repeat("a", 43)}
+	rule := &controlpb.ForwardRule{Id: "tunnel", EntryGroupId: "entry", Kind: controlpb.RuleKind_RULE_KIND_TUNNEL, ExitGroupId: "exit", ListenPort: reserveTestPort(t, deps), TargetAddress: "127.0.0.1", TargetFamily: controlpb.AddressFamily_ADDRESS_FAMILY_IPV4, TargetPort: uint32(target.Addr().(*net.TCPAddr).Port), AllowPrivate: true}
+	ep := &controlpb.TunnelEndpoint{NodeId: "node", EntryId: "node", Address: "127.0.0.1", Port: reserveTestPort(t, deps), Transport: controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS, ServerName: "exit.test", CertificatePem: cert, Credential: strings.Repeat("a", 43)}
 	s := &controlpb.ConfigSnapshot{Revision: 1, Rules: []*controlpb.ForwardRule{rule}, ExitGroups: []*controlpb.ExitGroup{{Id: "exit", Strategy: controlpb.ExitStrategy_EXIT_STRATEGY_PRIMARY_BACKUP, Exits: []*controlpb.TunnelEndpoint{ep}}}, TunnelServer: &controlpb.TunnelServer{ListenPort: ep.Port, Transport: ep.Transport, ServerName: ep.ServerName, CertificatePem: cert, PrivateKeyPem: key, Peers: []*controlpb.TunnelPeer{{EntryId: "node", Credential: ep.Credential}}, Grants: []*controlpb.TunnelGrant{{EntryId: "node", Rule: rule}}}}
 	s.Digest = SnapshotDigest(s)
 	return s
@@ -52,9 +65,10 @@ func cachedTunnelFixture(t *testing.T) *controlpb.ConfigSnapshot {
 
 // 缺少出口组、节点对凭据、出口私钥或授权中的任何一项都会使真实 TCP 交换失败。
 func TestCachedTunnelRestoresDataPlane(t *testing.T) {
-	s := cachedTunnelFixture(t)
+	deps := Dependencies{}
+	s := cachedTunnelFixture(t, &deps)
 	var disk []byte
-	e := NewEngine(Dependencies{NodeID: "node", Persist: func(state State) error { var err error; disk, err = json.Marshal(state); return err }})
+	e := NewEngine(Dependencies{Listen: deps.Listen, NodeID: "node", Persist: func(state State) error { var err error; disk, err = json.Marshal(state); return err }})
 	defer e.Close()
 	if err := e.Apply(s); err != nil {
 		t.Fatal(err)
@@ -86,11 +100,12 @@ func TestCachedTunnelRestoresDataPlane(t *testing.T) {
 
 // 出口监听恢复失败时不能复用旧进程的完整成功确认，即使没有入口规则。
 func TestCachedTunnelBindFailureClearsAppliedRevision(t *testing.T) {
-	s := cachedTunnelFixture(t)
+	deps := Dependencies{}
+	s := cachedTunnelFixture(t, &deps)
 	s.Rules, s.ExitGroups = nil, nil
 	s.Digest = SnapshotDigest(s)
 	var disk []byte
-	e := NewEngine(Dependencies{Persist: func(state State) error { var err error; disk, err = json.Marshal(state); return err }})
+	e := NewEngine(Dependencies{Listen: deps.Listen, Persist: func(state State) error { var err error; disk, err = json.Marshal(state); return err }})
 	defer e.Close()
 	if err := e.Apply(s); err != nil {
 		t.Fatal(err)
@@ -136,8 +151,17 @@ func TestCachedDuplicatePortsRejectedBeforeListening(t *testing.T) {
 func TestTunnelCheckpointDoesNotRestoreSupersededConfiguration(t *testing.T) {
 	for _, change := range []string{"endpoint", "grant"} {
 		t.Run(change, func(t *testing.T) {
-			s := cachedTunnelFixture(t)
+			deps := Dependencies{}
+			s := cachedTunnelFixture(t, &deps)
 			if change == "endpoint" {
+				// 入口现在必须得到真实出口授权；缓存检查点场景仍只重建入口。
+				exit := NewEngine(deps)
+				defer exit.Close()
+				exitConfig := &controlpb.ConfigSnapshot{Revision: 1, TunnelServer: s.TunnelServer}
+				exitConfig.Digest = SnapshotDigest(exitConfig)
+				if err := exit.Apply(exitConfig); err != nil {
+					t.Fatal(err)
+				}
 				s.TunnelServer = nil
 			} else {
 				s.Rules, s.ExitGroups = nil, nil
@@ -145,7 +169,7 @@ func TestTunnelCheckpointDoesNotRestoreSupersededConfiguration(t *testing.T) {
 			s.Digest = SnapshotDigest(s)
 			var disk []byte
 			writes, failFinal := 0, false
-			e := NewEngine(Dependencies{Persist: func(state State) error {
+			e := NewEngine(Dependencies{Listen: deps.Listen, Persist: func(state State) error {
 				writes++
 				if failFinal && writes == 2 {
 					return errors.New("最终写盘失败")
@@ -196,7 +220,8 @@ func TestTunnelCheckpointDoesNotRestoreSupersededConfiguration(t *testing.T) {
 }
 
 func TestCachedTunnelPortConflictRejectedBeforeListening(t *testing.T) {
-	s := cachedTunnelFixture(t)
+	deps := Dependencies{}
+	s := cachedTunnelFixture(t, &deps)
 	s.Rules[0].ListenPort = s.TunnelServer.ListenPort
 	calls := 0
 	e := NewEngine(Dependencies{Listen: func(string, string) (net.Listener, error) { calls++; return nil, errors.New("不应监听") }})
@@ -204,5 +229,152 @@ func TestCachedTunnelPortConflictRejectedBeforeListening(t *testing.T) {
 	err := e.Restore(State{HighestRevision: 1, HighestDigest: strings.Repeat("a", 64), Rules: s.Rules, Results: []*controlpb.RuleApplyResult{{RuleId: "tunnel", AppliedRevision: 1}}, ExitGroups: s.ExitGroups, TunnelServer: s.TunnelServer})
 	if err == nil || calls != 0 {
 		t.Fatalf("缓存绕过实际隧道端口约束: err=%v listen=%d", err, calls)
+	}
+}
+
+func TestTunnelApplyWaitsForMatchingExitGrant(t *testing.T) {
+	for _, mode := range []string{"missing_grant", "old_target"} {
+		t.Run(mode, func(t *testing.T) {
+			deps := Dependencies{}
+			s := cachedTunnelFixture(t, &deps)
+			exitConfig := proto.Clone(s).(*controlpb.ConfigSnapshot)
+			exitConfig.Rules, exitConfig.ExitGroups = nil, nil
+			if mode == "missing_grant" {
+				exitConfig.TunnelServer.Grants = nil
+			} else {
+				exitConfig.TunnelServer.Grants[0].Rule.TargetAddress = "127.0.0.2"
+			}
+			exitConfig.Digest = SnapshotDigest(exitConfig)
+			var targetDials atomic.Int32
+			exit := NewEngine(Dependencies{Listen: deps.Listen, DialTarget: func(context.Context, string) (net.Conn, error) {
+				targetDials.Add(1)
+				return nil, errors.New("授权检查不应拨号目标")
+			}})
+			defer exit.Close()
+			if err := exit.Apply(exitConfig); err != nil {
+				t.Fatal(err)
+			}
+			var listens atomic.Int32
+			entry := NewEngine(Dependencies{Listen: func(network, address string) (net.Listener, error) {
+				listens.Add(1)
+				return deps.Listen(network, address)
+			}})
+			defer entry.Close()
+			entryConfig := proto.Clone(s).(*controlpb.ConfigSnapshot)
+			entryConfig.TunnelServer = nil
+			entryConfig.Digest = SnapshotDigest(entryConfig)
+			if err := entry.Apply(entryConfig); err == nil || listens.Load() != 0 {
+				t.Fatalf("出口没有匹配授权就启动了监听: err=%v listens=%d", err, listens.Load())
+			}
+			if revision, _ := entry.Applied(); revision != 0 || entry.ApplyError() == "" {
+				t.Fatalf("出口未就绪却确认配置: revision=%d error=%q", revision, entry.ApplyError())
+			}
+			exitConfig.Revision++
+			exitConfig.TunnelServer = s.TunnelServer
+			exitConfig.Digest = SnapshotDigest(exitConfig)
+			if err := exit.Apply(exitConfig); err != nil {
+				t.Fatal(err)
+			}
+			if err := entry.Apply(entryConfig); err != nil || listens.Load() != 1 {
+				t.Fatalf("出口授权后未能应用同版快照: err=%v listens=%d", err, listens.Load())
+			}
+			if targetDials.Load() != 0 {
+				t.Fatal("授权就绪检查创建了目标连接")
+			}
+		})
+	}
+}
+
+func TestTunnelApplySharesReadinessBudgetAcrossRules(t *testing.T) {
+	deps := Dependencies{}
+	s := cachedTunnelFixture(t, &deps)
+	s.TunnelServer = nil
+	other := proto.Clone(s.Rules[0]).(*controlpb.ForwardRule)
+	other.Id, other.ListenPort = "other", reserveTestPort(t, &deps)
+	s.Rules = append(s.Rules, other)
+	s.Digest = SnapshotDigest(s)
+	var attempts atomic.Int32
+	e := NewEngine(Dependencies{Listen: deps.Listen, DialTunnel: func(ctx context.Context, _ string) (net.Conn, error) {
+		attempts.Add(1)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}})
+	defer e.Close()
+	if err := e.Apply(s); err == nil {
+		t.Fatal("黑洞出口错误确认配置")
+	}
+	if attempts.Load() != 1 {
+		t.Fatalf("同一配置的规则分别消耗了完整探测预算: %d", attempts.Load())
+	}
+}
+
+func TestTunnelApplyCancellationStopsReadiness(t *testing.T) {
+	deps := Dependencies{}
+	s := cachedTunnelFixture(t, &deps)
+	s.TunnelServer = nil
+	s.Digest = SnapshotDigest(s)
+	entered := make(chan struct{})
+	e := NewEngine(Dependencies{Listen: deps.Listen, DialTunnel: func(ctx context.Context, _ string) (net.Conn, error) {
+		close(entered)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}})
+	defer e.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- e.ApplyContext(ctx, s) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("未开始探测出口")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("取消后错误确认配置")
+		}
+	case <-time.After(time.Second):
+		<-done
+		t.Fatal("取消后仍等待授权探测超时")
+	}
+}
+
+func TestTunnelApplyUnavailableExitDoesNotStarveHealthyExit(t *testing.T) {
+	deps := Dependencies{}
+	s := cachedTunnelFixture(t, &deps)
+	exit := NewEngine(deps)
+	defer exit.Close()
+	exitConfig := &controlpb.ConfigSnapshot{Revision: 1, TunnelServer: s.TunnelServer}
+	exitConfig.Digest = SnapshotDigest(exitConfig)
+	if err := exit.Apply(exitConfig); err != nil {
+		t.Fatal(err)
+	}
+	s.TunnelServer = nil
+	blockedRule := proto.Clone(s.Rules[0]).(*controlpb.ForwardRule)
+	blockedRule.Id, blockedRule.ExitGroupId = "blocked", "blocked-exit"
+	blockedRule.ListenPort = reserveTestPort(t, &deps)
+	blockedEndpoint := proto.Clone(s.ExitGroups[0].Exits[0]).(*controlpb.TunnelEndpoint)
+	blockedEndpoint.NodeId, blockedEndpoint.Address = "blocked-node", "127.0.0.2"
+	s.ExitGroups = append(s.ExitGroups, &controlpb.ExitGroup{Id: blockedRule.ExitGroupId, Strategy: controlpb.ExitStrategy_EXIT_STRATEGY_PRIMARY_BACKUP, Exits: []*controlpb.TunnelEndpoint{blockedEndpoint}})
+	s.Rules = append([]*controlpb.ForwardRule{blockedRule}, s.Rules...)
+	s.Digest = SnapshotDigest(s)
+	deps.DialTunnel = func(ctx context.Context, address string) (net.Conn, error) {
+		host, _, _ := net.SplitHostPort(address)
+		if host == "127.0.0.2" {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
+	}
+	entry := NewEngine(deps)
+	defer entry.Close()
+	if err := entry.Apply(s); err == nil {
+		t.Fatal("黑洞出口未报告部分失败")
+	}
+	results := entry.State().Results
+	if len(results) != 2 || results[0].ApplyError == "" || results[1].ApplyError != "" || results[1].AppliedRevision != s.Revision {
+		t.Fatalf("不可达出口阻止了正常出口的规则应用: %v", results)
 	}
 }

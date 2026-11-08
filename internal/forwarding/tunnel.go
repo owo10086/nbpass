@@ -33,9 +33,12 @@ type tunnelAuth struct {
 }
 type tunnelRequest struct {
 	RuleID string `json:"rule_id"`
+	// Check 只核验出口当前授权，不拨目标、不创建业务流。
+	Check *controlpb.ForwardRule `json:"check,omitempty"`
 }
 type tunnelResult struct {
-	OK bool `json:"ok"`
+	OK    bool `json:"ok"`
+	Ready bool `json:"ready,omitempty"`
 }
 
 // 有界长度帧精确消费控制消息，不会吞掉紧随其后的业务字节。
@@ -143,6 +146,8 @@ func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
 		}
 	}()
 	conn.SetDeadline(time.Now().Add(3 * time.Second))
+	stopAuth := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Now()) })
+	defer stopAuth()
 	// websocket.Dial 已完成完整 TLS 身份验证；凭据此时才进入加密通道。
 	if err := writeTunnelMessage(conn, tunnelAuth{Version: 1, EntryID: ep.EntryId, Credential: ep.Credential}); err != nil {
 		return nil, err
@@ -150,6 +155,9 @@ func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
 	var result tunnelResult
 	if err := readTunnelMessage(conn, &result); err != nil || !result.OK {
 		return nil, errors.New("入口—出口凭据被拒绝")
+	}
+	if !stopAuth() || ctx.Err() != nil {
+		return nil, ctx.Err()
 	}
 	conn.SetDeadline(time.Time{})
 	session, err := yamux.Client(conn, yamuxConfig())
@@ -165,6 +173,21 @@ func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
 func (c *tunnelClient) dial(ctx context.Context, ruleID string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	return c.open(ctx, tunnelRequest{RuleID: ruleID})
+}
+
+func (c *tunnelClient) ready(ctx context.Context, rule *controlpb.ForwardRule) error {
+	stream, err := c.open(ctx, tunnelRequest{RuleID: rule.Id, Check: rule})
+	if stream != nil {
+		stream.Close()
+	}
+	return err
+}
+
+func (c *tunnelClient) open(ctx context.Context, request tunnelRequest) (net.Conn, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	handshake, stop := context.WithTimeout(ctx, 3*time.Second)
 	session, err := c.getSession(handshake)
 	stop()
@@ -185,12 +208,15 @@ func (c *tunnelClient) dial(ctx context.Context, ruleID string) (net.Conn, error
 	stream.SetDeadline(deadline)
 	stopCancel := context.AfterFunc(ctx, func() { stream.SetDeadline(time.Now()) })
 	defer stopCancel()
-	if err := writeTunnelMessage(stream, tunnelRequest{RuleID: ruleID}); err != nil {
+	if err := writeTunnelMessage(stream, request); err != nil {
 		return nil, err
 	}
 	var result tunnelResult
 	if err := readTunnelMessage(stream, &result); err != nil || !result.OK {
 		return nil, errors.New("出口拒绝规则或无法连接目标")
+	}
+	if request.Check != nil && !result.Ready {
+		return nil, errors.New("出口未确认规则授权")
 	}
 	if !stopCancel() || ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -349,8 +375,12 @@ func (s *tunnelServer) serveStream(ctx context.Context, stream net.Conn, auth tu
 		return
 	}
 	rule := s.authorized(auth.EntryID, auth.Credential, request.RuleID)
-	if rule == nil {
+	if rule == nil || request.Check != nil && !proto.Equal(rule, request.Check) {
 		writeTunnelMessage(stream, tunnelResult{})
+		return
+	}
+	if request.Check != nil {
+		writeTunnelMessage(stream, tunnelResult{OK: true, Ready: true})
 		return
 	}
 	// 本机入口已计量的流不重复计数；其他入口交来的业务在出口计一次。
