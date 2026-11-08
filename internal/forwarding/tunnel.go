@@ -32,7 +32,12 @@ type tunnelAuth struct {
 	Credential string `json:"credential"`
 }
 type tunnelRequest struct {
-	RuleID string `json:"rule_id"`
+	RuleID        string                  `json:"rule_id"`
+	EntryID       string                  `json:"entry_id,omitempty"`
+	Generation    uint64                  `json:"generation,omitempty"`
+	TargetAddress string                  `json:"target_address,omitempty"`
+	TargetPort    uint32                  `json:"target_port,omitempty"`
+	TargetFamily  controlpb.AddressFamily `json:"target_family,omitempty"`
 }
 type tunnelResult struct {
 	OK bool `json:"ok"`
@@ -162,7 +167,7 @@ func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
 	go func() { <-session.CloseChan(); c.engine.tunnelConnections.Add(^uint64(0)) }()
 	return session, nil
 }
-func (c *tunnelClient) dial(ctx context.Context, ruleID string) (net.Conn, error) {
+func (c *tunnelClient) dial(ctx context.Context, rule *controlpb.ForwardRule) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	handshake, stop := context.WithTimeout(ctx, 3*time.Second)
@@ -185,7 +190,7 @@ func (c *tunnelClient) dial(ctx context.Context, ruleID string) (net.Conn, error
 	stream.SetDeadline(deadline)
 	stopCancel := context.AfterFunc(ctx, func() { stream.SetDeadline(time.Now()) })
 	defer stopCancel()
-	if err := writeTunnelMessage(stream, tunnelRequest{RuleID: ruleID}); err != nil {
+	if err := writeTunnelMessage(stream, streamAuthorization(c.endpoint.EntryId, rule)); err != nil {
 		return nil, err
 	}
 	var result tunnelResult
@@ -340,6 +345,8 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (s *tunnelServer) serveStream(ctx context.Context, stream net.Conn, auth tunnelAuth) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	defer stream.Close()
 	stream.SetDeadline(time.Now().Add(10 * time.Second))
 	stop := context.AfterFunc(ctx, func() { stream.Close() })
@@ -348,11 +355,14 @@ func (s *tunnelServer) serveStream(ctx context.Context, stream net.Conn, auth tu
 	if err := readTunnelMessage(stream, &request); err != nil || request.RuleID == "" {
 		return
 	}
-	rule := s.authorized(auth.EntryID, auth.Credential, request.RuleID)
+	rule := s.authorizeStream(auth, request)
 	if rule == nil {
 		writeTunnelMessage(stream, tunnelResult{})
 		return
 	}
+	// 在目标拨号前开始复查，撤销同样取消尚未完成的 DNS/拨号。
+	stopAuthorization := s.watchStreamAuthorization(ctx, cancel, stream, auth, request)
+	defer stopAuthorization()
 	// 本机入口已计量的流不重复计数；其他入口交来的业务在出口计一次。
 	if auth.EntryID != s.engine.deps.NodeID {
 		s.engine.businessConnections.Add(1)
@@ -365,6 +375,10 @@ func (s *tunnelServer) serveStream(ctx context.Context, stream net.Conn, auth tu
 		return
 	}
 	defer target.Close()
+	if ctx.Err() != nil || s.authorizeStream(auth, request) == nil {
+		writeTunnelMessage(stream, tunnelResult{})
+		return
+	}
 	if err := writeTunnelMessage(stream, tunnelResult{OK: true}); err != nil {
 		return
 	}

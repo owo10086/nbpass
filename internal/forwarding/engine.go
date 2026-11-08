@@ -14,6 +14,8 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"nbpass/internal/controlpb"
+	"nbpass/internal/platform"
+	"nbpass/internal/timing"
 )
 
 type Dependencies struct {
@@ -25,6 +27,7 @@ type Dependencies struct {
 	DialTunnel func(context.Context, string) (net.Conn, error)
 	Now        func() time.Time
 	Persist    func(State) error
+	Clock      timing.Clock
 }
 
 type Engine struct {
@@ -43,6 +46,9 @@ type Engine struct {
 }
 
 func NewEngine(deps Dependencies) *Engine {
+	if deps.Clock == nil {
+		deps.Clock = platform.RealClock{}
+	}
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
@@ -281,7 +287,7 @@ func (r *listenerRule) serve(client net.Conn) {
 		if r.tunnel == nil {
 			return
 		}
-		target, err = r.tunnel.dial(r.ctx, r.config.Id)
+		target, err = r.tunnel.dial(r.ctx, r.config)
 	} else {
 		target, err = r.engine.dialTarget(r.ctx, r.config)
 	}
