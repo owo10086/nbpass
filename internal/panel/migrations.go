@@ -92,6 +92,7 @@ var migrations = []string{
 	configResultsMigration,
 	selfCheckMigration,
 	dnsWatchMigration,
+	tunnelAuthorizationMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

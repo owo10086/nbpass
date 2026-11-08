@@ -157,7 +157,7 @@ func TestTunnelStreamHalfCloseAndCancellation(t *testing.T) {
 	defer server.close()
 	client := &tunnelClient{engine: e, endpoint: &controlpb.TunnelEndpoint{Address: "127.0.0.1", Port: uint32(server.listener.Addr().(*net.TCPAddr).Port), ServerName: "exit.test", CertificatePem: cert, EntryId: "entry", Credential: strings.Repeat("a", 43)}}
 	defer client.close()
-	conn, err := client.dial(context.Background(), "r")
+	conn, err := client.dial(context.Background(), rule)
 	if err != nil {
 		t.Fatal(err)
 	}

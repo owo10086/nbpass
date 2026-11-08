@@ -20,6 +20,8 @@ message NodeReport {
   bool dns_watch_only = 100;
   repeated DNSWatchResult dns_watch_results = 101;
   bool dns_watch_capable = 102;
+  // 逐流授权能力独立于控制协议版本；旧节点不提前启用新授权。
+  uint32 tunnel_authorization_version = 110;
   bool rotation_only = 80;
   RotationProgress rotation = 81;
   string node_id = 1;
@@ -94,6 +96,7 @@ message ConfigSnapshot {
 }
 
 message ForwardRule {
+  uint64 authorization_generation = 110;
   string id = 1;
   string entry_group_id = 2;
   uint32 listen_port = 3;

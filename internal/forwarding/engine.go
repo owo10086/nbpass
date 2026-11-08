@@ -292,7 +292,7 @@ func (r *listenerRule) serve(client net.Conn) {
 		if r.tunnel == nil {
 			return
 		}
-		target, err = r.tunnel.dial(r.ctx, r.config.Id)
+		target, err = r.tunnel.dial(r.ctx, r.config)
 	} else {
 		target, err = r.engine.dialTarget(r.ctx, r.config)
 	}

@@ -180,6 +180,9 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 		deps.Forwarding.Now = deps.Clock.Now
 	}
 	deps.Forwarding.NodeID = credential.NodeID
+	if deps.Forwarding.Clock == nil {
+		deps.Forwarding.Clock = deps.Clock
+	}
 	if deps.ConfigStore == nil {
 		deps.ConfigStore, _ = deps.Store.(ConfigStore)
 	}
@@ -227,7 +230,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 			deps.selfChecks.wg.Wait()
 		}
 	}()
-	report := &controlpb.NodeReport{DnsWatchCapable: true, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
+	report := &controlpb.NodeReport{DnsWatchCapable: true, TunnelAuthorizationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
 	state := engine.State()
 	report.AttemptedRevision, report.AttemptedDigest, report.RuleResults = state.HighestRevision, state.HighestDigest, state.Results
 	report.AppliedRevision, report.AppliedDigest = engine.Applied()

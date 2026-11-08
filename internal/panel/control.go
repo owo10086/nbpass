@@ -322,6 +322,10 @@ func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, sess
 			_, err = tx.ExecContext(ctx, "UPDATE nodes SET process_instance=? WHERE id=?", first.ProcessInstance, id)
 		}
 	}
+	var authorizationChanges []string
+	if err == nil {
+		authorizationChanges, err = p.admitTunnelAuthorization(ctx, tx, id, previous != first.ProcessInstance, first.TunnelAuthorizationVersion)
+	}
 	if err == nil {
 		err = tx.Commit()
 	}
@@ -338,6 +342,7 @@ func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, sess
 		old.stop()
 	}
 	p.controls[id] = session
+	p.notifyConfiguration(authorizationChanges)
 	return nil
 }
 
@@ -443,6 +448,10 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 	if err == nil {
 		err = p.storeRuleResults(ctx, tx, id, report, uint64(desired), expectedDigest, alreadyConfirmed)
 	}
+	var authorizationChanges []string
+	if err == nil {
+		authorizationChanges, err = p.confirmTunnelAuthorizations(ctx, tx, id, report, uint64(desired), expectedDigest)
+	}
 	if err == nil {
 		err = tx.Commit()
 	}
@@ -453,5 +462,6 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
 
+	p.notifyConfiguration(authorizationChanges)
 	return response, nil
 }
