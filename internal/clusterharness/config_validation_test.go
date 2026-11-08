@@ -221,19 +221,18 @@ func TestNodeDeletionRecognizesFutureExitGroupRelations(t *testing.T) {
 	body := directBody(g, 27002, "example.com", 443)
 	body["enabled"] = false
 	rule := c.Do("POST", "/api/rules", body, 201)
-	// 仅搭建后续出口组的数据库关系夹具，不提前实施票 08 的管理或隧道功能。
 	db, err := (platform.SQLite{Path: filepath.Join(h.Dir, "panel.db")}).Open(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := db.Exec(`CREATE TABLE exit_groups(id TEXT PRIMARY KEY, name TEXT NOT NULL);
-		CREATE TABLE exit_group_members(group_id TEXT REFERENCES exit_groups(id), node_id TEXT REFERENCES nodes(id));
-		ALTER TABLE forward_rules ADD COLUMN exit_group_id TEXT REFERENCES exit_groups(id);
-		INSERT INTO exit_groups VALUES('exit-fixture', '出口组夹具');`); err != nil {
+	if _, err := db.Exec(`INSERT INTO exit_groups(id, name, strategy) VALUES('exit-fixture', '出口组夹具', 'single')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("INSERT INTO exit_group_members VALUES('exit-fixture', ?)", id); err != nil {
+	if _, err := db.Exec("INSERT INTO tunnel_exits(node_id,address,listen_port,transport,server_name,certificate_pem,private_key_ciphertext) VALUES(?,?,?,?,?,?,?)", id, "203.0.113.5", 18443, "wss", "exit.fixture", []byte("x"), []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO exit_group_members(group_id, node_id, position) VALUES('exit-fixture', ?, 0)", id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec("UPDATE forward_rules SET exit_group_id='exit-fixture' WHERE id=?", rule["id"]); err != nil {
