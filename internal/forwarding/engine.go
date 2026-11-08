@@ -14,9 +14,12 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"nbpass/internal/controlpb"
+	"nbpass/internal/timing"
 )
 
 type Dependencies struct {
+	Limits ResourceLimits
+	Clock  timing.Clock
 	// NodeID 用于兼任入口和出口时去重本机业务流；由认证后的节点核心赋值。
 	NodeID     string
 	LookupIPv4 func(context.Context, string) ([]netip.Addr, error)
@@ -27,6 +30,7 @@ type Dependencies struct {
 }
 
 type Engine struct {
+	resources           *resourceLimiter
 	businessConnections atomic.Uint64
 	tunnelConnections   atomic.Uint64
 	tunnelServer        *tunnelServer
@@ -40,6 +44,9 @@ type Engine struct {
 }
 
 func NewEngine(deps Dependencies) *Engine {
+	if deps.Clock == nil {
+		deps.Clock = resourceClock{}
+	}
 	if deps.Now == nil {
 		deps.Now = time.Now
 	}
@@ -61,7 +68,7 @@ func NewEngine(deps Dependencies) *Engine {
 	if deps.Listen == nil {
 		deps.Listen = net.Listen
 	}
-	return &Engine{deps: deps, rules: map[string]*listenerRule{}, tunnelClients: map[string]*tunnelClient{}}
+	return &Engine{resources: &resourceLimiter{limits: deps.Limits.defaults(), rules: map[string]int{}}, deps: deps, rules: map[string]*listenerRule{}, tunnelClients: map[string]*tunnelClient{}}
 }
 
 // Connections 返回逻辑业务连接数；目标侧 TCP 和控制连接不重复计数。
@@ -204,6 +211,10 @@ func (r *listenerRule) accept() {
 		if err != nil {
 			return
 		}
+		if r.config.Kind == controlpb.RuleKind_RULE_KIND_DIRECT {
+			r.acceptDirect(c)
+			continue
+		}
 		if !r.track(c) {
 			return
 		}
@@ -240,7 +251,11 @@ func (r *listenerRule) serve(client net.Conn) {
 
 // 每个新连接最多尝试三个不同 IPv4，总预算 10 秒；只在交付业务数据前重试。
 func (e *Engine) dialTarget(ctx context.Context, r *controlpb.ForwardRule) (net.Conn, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	return e.dialTargetWithin(ctx, r, 10*time.Second)
+}
+
+func (e *Engine) dialTargetWithin(ctx context.Context, r *controlpb.ForwardRule, budget time.Duration) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	var ips []netip.Addr
 	if ip, err := netip.ParseAddr(r.TargetAddress); err == nil {
