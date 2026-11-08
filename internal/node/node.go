@@ -11,7 +11,9 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -22,6 +24,7 @@ import (
 
 	"nbpass/internal/controlpb"
 	"nbpass/internal/eventlog"
+	"nbpass/internal/forwarding"
 	"nbpass/internal/probe"
 	"nbpass/internal/publicip"
 	"nbpass/internal/timing"
@@ -57,6 +60,7 @@ type Dependencies struct {
 	DialContext func(context.Context, string) (net.Conn, error)
 	PublicIPv4  func(context.Context) (string, error)
 	Events      *EventQueue
+	Forwarding  forwarding.Dependencies
 }
 
 func Run(ctx context.Context, config Config, deps Dependencies) error {
@@ -134,6 +138,11 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	if _, err := io.ReadFull(deps.Random, instance); err != nil {
 		return errors.New("无法生成节点进程实例")
 	}
+	engine := forwarding.NewEngine(deps.Forwarding)
+	defer engine.Close()
+	if deps.Connections == nil {
+		deps.Connections = engine
+	}
 	report := &controlpb.NodeReport{NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
 	probeCtx, stopProbe := context.WithCancel(ctx)
 	defer stopProbe()
@@ -145,7 +154,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 		}
 		// 由注入时钟控制重试，不额外等待 gRPC 内部的墙上时钟退避。
 		client.ResetConnectBackoff()
-		err := exchange(ctx, service, credential.Token, report, deps, updates)
+		err := exchange(ctx, service, credential.Token, report, deps, updates, engine)
 		if status.Code(err) == codes.Unauthenticated || status.Code(err) == codes.FailedPrecondition {
 			return errors.New("节点凭据或进程实例已失效，请检查面板状态")
 		}
@@ -159,7 +168,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 }
 
-func exchange(ctx context.Context, service controlpb.ControlServiceClient, token string, report *controlpb.NodeReport, deps Dependencies, updates <-chan probeUpdate) error {
+func exchange(ctx context.Context, service controlpb.ControlServiceClient, token string, report *controlpb.NodeReport, deps Dependencies, updates <-chan probeUpdate, engine *forwarding.Engine) error {
 	clock := deps.Clock
 	streamCtx, cancel := context.WithCancel(metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token))
 	defer cancel()
@@ -167,116 +176,215 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	if err != nil {
 		return err
 	}
-	// 每条新流先发活性；探针有自己的周期，不改变既有活性节奏。
-	report.Probe, report.ProbeOnly, report.EventsOnly = nil, false, false
-	nextHeartbeat := clock.Now().Add(10 * time.Second)
-	for {
-		// 每次请求得到确认才开始下一活性周期，未响应的流也必须超时重连。
-		type response struct {
-			message *controlpb.PanelMessage
-			err     error
+	type incoming struct {
+		message *controlpb.PanelMessage
+		err     error
+	}
+	messages := make(chan incoming)
+	go func() {
+		for {
+			m, err := stream.Recv()
+			select {
+			case messages <- incoming{m, err}:
+			case <-streamCtx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
 		}
-		result := make(chan response, 1)
-		progress := false
-		// 超时取消与传输退出并非同步；旧流只能持有本轮不可变的报告。
+	}()
+	// 单独追踪事件在途批次；无 ACK 的主动快照或探针回包不能消费它。
+	pending := map[string]bool{}
+	pendingFull := false
+	drainEvents := false
+	var response, eventAck timing.Timer
+	var responseC, eventAckC <-chan time.Time
+	defer func() {
+		if response != nil {
+			response.Stop()
+		}
+		if eventAck != nil {
+			eventAck.Stop()
+		}
+	}()
+	type reportKind int
+	const (
+		heartbeatReport reportKind = iota
+		probeReport
+		eventReport
+		configReport
+	)
+	send := func(kind reportKind, sample *controlpb.ProbeSample) error {
 		outgoing := proto.Clone(report).(*controlpb.NodeReport)
-		// 公网 IP 属于 10 秒活性周期；独立探针不查询，避免被外部查询拖住。
-		if !outgoing.ProbeOnly && !outgoing.EventsOnly {
+		outgoing.Probe, outgoing.ProbeOnly, outgoing.EventsOnly = sample, kind == probeReport, kind == eventReport
+		outgoing.Events, outgoing.PublicIpv4 = nil, ""
+		if kind != configReport {
+			outgoing.AttemptedRevision, outgoing.ApplyError = 0, ""
+		}
+		if kind == probeReport || kind == eventReport {
+			outgoing.AppliedRevision, outgoing.AppliedDigest = 0, ""
+		}
+		if kind == heartbeatReport {
 			queryCtx, queryCancel := timeout(ctx, clock, 5*time.Second)
 			if value, err := deps.PublicIPv4(queryCtx); err == nil && queryCtx.Err() == nil {
 				outgoing.PublicIpv4, _ = publicip.Parse(value)
 			}
 			queryCancel()
 		}
-		if deps.Events != nil && !outgoing.ProbeOnly {
+		if deps.Events != nil && len(pending) == 0 && (kind == heartbeatReport || kind == eventReport) {
 			batch, err := deps.Events.Batch(ctx)
 			if err != nil {
 				return err
 			}
 			for _, e := range batch {
 				outgoing.Events = append(outgoing.Events, e.Proto())
+				pending[e.ID] = true
+			}
+			pendingFull = len(batch) == eventlog.MaxBatch
+			if len(batch) > 0 {
+				eventAck = clock.NewTimer(15 * time.Second)
+				eventAckC = eventAck.C()
 			}
 		}
-		go func() {
-			if err := stream.Send(outgoing); err != nil && !errors.Is(err, io.EOF) {
-				result <- response{err: err}
-				return
-			}
-			message, err := stream.Recv()
-			if err == nil && message.ProtocolVersion != ProtocolVersion {
-				err = errors.New("控制协议不兼容")
-			}
-			result <- response{message, err}
-		}()
+		if kind == eventReport && len(outgoing.Events) == 0 {
+			return nil
+		}
+		// 发送串行，传输只持有本轮不可变副本；接收持续独立运行。
+		result := make(chan error, 1)
+		go func() { result <- stream.Send(outgoing) }()
 		timer := clock.NewTimer(15 * time.Second)
+		defer timer.Stop()
 		select {
+		case err := <-result:
+			if err != nil {
+				return err
+			}
 		case <-ctx.Done():
-			timer.Stop()
 			return ctx.Err()
 		case <-timer.C():
+			return errors.New("控制发送超时")
+		}
+		if kind != configReport && responseC == nil {
+			response = clock.NewTimer(15 * time.Second)
+			responseC = response.C()
+		}
+		return nil
+	}
+	nextHeartbeat := clock.Now().Add(10 * time.Second)
+	if err := send(heartbeatReport, nil); err != nil {
+		return err
+	}
+	heartbeat := clock.NewTimer(nextHeartbeat.Sub(clock.Now()))
+	defer func() { heartbeat.Stop() }()
+	sendProbe := func(update probeUpdate) error {
+		if clock.Now().Sub(update.at) >= 2*probe.IntervalSeconds*time.Second {
+			return nil
+		}
+		return send(probeReport, update.sample)
+	}
+	for {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		// 事件连续补报也必须让出到期心跳和最新探针。
+		if !clock.Now().Before(nextHeartbeat) {
+			nextHeartbeat = clock.Now().Add(10 * time.Second)
+			if err := send(heartbeatReport, nil); err != nil {
+				return err
+			}
+			heartbeat.Stop()
+			heartbeat = clock.NewTimer(nextHeartbeat.Sub(clock.Now()))
+			drainEvents = false
+		}
+		select {
+		case update := <-updates:
+			if err := sendProbe(update); err != nil {
+				return err
+			}
+		default:
+		}
+		if drainEvents && len(pending) == 0 {
+			drainEvents = false
+			if err := send(eventReport, nil); err != nil {
+				return err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-responseC:
 			return errors.New("控制响应超时")
-		case received := <-result:
-			timer.Stop()
+		case <-eventAckC:
+			return errors.New("事件确认超时")
+		case <-heartbeat.C():
+		case update := <-updates:
+			if err := sendProbe(update); err != nil {
+				return err
+			}
+		case received := <-messages:
 			if received.err != nil {
 				return received.err
 			}
-			if deps.Events != nil {
-				sentIDs := make(map[string]bool, len(outgoing.Events))
-				for _, e := range outgoing.Events {
-					sentIDs[e.EventId] = true
-				}
-				for _, id := range received.message.AcknowledgedEventIds {
-					if !sentIDs[id] {
-						return errors.New("事件确认不属于当前批次")
+			m := received.message
+			if m.ProtocolVersion != ProtocolVersion {
+				return errors.New("控制协议不兼容")
+			}
+			if response != nil {
+				response.Stop()
+			}
+			responseC = nil
+			if len(m.AcknowledgedEventIds) > 0 {
+				for _, id := range m.AcknowledgedEventIds {
+					if !pending[id] {
+						return errors.New("事件确认不属于在途批次")
 					}
 				}
-				if err := deps.Events.Ack(ctx, received.message.AcknowledgedEventIds); err != nil {
+				if err := deps.Events.Ack(ctx, m.AcknowledgedEventIds); err != nil {
 					return err
 				}
-				progress = len(received.message.AcknowledgedEventIds) > 0
-			}
-		}
-		// 满批有确认进展才继续补报，不推进活性或其他报告状态。
-		if len(outgoing.Events) == eventlog.MaxBatch && progress {
-			report.Probe, report.ProbeOnly, report.EventsOnly = nil, false, true
-			// 每批之间让出到期活性及最新探针，慢 ACK 不能饿死其他上报。
-			select {
-			case update := <-updates:
-				if clock.Now().Sub(update.at) < 2*probe.IntervalSeconds*time.Second {
-					report.Probe = update.sample
-					report.ProbeOnly = clock.Now().Before(nextHeartbeat)
-					report.EventsOnly = false
+				for _, id := range m.AcknowledgedEventIds {
+					delete(pending, id)
 				}
-			default:
-			}
-			if !clock.Now().Before(nextHeartbeat) {
-				report.ProbeOnly, report.EventsOnly = false, false
-				nextHeartbeat = clock.Now().Add(10 * time.Second)
-			}
-			continue
-		}
-		report.Probe = nil
-		report.EventsOnly = false
-		for {
-			timer = clock.NewTimer(nextHeartbeat.Sub(clock.Now()))
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			case <-timer.C():
-				report.ProbeOnly = false
-			case update := <-updates:
-				timer.Stop()
-				if clock.Now().Sub(update.at) >= 2*probe.IntervalSeconds*time.Second {
-					continue
+				if len(pending) == 0 {
+					eventAck.Stop()
+					eventAckC = nil
+					drainEvents = drainEvents || pendingFull
 				}
-				report.Probe = update.sample
-				report.ProbeOnly = clock.Now().Before(nextHeartbeat)
 			}
-			if !report.ProbeOnly {
-				nextHeartbeat = clock.Now().Add(10 * time.Second)
+			snapshot := m.Snapshot
+			if snapshot == nil {
+				continue
 			}
-			break
+			if snapshot.Revision != m.DesiredRevision {
+				return errors.New("配置快照版本不一致")
+			}
+			revision, digest := engine.Applied()
+			if snapshot.Revision < report.AttemptedRevision || (snapshot.Revision == revision && snapshot.Digest == digest) {
+				continue
+			}
+			report.AttemptedRevision = snapshot.Revision
+			err := engine.Apply(snapshot)
+			report.AppliedRevision, report.AppliedDigest = engine.Applied()
+			report.ApplyError = ""
+			if err != nil {
+				if deps.Events != nil {
+					if recordErr := deps.Events.Record(ctx, "sync_failed", "节点配置应用失败", snapshot.Revision); recordErr != nil {
+						return errors.New("同步失败事件持久化失败")
+					}
+					drainEvents = true
+				}
+				report.ApplyError = strings.ToValidUTF8(err.Error(), "�")
+				if len(report.ApplyError) > 1024 {
+					report.ApplyError = report.ApplyError[:1024]
+					for !utf8.ValidString(report.ApplyError) {
+						report.ApplyError = report.ApplyError[:len(report.ApplyError)-1]
+					}
+				}
+			}
+			if err := send(configReport, nil); err != nil {
+				return err
+			}
 		}
 	}
 }

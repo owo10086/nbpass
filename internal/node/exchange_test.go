@@ -11,6 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 	"nbpass/internal/controlpb"
+	"nbpass/internal/forwarding"
 	"nbpass/internal/platform"
 	"nbpass/internal/timing"
 )
@@ -106,10 +107,132 @@ func TestEventBackfillYieldsToHeartbeatAndProbe(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			err = exchange(ctx, exchangeClient{stream: stream}, "token", &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "test"}, Dependencies{Clock: clock, Events: queue, PublicIPv4: func(context.Context) (string, error) { return "", nil }}, updates)
+			err = exchange(ctx, exchangeClient{stream: stream}, "token", &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "test"}, Dependencies{Clock: clock, Events: queue, PublicIPv4: func(context.Context) (string, error) { return "", nil }}, updates, forwarding.NewEngine(forwarding.Dependencies{}))
 			if err != context.Canceled {
 				t.Fatalf("控制流未让出独立报告: %v", err)
 			}
 		})
+	}
+}
+
+// 主动配置先于事件 ACK 到达时，配置确认与下一批补报仍各自收敛。
+func TestPushedSnapshotDoesNotConsumePendingEventAcknowledgement(t *testing.T) {
+	clock := &exchangeClock{}
+	queue, err := OpenEventQueue(context.Background(), FileStore{Dir: filepath.Join(t.TempDir(), "node"), Random: rand.Reader}, clock, rand.Reader, EventLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 40 {
+		if err := queue.Record(context.Background(), "sync_failed", "待补报", 999); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stream := &interleavedStream{reports: make(chan *controlpb.NodeReport, 4), messages: make(chan *controlpb.PanelMessage, 4)}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	engine := forwarding.NewEngine(forwarding.Dependencies{})
+	defer engine.Close()
+	done := make(chan error, 1)
+	go func() {
+		done <- exchange(ctx, interleavedClient{stream: stream}, "token", &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "test"}, Dependencies{Clock: clock, Events: queue, PublicIPv4: func(context.Context) (string, error) { return "", nil }}, nil, engine)
+	}()
+	receive := func() *controlpb.NodeReport {
+		t.Helper()
+		select {
+		case r := <-stream.reports:
+			return r
+		case err := <-done:
+			t.Fatalf("控制流提前退出: %v", err)
+		case <-ctx.Done():
+			t.Fatal("事件与配置未独立收敛")
+		}
+		return nil
+	}
+	first := receive()
+	if len(first.Events) != 16 {
+		t.Fatalf("首批事件缺失: %v", first)
+	}
+	snapshot := &controlpb.ConfigSnapshot{Revision: 1}
+	snapshot.Digest = forwarding.SnapshotDigest(snapshot)
+	stream.messages <- &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: 1, Snapshot: snapshot}
+	confirmed := receive()
+	if confirmed.AttemptedRevision != 1 || confirmed.AppliedRevision != 1 || len(confirmed.Events) != 0 || confirmed.ProbeOnly || confirmed.EventsOnly {
+		t.Fatalf("配置确认混入其他报告: %v", confirmed)
+	}
+	seen := map[string]bool{}
+	for batchIndex, batchSize := range []int{16, 16, 8} {
+		batch := first
+		if batchIndex > 0 {
+			batch = receive()
+			if !batch.EventsOnly || batch.AppliedRevision != 0 || batch.AttemptedRevision != 0 {
+				t.Fatalf("事件补报混入配置确认: %v", batch)
+			}
+		}
+		if len(batch.Events) != batchSize {
+			t.Fatalf("补报数量: got %d want %d", len(batch.Events), batchSize)
+		}
+		ack := &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: 1}
+		for _, event := range batch.Events {
+			if seen[event.EventId] {
+				t.Fatal("配置推送导致重复批次")
+			}
+			seen[event.EventId] = true
+			ack.AcknowledgedEventIds = append(ack.AcknowledgedEventIds, event.EventId)
+		}
+		stream.messages <- ack
+	}
+	for {
+		remaining, err := queue.Batch(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(remaining) == 0 {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("事件确认失败: %v", err)
+		case <-ctx.Done():
+			t.Fatal("事件确认未持久化")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	cancel()
+	if err := <-done; err != context.Canceled {
+		t.Fatalf("控制流取消失败: %v", err)
+	}
+}
+
+type interleavedClient struct {
+	controlpb.ControlServiceClient
+	stream *interleavedStream
+}
+
+func (c interleavedClient) Connect(ctx context.Context, _ ...grpc.CallOption) (grpc.BidiStreamingClient[controlpb.NodeReport, controlpb.PanelMessage], error) {
+	c.stream.ctx = ctx
+	return c.stream, nil
+}
+
+type interleavedStream struct {
+	grpc.ClientStream
+	ctx      context.Context
+	reports  chan *controlpb.NodeReport
+	messages chan *controlpb.PanelMessage
+}
+
+func (s *interleavedStream) Send(r *controlpb.NodeReport) error {
+	select {
+	case s.reports <- r:
+		return nil
+	case <-s.ctx.Done():
+		return s.ctx.Err()
+	}
+}
+func (s *interleavedStream) Recv() (*controlpb.PanelMessage, error) {
+	select {
+	case m := <-s.messages:
+		return m, nil
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
 	}
 }

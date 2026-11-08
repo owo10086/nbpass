@@ -84,6 +84,9 @@ type nodeView struct {
 	DesiredRevision  int64      `json:"desired_revision"`
 	AppliedRevision  int64      `json:"applied_revision"`
 	ConfigStatus     string     `json:"config_status"`
+	ApplyError       string     `json:"apply_error"`
+	AppliedDigest    string     `json:"applied_digest"`
+	DesiredDigest    string     `json:"desired_digest"`
 	SoftwareVersion  string     `json:"software_version"`
 	ProcessInstance  string     `json:"process_instance"`
 }
@@ -100,7 +103,7 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 	p.controlMu.Lock()
 	defer p.controlMu.Unlock()
 	rows, err := p.db.QueryContext(r.Context(), `SELECT id, name, last_seen_at, disconnected_at, maintenance_until,
-		desired_revision, applied_revision, software_version, process_instance,
+		desired_revision, applied_revision, software_version, process_instance, apply_error, applied_digest, COALESCE((SELECT digest FROM node_snapshots WHERE node_id=nodes.id),''),
 		COALESCE(public_ipv4, ''), COALESCE(auto_name, '未知'), COALESCE(auto_mainland, 0),
 		override_name, COALESCE(override_mainland, 0), COALESCE(checker_disabled, 0)
 		FROM nodes LEFT JOIN node_regions ON node_id = id ORDER BY created_at, id`)
@@ -116,7 +119,7 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 		var last, disconnected, maintenance sql.NullInt64
 		var override sql.NullString
 		var mainland bool
-		if err := rows.Scan(&n.ID, &n.Name, &last, &disconnected, &maintenance, &n.DesiredRevision, &n.AppliedRevision, &n.SoftwareVersion, &n.ProcessInstance,
+		if err := rows.Scan(&n.ID, &n.Name, &last, &disconnected, &maintenance, &n.DesiredRevision, &n.AppliedRevision, &n.SoftwareVersion, &n.ProcessInstance, &n.ApplyError, &n.AppliedDigest, &n.DesiredDigest,
 			&n.PublicIPv4, &n.AutomaticRegion.Name, &n.AutomaticRegion.MainlandChina, &override, &mainland, &n.CheckerDisabled); err != nil {
 			problem(w, 503, "存储暂不可用")
 			return
@@ -150,6 +153,9 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 		n.ConfigStatus = "待确认"
 		if n.Connected {
 			n.ConfigStatus = "未同步"
+			if n.ApplyError != "" {
+				n.ConfigStatus = "同步失败"
+			}
 			if n.DesiredRevision == n.AppliedRevision {
 				n.ConfigStatus = "正常"
 			}

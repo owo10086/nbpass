@@ -21,6 +21,98 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type AddressFamily int32
+
+const (
+	AddressFamily_ADDRESS_FAMILY_UNSPECIFIED AddressFamily = 0
+	AddressFamily_ADDRESS_FAMILY_IPV4        AddressFamily = 1
+)
+
+// Enum value maps for AddressFamily.
+var (
+	AddressFamily_name = map[int32]string{
+		0: "ADDRESS_FAMILY_UNSPECIFIED",
+		1: "ADDRESS_FAMILY_IPV4",
+	}
+	AddressFamily_value = map[string]int32{
+		"ADDRESS_FAMILY_UNSPECIFIED": 0,
+		"ADDRESS_FAMILY_IPV4":        1,
+	}
+)
+
+func (x AddressFamily) Enum() *AddressFamily {
+	p := new(AddressFamily)
+	*p = x
+	return p
+}
+
+func (x AddressFamily) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AddressFamily) Descriptor() protoreflect.EnumDescriptor {
+	return file_control_v1_control_proto_enumTypes[0].Descriptor()
+}
+
+func (AddressFamily) Type() protoreflect.EnumType {
+	return &file_control_v1_control_proto_enumTypes[0]
+}
+
+func (x AddressFamily) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AddressFamily.Descriptor instead.
+func (AddressFamily) EnumDescriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{0}
+}
+
+type RuleKind int32
+
+const (
+	RuleKind_RULE_KIND_UNSPECIFIED RuleKind = 0
+	RuleKind_RULE_KIND_DIRECT      RuleKind = 1
+)
+
+// Enum value maps for RuleKind.
+var (
+	RuleKind_name = map[int32]string{
+		0: "RULE_KIND_UNSPECIFIED",
+		1: "RULE_KIND_DIRECT",
+	}
+	RuleKind_value = map[string]int32{
+		"RULE_KIND_UNSPECIFIED": 0,
+		"RULE_KIND_DIRECT":      1,
+	}
+)
+
+func (x RuleKind) Enum() *RuleKind {
+	p := new(RuleKind)
+	*p = x
+	return p
+}
+
+func (x RuleKind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (RuleKind) Descriptor() protoreflect.EnumDescriptor {
+	return file_control_v1_control_proto_enumTypes[1].Descriptor()
+}
+
+func (RuleKind) Type() protoreflect.EnumType {
+	return &file_control_v1_control_proto_enumTypes[1]
+}
+
+func (x RuleKind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use RuleKind.Descriptor instead.
+func (RuleKind) EnumDescriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{1}
+}
+
 type EnrollRequest struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	InstallationTicket string                 `protobuf:"bytes,1,opt,name=installation_ticket,json=installationTicket,proto3" json:"installation_ticket,omitempty"`
@@ -119,13 +211,16 @@ func (x *EnrollResponse) GetToken() string {
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 type NodeReport struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	NodeId          string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	ProcessInstance string                 `protobuf:"bytes,2,opt,name=process_instance,json=processInstance,proto3" json:"process_instance,omitempty"`
-	ProtocolVersion uint32                 `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	SoftwareVersion string                 `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
-	AppliedRevision uint64                 `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
-	Probe           *ProbeSample           `protobuf:"bytes,14,opt,name=probe,proto3" json:"probe,omitempty"`
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	NodeId            string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	ProcessInstance   string                 `protobuf:"bytes,2,opt,name=process_instance,json=processInstance,proto3" json:"process_instance,omitempty"`
+	ProtocolVersion   uint32                 `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	SoftwareVersion   string                 `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
+	AppliedRevision   uint64                 `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
+	AppliedDigest     string                 `protobuf:"bytes,6,opt,name=applied_digest,json=appliedDigest,proto3" json:"applied_digest,omitempty"`
+	AttemptedRevision uint64                 `protobuf:"varint,7,opt,name=attempted_revision,json=attemptedRevision,proto3" json:"attempted_revision,omitempty"`
+	ApplyError        string                 `protobuf:"bytes,8,opt,name=apply_error,json=applyError,proto3" json:"apply_error,omitempty"`
+	Probe             *ProbeSample           `protobuf:"bytes,14,opt,name=probe,proto3" json:"probe,omitempty"`
 	// 探针独立上报不推进 10 秒活性时间，也不改变配置应用状态。
 	ProbeOnly bool `protobuf:"varint,15,opt,name=probe_only,json=probeOnly,proto3" json:"probe_only,omitempty"`
 	// 节点查询的出站公网 IPv4，不作为已验证可入站的业务地址。
@@ -200,6 +295,27 @@ func (x *NodeReport) GetAppliedRevision() uint64 {
 		return x.AppliedRevision
 	}
 	return 0
+}
+
+func (x *NodeReport) GetAppliedDigest() string {
+	if x != nil {
+		return x.AppliedDigest
+	}
+	return ""
+}
+
+func (x *NodeReport) GetAttemptedRevision() uint64 {
+	if x != nil {
+		return x.AttemptedRevision
+	}
+	return 0
+}
+
+func (x *NodeReport) GetApplyError() string {
+	if x != nil {
+		return x.ApplyError
+	}
+	return ""
 }
 
 func (x *NodeReport) GetProbe() *ProbeSample {
@@ -290,11 +406,12 @@ func (x *ProbeSample) GetValues() map[string]float64 {
 	return nil
 }
 
-// revision 仅为接缝元数据，本票不下发或应用配置快照。
+// 配置为完整快照；缺失规则表示撤销，摘要覆盖版本与全部内容。
 type PanelMessage struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
 	ProtocolVersion      uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	DesiredRevision      uint64                 `protobuf:"varint,2,opt,name=desired_revision,json=desiredRevision,proto3" json:"desired_revision,omitempty"`
+	Snapshot             *ConfigSnapshot        `protobuf:"bytes,3,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	AcknowledgedEventIds []string               `protobuf:"bytes,15,rep,name=acknowledged_event_ids,json=acknowledgedEventIds,proto3" json:"acknowledged_event_ids,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
@@ -342,6 +459,13 @@ func (x *PanelMessage) GetDesiredRevision() uint64 {
 		return x.DesiredRevision
 	}
 	return 0
+}
+
+func (x *PanelMessage) GetSnapshot() *ConfigSnapshot {
+	if x != nil {
+		return x.Snapshot
+	}
+	return nil
 }
 
 func (x *PanelMessage) GetAcknowledgedEventIds() []string {
@@ -503,6 +627,166 @@ func (x *EventGap) GetReason() string {
 	return ""
 }
 
+type ConfigSnapshot struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Revision      uint64                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	Digest        string                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	Rules         []*ForwardRule         `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigSnapshot) Reset() {
+	*x = ConfigSnapshot{}
+	mi := &file_control_v1_control_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigSnapshot) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigSnapshot) ProtoMessage() {}
+
+func (x *ConfigSnapshot) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigSnapshot.ProtoReflect.Descriptor instead.
+func (*ConfigSnapshot) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ConfigSnapshot) GetRevision() uint64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *ConfigSnapshot) GetDigest() string {
+	if x != nil {
+		return x.Digest
+	}
+	return ""
+}
+
+func (x *ConfigSnapshot) GetRules() []*ForwardRule {
+	if x != nil {
+		return x.Rules
+	}
+	return nil
+}
+
+type ForwardRule struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	EntryGroupId  string                 `protobuf:"bytes,2,opt,name=entry_group_id,json=entryGroupId,proto3" json:"entry_group_id,omitempty"`
+	ListenPort    uint32                 `protobuf:"varint,3,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
+	TargetAddress string                 `protobuf:"bytes,4,opt,name=target_address,json=targetAddress,proto3" json:"target_address,omitempty"`
+	TargetFamily  AddressFamily          `protobuf:"varint,5,opt,name=target_family,json=targetFamily,proto3,enum=nbpass.control.v1.AddressFamily" json:"target_family,omitempty"`
+	TargetPort    uint32                 `protobuf:"varint,6,opt,name=target_port,json=targetPort,proto3" json:"target_port,omitempty"`
+	AllowPrivate  bool                   `protobuf:"varint,7,opt,name=allow_private,json=allowPrivate,proto3" json:"allow_private,omitempty"`
+	Kind          RuleKind               `protobuf:"varint,8,opt,name=kind,proto3,enum=nbpass.control.v1.RuleKind" json:"kind,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ForwardRule) Reset() {
+	*x = ForwardRule{}
+	mi := &file_control_v1_control_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ForwardRule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ForwardRule) ProtoMessage() {}
+
+func (x *ForwardRule) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ForwardRule.ProtoReflect.Descriptor instead.
+func (*ForwardRule) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ForwardRule) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ForwardRule) GetEntryGroupId() string {
+	if x != nil {
+		return x.EntryGroupId
+	}
+	return ""
+}
+
+func (x *ForwardRule) GetListenPort() uint32 {
+	if x != nil {
+		return x.ListenPort
+	}
+	return 0
+}
+
+func (x *ForwardRule) GetTargetAddress() string {
+	if x != nil {
+		return x.TargetAddress
+	}
+	return ""
+}
+
+func (x *ForwardRule) GetTargetFamily() AddressFamily {
+	if x != nil {
+		return x.TargetFamily
+	}
+	return AddressFamily_ADDRESS_FAMILY_UNSPECIFIED
+}
+
+func (x *ForwardRule) GetTargetPort() uint32 {
+	if x != nil {
+		return x.TargetPort
+	}
+	return 0
+}
+
+func (x *ForwardRule) GetAllowPrivate() bool {
+	if x != nil {
+		return x.AllowPrivate
+	}
+	return false
+}
+
+func (x *ForwardRule) GetKind() RuleKind {
+	if x != nil {
+		return x.Kind
+	}
+	return RuleKind_RULE_KIND_UNSPECIFIED
+}
+
 var File_control_v1_control_proto protoreflect.FileDescriptor
 
 const file_control_v1_control_proto_rawDesc = "" +
@@ -512,14 +796,18 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\x9a\x03\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\x91\x04\n" +
 	"\n" +
 	"NodeReport\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
 	"\x10process_instance\x18\x02 \x01(\tR\x0fprocessInstance\x12)\n" +
 	"\x10protocol_version\x18\x03 \x01(\rR\x0fprotocolVersion\x12)\n" +
 	"\x10software_version\x18\x04 \x01(\tR\x0fsoftwareVersion\x12)\n" +
-	"\x10applied_revision\x18\x05 \x01(\x04R\x0fappliedRevision\x124\n" +
+	"\x10applied_revision\x18\x05 \x01(\x04R\x0fappliedRevision\x12%\n" +
+	"\x0eapplied_digest\x18\x06 \x01(\tR\rappliedDigest\x12-\n" +
+	"\x12attempted_revision\x18\a \x01(\x04R\x11attemptedRevision\x12\x1f\n" +
+	"\vapply_error\x18\b \x01(\tR\n" +
+	"applyError\x124\n" +
 	"\x05probe\x18\x0e \x01(\v2\x1e.nbpass.control.v1.ProbeSampleR\x05probe\x12\x1d\n" +
 	"\n" +
 	"probe_only\x18\x0f \x01(\bR\tprobeOnly\x12\x1f\n" +
@@ -533,10 +821,11 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x06values\x18\x02 \x03(\v2*.nbpass.control.v1.ProbeSample.ValuesEntryR\x06values\x1a9\n" +
 	"\vValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\x9a\x01\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xd9\x01\n" +
 	"\fPanelMessage\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12)\n" +
-	"\x10desired_revision\x18\x02 \x01(\x04R\x0fdesiredRevision\x124\n" +
+	"\x10desired_revision\x18\x02 \x01(\x04R\x0fdesiredRevision\x12=\n" +
+	"\bsnapshot\x18\x03 \x01(\v2!.nbpass.control.v1.ConfigSnapshotR\bsnapshot\x124\n" +
 	"\x16acknowledged_event_ids\x18\x0f \x03(\tR\x14acknowledgedEventIds\"\xc9\x01\n" +
 	"\x05Event\x12\x19\n" +
 	"\bevent_id\x18\x01 \x01(\tR\aeventId\x12\x12\n" +
@@ -550,7 +839,28 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\x12\x12\n" +
 	"\x04from\x18\x02 \x01(\tR\x04from\x12\x0e\n" +
 	"\x02to\x18\x03 \x01(\tR\x02to\x12\x16\n" +
-	"\x06reason\x18\x04 \x01(\tR\x06reason2\xae\x01\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"z\n" +
+	"\x0eConfigSnapshot\x12\x1a\n" +
+	"\brevision\x18\x01 \x01(\x04R\brevision\x12\x16\n" +
+	"\x06digest\x18\x02 \x01(\tR\x06digest\x124\n" +
+	"\x05rules\x18\x03 \x03(\v2\x1e.nbpass.control.v1.ForwardRuleR\x05rules\"\xc9\x02\n" +
+	"\vForwardRule\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12$\n" +
+	"\x0eentry_group_id\x18\x02 \x01(\tR\fentryGroupId\x12\x1f\n" +
+	"\vlisten_port\x18\x03 \x01(\rR\n" +
+	"listenPort\x12%\n" +
+	"\x0etarget_address\x18\x04 \x01(\tR\rtargetAddress\x12E\n" +
+	"\rtarget_family\x18\x05 \x01(\x0e2 .nbpass.control.v1.AddressFamilyR\ftargetFamily\x12\x1f\n" +
+	"\vtarget_port\x18\x06 \x01(\rR\n" +
+	"targetPort\x12#\n" +
+	"\rallow_private\x18\a \x01(\bR\fallowPrivate\x12/\n" +
+	"\x04kind\x18\b \x01(\x0e2\x1b.nbpass.control.v1.RuleKindR\x04kind*H\n" +
+	"\rAddressFamily\x12\x1e\n" +
+	"\x1aADDRESS_FAMILY_UNSPECIFIED\x10\x00\x12\x17\n" +
+	"\x13ADDRESS_FAMILY_IPV4\x10\x01*;\n" +
+	"\bRuleKind\x12\x19\n" +
+	"\x15RULE_KIND_UNSPECIFIED\x10\x00\x12\x14\n" +
+	"\x10RULE_KIND_DIRECT\x10\x012\xae\x01\n" +
 	"\x0eControlService\x12M\n" +
 	"\x06Enroll\x12 .nbpass.control.v1.EnrollRequest\x1a!.nbpass.control.v1.EnrollResponse\x12M\n" +
 	"\aConnect\x12\x1d.nbpass.control.v1.NodeReport\x1a\x1f.nbpass.control.v1.PanelMessage(\x010\x01B\x1bZ\x19nbpass/internal/controlpbb\x06proto3"
@@ -567,31 +877,40 @@ func file_control_v1_control_proto_rawDescGZIP() []byte {
 	return file_control_v1_control_proto_rawDescData
 }
 
-var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_control_v1_control_proto_goTypes = []any{
-	(*EnrollRequest)(nil),  // 0: nbpass.control.v1.EnrollRequest
-	(*EnrollResponse)(nil), // 1: nbpass.control.v1.EnrollResponse
-	(*NodeReport)(nil),     // 2: nbpass.control.v1.NodeReport
-	(*ProbeSample)(nil),    // 3: nbpass.control.v1.ProbeSample
-	(*PanelMessage)(nil),   // 4: nbpass.control.v1.PanelMessage
-	(*Event)(nil),          // 5: nbpass.control.v1.Event
-	(*EventGap)(nil),       // 6: nbpass.control.v1.EventGap
-	nil,                    // 7: nbpass.control.v1.ProbeSample.ValuesEntry
+	(AddressFamily)(0),     // 0: nbpass.control.v1.AddressFamily
+	(RuleKind)(0),          // 1: nbpass.control.v1.RuleKind
+	(*EnrollRequest)(nil),  // 2: nbpass.control.v1.EnrollRequest
+	(*EnrollResponse)(nil), // 3: nbpass.control.v1.EnrollResponse
+	(*NodeReport)(nil),     // 4: nbpass.control.v1.NodeReport
+	(*ProbeSample)(nil),    // 5: nbpass.control.v1.ProbeSample
+	(*PanelMessage)(nil),   // 6: nbpass.control.v1.PanelMessage
+	(*Event)(nil),          // 7: nbpass.control.v1.Event
+	(*EventGap)(nil),       // 8: nbpass.control.v1.EventGap
+	(*ConfigSnapshot)(nil), // 9: nbpass.control.v1.ConfigSnapshot
+	(*ForwardRule)(nil),    // 10: nbpass.control.v1.ForwardRule
+	nil,                    // 11: nbpass.control.v1.ProbeSample.ValuesEntry
 }
 var file_control_v1_control_proto_depIdxs = []int32{
-	3, // 0: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
-	5, // 1: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
-	7, // 2: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
-	6, // 3: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
-	0, // 4: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
-	2, // 5: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
-	1, // 6: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
-	4, // 7: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
-	6, // [6:8] is the sub-list for method output_type
-	4, // [4:6] is the sub-list for method input_type
-	4, // [4:4] is the sub-list for extension type_name
-	4, // [4:4] is the sub-list for extension extendee
-	0, // [0:4] is the sub-list for field type_name
+	5,  // 0: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
+	7,  // 1: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
+	11, // 2: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
+	9,  // 3: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
+	8,  // 4: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
+	10, // 5: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
+	0,  // 6: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
+	1,  // 7: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
+	2,  // 8: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
+	4,  // 9: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
+	3,  // 10: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
+	6,  // 11: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
+	10, // [10:12] is the sub-list for method output_type
+	8,  // [8:10] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_control_v1_control_proto_init() }
@@ -604,13 +923,14 @@ func file_control_v1_control_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_v1_control_proto_rawDesc), len(file_control_v1_control_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   8,
+			NumEnums:      2,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_control_v1_control_proto_goTypes,
 		DependencyIndexes: file_control_v1_control_proto_depIdxs,
+		EnumInfos:         file_control_v1_control_proto_enumTypes,
 		MessageInfos:      file_control_v1_control_proto_msgTypes,
 	}.Build()
 	File_control_v1_control_proto = out.File

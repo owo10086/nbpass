@@ -22,6 +22,7 @@ type controlSession struct {
 	done         chan struct{}
 	once         sync.Once
 	instance     string
+	changed      chan struct{}
 	eventsLogged bool
 }
 
@@ -92,7 +93,7 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 		return err
 	}
 	p := s.p
-	session := &controlSession{done: make(chan struct{})}
+	session := &controlSession{done: make(chan struct{}), changed: make(chan struct{}, 1)}
 	var id string
 	p.controlMu.Lock()
 	err = p.db.QueryRowContext(stream.Context(), "SELECT id FROM nodes WHERE token_hash = ?", digest).Scan(&id)
@@ -165,14 +166,20 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 				WHEN last_seen_at <= ? THEN last_seen_at ELSE ? END WHERE id = ?`, now.Add(-90*time.Second).UnixNano(), now.UnixNano(), id)
 		}
 	}()
-	report := first
-	for {
-		response, err := p.acceptReport(stream.Context(), id, digest, session, report)
-		if err != nil {
-			return err
-		}
+	firstResponse, err := p.acceptReport(stream.Context(), id, digest, session, first)
+	if err != nil {
+		return err
+	}
+	send := func(ack *controlpb.PanelMessage, full bool) error {
 		p.controlMu.Lock()
-		err = p.validControl(stream.Context(), id, digest, session)
+		err := p.validControl(stream.Context(), id, digest, session)
+		response := ack
+		if err == nil && full {
+			response, err = p.controlMessage(stream.Context(), id)
+			if response != nil && ack != nil {
+				response.AcknowledgedEventIds = ack.AcknowledgedEventIds
+			}
+		}
 		p.controlMu.Unlock()
 		if err != nil {
 			return err
@@ -180,24 +187,62 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 		sent := make(chan error, 1)
 		go func() { sent <- stream.Send(response) }()
 		timer := p.deps.Clock.NewTimer(15 * time.Second)
+		defer timer.Stop()
 		select {
 		case <-session.done:
-			timer.Stop()
 			return status.Error(codes.Unauthenticated, "控制会话已撤销")
 		case <-stream.Context().Done():
-			timer.Stop()
 			return stream.Context().Err()
 		case <-timer.C():
 			return status.Error(codes.DeadlineExceeded, "控制发送超时")
 		case err := <-sent:
-			timer.Stop()
+			return err
+		}
+	}
+	if err := send(firstResponse, true); err != nil {
+		return err
+	}
+	syncTimer := p.deps.Clock.NewTimer(60 * time.Second)
+	defer func() { syncTimer.Stop() }()
+	alive := p.deps.Clock.NewTimer(90 * time.Second)
+	defer func() { alive.Stop() }()
+	for {
+		select {
+		case <-session.done:
+			return status.Error(codes.Unauthenticated, "控制会话已撤销")
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case <-alive.C():
+			return status.Error(codes.DeadlineExceeded, "节点活性超时")
+		case <-syncTimer.C():
+			if err := send(nil, true); err != nil {
+				return err
+			}
+			syncTimer = p.deps.Clock.NewTimer(60 * time.Second)
+		case <-session.changed:
+			if err := send(nil, true); err != nil {
+				return err
+			}
+		case message := <-incoming:
+			if message.err != nil {
+				return message.err
+			}
+			response, err := p.acceptReport(stream.Context(), id, digest, session, message.report)
 			if err != nil {
 				return err
 			}
-		}
-		report, err = receive(90 * time.Second)
-		if err != nil {
-			return err
+			report := message.report
+			heartbeat := !report.ProbeOnly && !report.EventsOnly && report.AttemptedRevision == 0
+			if heartbeat {
+				alive.Stop()
+				alive = p.deps.Clock.NewTimer(90 * time.Second)
+			}
+			// 配置确认没有回包；探针/事件回包不附配置，避免相互触发同步。
+			if heartbeat || report.ProbeOnly || report.EventsOnly || len(response.AcknowledgedEventIds) > 0 {
+				if err := send(response, heartbeat); err != nil {
+					return err
+				}
+			}
 		}
 	}
 }
@@ -248,7 +293,11 @@ func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, sess
 		_, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO retired_control_instances(node_id, process_instance) VALUES(?, ?)", id, previous)
 	}
 	if err == nil {
-		_, err = tx.ExecContext(ctx, "UPDATE nodes SET process_instance = ? WHERE id = ?", first.ProcessInstance, id)
+		if previous != first.ProcessInstance {
+			_, err = tx.ExecContext(ctx, "UPDATE nodes SET process_instance=?,applied_revision=0,applied_digest='',attempted_revision=0,apply_error='' WHERE id=?", first.ProcessInstance, id)
+		} else {
+			_, err = tx.ExecContext(ctx, "UPDATE nodes SET process_instance=? WHERE id=?", first.ProcessInstance, id)
+		}
 	}
 	if err == nil {
 		err = tx.Commit()
@@ -296,35 +345,55 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, status.Error(codes.FailedPrecondition, "旧进程实例报告无效")
 	}
 	session.instance = report.ProcessInstance
-	if !report.EventsOnly {
+	if !report.EventsOnly && report.AttemptedRevision == 0 {
 		if err := p.storeProbe(ctx, id, session.instance, report.Probe); err != nil {
 			return nil, status.Error(codes.Unavailable, "探针存储暂不可用")
 		}
-	}
-	var desired, applied int64
-	if err := p.db.QueryRowContext(ctx, "SELECT desired_revision, applied_revision FROM nodes WHERE id = ?", id).Scan(&desired, &applied); err != nil {
-		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
 	acked, err := p.acceptEvents(ctx, id, session, report)
 	if err != nil {
 		return nil, err
 	}
-	if report.ProbeOnly || report.EventsOnly {
-		return &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired), AcknowledgedEventIds: acked}, nil
-	}
-	// 独立探针只存指标；IP、地区与活性由正常活性报告更新。
-	if err := p.recordNodeIP(ctx, id, report.PublicIpv4); err != nil {
+	var desired, applied, attempted int64
+	var appliedDigest, applyError string
+	if err := p.db.QueryRowContext(ctx, "SELECT desired_revision,applied_revision,applied_digest,attempted_revision,apply_error FROM nodes WHERE id=?", id).Scan(&desired, &applied, &appliedDigest, &attempted, &applyError); err != nil {
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
-	// 旧版本只能证明活性；不能降低已应用版本，也不能声明面板尚未发出的版本。
-	if report.AppliedRevision <= uint64(desired) && report.AppliedRevision > uint64(applied) {
-		applied = int64(report.AppliedRevision)
+	response := &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired), AcknowledgedEventIds: acked}
+	// 独立探针/事件只消费自己的载荷，不能确认或回退配置结果。
+	if report.ProbeOnly || report.EventsOnly {
+		return response, nil
 	}
-	_, err = p.db.ExecContext(ctx, `UPDATE nodes SET last_seen_at = ?, disconnected_at = NULL,
-		process_instance = ?, software_version = ?, applied_revision = ? WHERE id = ? AND token_hash = ?`,
-		p.deps.Clock.Now().UnixNano(), session.instance, report.SoftwareVersion, applied, id, digest)
+	heartbeat := report.AttemptedRevision == 0
+	if heartbeat {
+		if err := p.recordNodeIP(ctx, id, report.PublicIpv4); err != nil {
+			return nil, status.Error(codes.Unavailable, "存储暂不可用")
+		}
+		if _, err := p.db.ExecContext(ctx, "UPDATE nodes SET last_seen_at=?,disconnected_at=NULL,software_version=? WHERE id=? AND token_hash=?", p.deps.Clock.Now().UnixNano(), report.SoftwareVersion, id, digest); err != nil {
+			return nil, status.Error(codes.Unavailable, "存储暂不可用")
+		}
+	}
+	// 只有当前期望版本与摘要的确认才更新应用结果；旧版本只证明活性。
+	var expectedDigest string
+	err = p.db.QueryRowContext(ctx, "SELECT digest FROM node_snapshots WHERE node_id=?", id).Scan(&expectedDigest)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.Unavailable, "存储暂不可用")
+	}
+	if desired > 0 && expectedDigest != "" {
+		if report.AppliedRevision == uint64(desired) && report.AppliedDigest == expectedDigest && report.ApplyError == "" {
+			applied, appliedDigest, attempted, applyError = desired, expectedDigest, desired, ""
+		} else if report.AttemptedRevision == uint64(desired) && applied != desired && report.ApplyError != "" {
+			attempted, applyError = desired, report.ApplyError
+			if len(applyError) > 1024 {
+				applyError = applyError[:1024]
+			}
+		}
+	}
+	_, err = p.db.ExecContext(ctx, `UPDATE nodes SET applied_revision=?,applied_digest=?,attempted_revision=?,apply_error=? WHERE id=? AND token_hash=?`,
+		applied, appliedDigest, attempted, applyError, id, digest)
 	if err != nil {
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
-	return &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired), AcknowledgedEventIds: acked}, nil
+
+	return response, nil
 }

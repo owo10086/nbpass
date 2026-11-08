@@ -18,6 +18,9 @@ message NodeReport {
   uint32 protocol_version = 3;
   string software_version = 4;
   uint64 applied_revision = 5;
+  string applied_digest = 6;
+  uint64 attempted_revision = 7;
+  string apply_error = 8;
   ProbeSample probe = 14;
   // 探针独立上报不推进 10 秒活性时间，也不改变配置应用状态。
   bool probe_only = 15;
@@ -34,10 +37,11 @@ message ProbeSample {
   map<string, double> values = 2;
 }
 
-// revision 仅为接缝元数据，本票不下发或应用配置快照。
+// 配置为完整快照；缺失规则表示撤销，摘要覆盖版本与全部内容。
 message PanelMessage {
   uint32 protocol_version = 1;
   uint64 desired_revision = 2;
+  ConfigSnapshot snapshot = 3;
   repeated string acknowledged_event_ids = 15;
 }
 
@@ -56,3 +60,23 @@ message EventGap {
   string to = 3;
   string reason = 4;
 }
+
+message ConfigSnapshot {
+  uint64 revision = 1;
+  string digest = 2;
+  repeated ForwardRule rules = 3;
+}
+
+message ForwardRule {
+  string id = 1;
+  string entry_group_id = 2;
+  uint32 listen_port = 3;
+  string target_address = 4;
+  AddressFamily target_family = 5;
+  uint32 target_port = 6;
+  bool allow_private = 7;
+  RuleKind kind = 8;
+}
+
+enum AddressFamily { ADDRESS_FAMILY_UNSPECIFIED = 0; ADDRESS_FAMILY_IPV4 = 1; }
+enum RuleKind { RULE_KIND_UNSPECIFIED = 0; RULE_KIND_DIRECT = 1; }

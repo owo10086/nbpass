@@ -88,3 +88,81 @@ func TestEventMigrationPreservesVersionFiveProbeData(t *testing.T) {
 		t.Fatalf("分钟样本丢失: %d %v", samples, err)
 	}
 }
+
+// 配置确认只更新配置结果，不能刷新探针/IP/10 秒活性。
+func TestConfigAcknowledgementDoesNotAdvanceOtherReportState(t *testing.T) {
+	p := openDiskPanel(t, t.TempDir())
+	digest := sha256.Sum256([]byte("config-token"))
+	if _, err := p.db.Exec("INSERT INTO nodes(id,name,token_hash,created_at,last_seen_at,desired_revision,process_instance) VALUES('config','入口',?,0,123,7,'process')", digest[:]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.db.Exec("INSERT INTO node_snapshots(node_id,snapshot,digest) VALUES('config',X'','expected')"); err != nil {
+		t.Fatal(err)
+	}
+	session := &controlSession{done: make(chan struct{}), instance: "process"}
+	p.controls["config"] = session
+	report := &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "process", AttemptedRevision: 7, AppliedRevision: 7, AppliedDigest: "expected", PublicIpv4: "223.5.5.5", Probe: &controlpb.ProbeSample{Sequence: 1, Values: map[string]float64{"cpu_percent": 25}}}
+	if _, err := p.acceptReport(context.Background(), "config", digest[:], session, report); err != nil {
+		t.Fatal(err)
+	}
+	var lastSeen, applied, probes, regions int
+	if err := p.db.QueryRow("SELECT last_seen_at,applied_revision FROM nodes WHERE id='config'").Scan(&lastSeen, &applied); err != nil {
+		t.Fatal(err)
+	}
+	if lastSeen != 123 || applied != 7 {
+		t.Fatalf("配置确认串改活性或未推进配置: last_seen=%d applied=%d", lastSeen, applied)
+	}
+	if err := p.db.QueryRow("SELECT count(*) FROM probe_realtime WHERE node_id='config'").Scan(&probes); err != nil || probes != 0 {
+		t.Fatalf("配置确认串改探针: %d %v", probes, err)
+	}
+	if err := p.db.QueryRow("SELECT count(*) FROM node_regions WHERE node_id='config'").Scan(&regions); err != nil || regions != 0 {
+		t.Fatalf("配置确认串改地区: %d %v", regions, err)
+	}
+}
+
+func TestDirectMigrationPreservesVersionSixEventsAndCredentials(t *testing.T) {
+	dir := t.TempDir()
+	db, err := diskDependencies(dir).Persistence.Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for version, migration := range migrations[:6] {
+		if _, err := db.Exec(migration); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version = %d", version+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	digest := sha256.Sum256([]byte("preserved-token"))
+	if _, err := db.Exec("INSERT INTO nodes(id,name,token_hash,created_at) VALUES('existing','已有节点',?,0)", digest[:]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO events(node_id,source,event_id,type,occurred_at,received_at,config_revision,message) VALUES('existing','node','kept','sync_failed',1,2,3,'历史事件')"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p := openDiskPanel(t, dir)
+	var message string
+	var revision, count int
+	if err := p.db.QueryRow("SELECT message,config_revision FROM events WHERE event_id='kept'").Scan(&message, &revision); err != nil || message != "历史事件" || revision != 3 {
+		t.Fatalf("事件数据丢失: %q %d %v", message, revision, err)
+	}
+	if err := p.db.QueryRow("SELECT count(*) FROM nodes WHERE token_hash=?", digest[:]).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("节点凭据丢失: %d %v", count, err)
+	}
+	for _, query := range []string{
+		"INSERT INTO entry_groups(id,name) VALUES('g','入口组')",
+		"INSERT INTO entry_group_members VALUES('g','existing',0)",
+		"INSERT INTO forward_rules VALUES('r','规则','g','direct',12345,'8.8.8.8','ipv4',443,0,1)",
+		"INSERT INTO node_snapshots VALUES('existing',X'','digest')",
+		"UPDATE nodes SET applied_digest='digest',attempted_revision=1,apply_error='' WHERE id='existing'",
+	} {
+		if _, err := p.db.Exec(query); err != nil {
+			t.Fatalf("直连迁移不可用: %v", err)
+		}
+	}
+}

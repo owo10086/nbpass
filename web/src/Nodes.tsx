@@ -7,7 +7,7 @@ import { ProbeDetails } from './ProbeDetails';
 type NodeRow = NodeRegionFields & {
   id: string; name: string; status: string; status_label: string; connected: boolean;
   last_seen_at: string | null; maintenance_until: string | null;
-  desired_revision: number; applied_revision: number; config_status: string; software_version: string;
+  desired_revision: number; applied_revision: number; config_status: string; software_version: string; apply_error: string;
 };
 type Installation = { id: string; installation_command: string; ticket_expires_at: string };
 
@@ -79,7 +79,7 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
         { title: '国内检测点角色', key: 'checker', render: (_, row) => <Tag color={row.domestic_checker ? 'green' : 'default'}>{row.checker_label}</Tag> },
         { title: '状态', key: 'status', render: (_, row) => <Space orientation="vertical" size={2}><Tag color={{ online: 'green', offline: 'default', maintenance: 'blue', pending: 'orange' }[row.status]}>{row.status_label}</Tag>{row.status === 'online' && !row.connected && <Typography.Text type="secondary">控制连接已中断</Typography.Text>}{row.status === 'maintenance' && row.maintenance_until && <Typography.Text type="secondary">至 {new Date(row.maintenance_until).toLocaleTimeString()}</Typography.Text>}</Space> },
         { title: '最近活性', dataIndex: 'last_seen_at', render: (value: string | null) => value ? new Date(value).toLocaleString() : '—' },
-        { title: '配置版本', key: 'revision', render: (_, row) => <Space orientation="vertical" size={0}><span>期望 {row.desired_revision} / 已应用 {row.applied_revision}</span><Typography.Text type={row.config_status === '正常' ? 'success' : 'secondary'}>{row.config_status}</Typography.Text></Space> },
+        { title: '配置版本', key: 'revision', render: (_, row) => <Space orientation="vertical" size={0}><span>期望 {row.desired_revision} / 已应用 {row.applied_revision}</span><Typography.Text type={row.config_status === '正常' ? 'success' : 'secondary'}>{row.config_status}</Typography.Text>{row.apply_error && <Typography.Text type="danger">{row.apply_error}</Typography.Text>}</Space> },
         { title: '操作', key: 'actions', render: (_, row) => <Space wrap>
           <Button size="small" onClick={() => setRegionNode(row)}>地区与检测点</Button>
           <Button size="small" onClick={() => setProbeNode(row.id)}>查看探针</Button>
