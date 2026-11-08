@@ -11,7 +11,7 @@ import (
 )
 
 // compileTunnels 给入口只发相关出口证书/节点对凭据，给出口发私钥及允许的规则目标。
-// 节点 revision 不参与跨节点授权；票 09 可在 grants 上扩展独立代次与确认门禁。
+// 节点 revision 不参与跨节点授权；独立授权代次和应用确认控制入口门禁。
 func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwarding.Rule, members map[string][]string, compiled map[string]*controlpb.ConfigSnapshot) error {
 	groups, err := loadExitGroups(ctx, tx)
 	if err != nil {
@@ -20,6 +20,18 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 	byGroup := map[string]exitGroupView{}
 	for _, g := range groups {
 		byGroup[g.ID] = g
+	}
+	capable, err := authorizationCapabilities(ctx, tx)
+	if err != nil {
+		return err
+	}
+	generations := map[string]uint64{}
+	for _, r := range rules {
+		generation, err := updateAuthorizationGeneration(ctx, tx, r, members[r.EntryGroupID], byGroup[r.ExitGroupID].Members)
+		if err != nil {
+			return err
+		}
+		generations[r.ID] = generation
 	}
 	rows, err := tx.QueryContext(ctx, "SELECT node_id,address,listen_port,transport,server_name,certificate_pem,private_key_ciphertext FROM tunnel_exits ORDER BY node_id")
 	if err != nil {
@@ -47,6 +59,14 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 	if err != nil {
 		return err
 	}
+	legacy := map[[3]string]bool{}
+	if len(endpoints) > 0 {
+		legacy, err = p.legacyTunnelAuthorizations(ctx, tx, rules)
+		if err != nil {
+			return err
+		}
+	}
+	legacyReady := map[[2]string]bool{}
 	pairs := map[string]bool{}
 	seenGroups := map[string]bool{}
 	for _, r := range rules {
@@ -74,7 +94,14 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 					server.Peers = append(server.Peers, &controlpb.TunnelPeer{EntryId: entry, Credential: token})
 					pairs[pairKey] = true
 				}
-				server.Grants = append(server.Grants, &controlpb.TunnelGrant{EntryId: entry, Rule: r.Config()})
+				if capable[entry] && capable[exit] {
+					config := r.Config()
+					config.AuthorizationGeneration = generations[r.ID]
+					server.Grants = append(server.Grants, &controlpb.TunnelGrant{EntryId: entry, Rule: config})
+				} else if legacy[[3]string{exit, entry, r.ID}] {
+					server.Grants = append(server.Grants, &controlpb.TunnelGrant{EntryId: entry, Rule: r.Config()})
+					legacyReady[[2]string{entry, r.ID}] = true
+				}
 			}
 			if !seenGroups[groupKey] {
 				compiled[entry].ExitGroups = append(compiled[entry].ExitGroups, cg)
@@ -82,7 +109,7 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 			}
 		}
 	}
-	return nil
+	return gateTunnelRules(ctx, tx, compiled, capable, generations, byGroup, legacyReady)
 }
 func (p *Panel) pairCredential(ctx context.Context, tx *sql.Tx, entry, exit string) (string, error) {
 	name := "tunnel-pair:" + entry + ":" + exit
@@ -115,24 +142,4 @@ func (p *Panel) decodeSnapshot(id string, data []byte, encrypted bool, snapshot 
 		}
 	}
 	return proto.Unmarshal(data, snapshot)
-}
-
-func tunnelEntries(ctx context.Context, tx *sql.Tx, exit string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT em.node_id FROM forward_rules r
- JOIN entry_group_members em ON em.group_id=r.entry_group_id
- JOIN exit_group_members xm ON xm.group_id=r.exit_group_id
- WHERE r.enabled=1 AND r.kind='tunnel' AND xm.node_id=?`, exit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var entries []string
-	for rows.Next() {
-		var entry string
-		if err := rows.Scan(&entry); err != nil {
-			return nil, err
-		}
-		entries = append(entries, entry)
-	}
-	return entries, rows.Err()
 }

@@ -22,7 +22,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"nbpass/internal/controlpb"
-	"nbpass/internal/eventlog"
+	"nbpass/internal/dnswatch"
 	"nbpass/internal/forwarding"
 	"nbpass/internal/probe"
 	"nbpass/internal/publicip"
@@ -51,6 +51,11 @@ type Config struct {
 }
 
 type Dependencies struct {
+	SelfCheckLookup     func(context.Context, string) ([]string, error)
+	SelfCheckDial       func(context.Context, string) (net.Conn, error)
+	SelfCheckStore      SelfCheckStore
+	selfChecks          *selfCheckRunner
+	DNSWatchLookup      func(context.Context, string, dnswatch.Resolver) ([]string, error)
 	RotationStore       RotationStore
 	RotationIPv4Sources [2]func(context.Context) (string, error)
 	RotationLocalIPv4   func(context.Context) ([]string, error)
@@ -64,12 +69,14 @@ type Dependencies struct {
 	RootCAs             *x509.CertPool
 	DialContext         func(context.Context, string) (net.Conn, error)
 	PublicIPv4          func(context.Context) (string, error)
+	Traffic             *TrafficQueue
+	trafficUpdates      <-chan struct{}
 	Events              *EventQueue
 	Forwarding          forwarding.Dependencies
 	ConfigStore         ConfigStore
 }
 
-func Run(ctx context.Context, config Config, deps Dependencies) error {
+func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 	if err := deps.Forwarding.Limits.Validate(); err != nil {
 		return err
 	}
@@ -79,6 +86,9 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 	if deps.Clock == nil || deps.Store == nil || deps.Random == nil {
 		return errors.New("节点外部依赖不完整")
+	}
+	if deps.DNSWatchLookup == nil {
+		deps.DNSWatchLookup = (dnswatch.Client{}).Lookup
 	}
 	if deps.PublicIPv4 == nil {
 		deps.PublicIPv4 = defaultPublicIPv4.Query
@@ -99,6 +109,9 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 	if deps.RotationHTTP == nil {
 		deps.RotationHTTP = (rotation.HTTPExecutor{}).Do
+	}
+	if deps.SelfCheckStore == nil {
+		deps.SelfCheckStore, _ = deps.Store.(SelfCheckStore)
 	}
 	started := deps.Clock.Now()
 	address := u.Host
@@ -168,6 +181,9 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 		deps.Forwarding.Now = deps.Clock.Now
 	}
 	deps.Forwarding.NodeID = credential.NodeID
+	if deps.Forwarding.Clock == nil {
+		deps.Forwarding.Clock = deps.Clock
+	}
 	if deps.ConfigStore == nil {
 		deps.ConfigStore, _ = deps.Store.(ConfigStore)
 	}
@@ -184,7 +200,16 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 		deps.Forwarding.Clock = deps.Clock
 	}
 	engine := forwarding.NewEngine(deps.Forwarding)
-	defer engine.Close()
+	report := &controlpb.NodeReport{DnsWatchCapable: true, TunnelAuthorizationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
+	defer func() {
+		engine.Close()
+		if deps.Traffic != nil {
+			if saveErr := deps.Traffic.Capture(context.WithoutCancel(ctx), report.ProcessInstance, engine.Traffic()); saveErr != nil && runErr == nil {
+				// 转发完全停止后落盘，避免遗漏最后一轮成功写入的字节。
+				runErr = errors.New("节点最后一轮流量持久化失败")
+			}
+		}
+	}()
 	if err := openConfigCache(ctx, credential, &deps, engine); err != nil {
 		return err
 	}
@@ -203,12 +228,38 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 			deps.rotations.wg.Wait()
 		}
 	}()
-	report := &controlpb.NodeReport{NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
+	selfCtx, stopSelfChecks := context.WithCancel(ctx)
+	deps.selfChecks, err = openSelfChecks(selfCtx, deps)
+	if err != nil {
+		stopSelfChecks()
+		return errors.New("无法打开自测缓存")
+	}
+	defer func() {
+		stopSelfChecks()
+		if deps.selfChecks != nil {
+			deps.selfChecks.wg.Wait()
+		}
+	}()
 	state := engine.State()
 	report.AttemptedRevision, report.AttemptedDigest, report.RuleResults = state.HighestRevision, state.HighestDigest, state.Results
 	report.AppliedRevision, report.AppliedDigest = engine.Applied()
 	report.ApplyError = engine.ApplyError()
 	report.RevocationsApplied = state.HighestRevision > 0
+	if deps.Traffic == nil {
+		store, _ := deps.Store.(TrafficStore)
+		deps.Traffic, err = OpenTrafficQueue(ctx, store, deps.Clock)
+		if err != nil {
+			return errors.New("无法打开节点流量队列")
+		}
+	}
+	trafficCtx, stopTraffic := context.WithCancel(ctx)
+	trafficUpdates, trafficDone := make(chan struct{}, 1), make(chan struct{})
+	deps.trafficUpdates = trafficUpdates
+	go sampleTraffic(trafficCtx, deps.Traffic, report.ProcessInstance, engine, trafficUpdates, trafficDone)
+	defer func() {
+		stopTraffic()
+		<-trafficDone
+	}()
 	probeCtx, stopProbe := context.WithCancel(ctx)
 	defer stopProbe()
 	updates := make(chan probeUpdate, 1)
@@ -239,6 +290,16 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	defer cancel()
 	onlineCtx, markOffline := context.WithCancel(streamCtx)
 	defer markOffline()
+	var dnsJobs chan<- *controlpb.DNSWatchTask
+	var dnsResults <-chan *controlpb.DNSWatchResult
+	var stopDNS func()
+	defer func() {
+		if stopDNS != nil {
+			stopDNS()
+		}
+	}()
+	dnsSeen := map[string]bool{}
+	var dnsResult *controlpb.DNSWatchResult
 	stream, err := service.Connect(streamCtx)
 	if err != nil {
 		return err
@@ -266,9 +327,20 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	}()
 	// 单独追踪事件在途批次；无 ACK 的主动快照或探针回包不能消费它。
 	pending := map[string]bool{}
-	pendingFull := false
 	drainEvents := false
-	var response, eventAck timing.Timer
+	var response, eventAck, selfAck timing.Timer
+	var selfAckC <-chan time.Time
+	selfPending := map[string]bool{}
+	drainSelf := true
+	pendingTraffic := map[string]bool{}
+	drainTraffic := deps.Traffic != nil
+	var trafficAck timing.Timer
+	var trafficAckC <-chan time.Time
+	defer func() {
+		if trafficAck != nil {
+			trafficAck.Stop()
+		}
+	}()
 	var responseC, eventAckC <-chan time.Time
 	defer func() {
 		if response != nil {
@@ -276,6 +348,9 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		}
 		if eventAck != nil {
 			eventAck.Stop()
+		}
+		if selfAck != nil {
+			selfAck.Stop()
 		}
 	}()
 	type reportKind int
@@ -285,11 +360,42 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		eventReport
 		configReport
 		rotationReport
+		selfCheckReport
+		dnsReport
+		trafficReport
 	)
 	send := func(kind reportKind, sample *controlpb.ProbeSample) error {
 		outgoing := proto.Clone(report).(*controlpb.NodeReport)
 		outgoing.Probe, outgoing.ProbeOnly, outgoing.EventsOnly = sample, kind == probeReport, kind == eventReport
 		outgoing.Events, outgoing.PublicIpv4 = nil, ""
+		outgoing.SelfCheckOnly = kind == selfCheckReport
+		outgoing.SelfCheckResults = nil
+		if kind == selfCheckReport {
+			if len(selfPending) > 0 {
+				return nil
+			}
+			outgoing.SelfCheckResults = deps.selfChecks.batch()
+			if len(outgoing.SelfCheckResults) == 0 {
+				return nil
+			}
+			for _, data := range outgoing.SelfCheckResults {
+				var round struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal(data, &round); err != nil {
+					return err
+				}
+				selfPending[round.ID] = true
+			}
+			selfAck = clock.NewTimer(15 * time.Second)
+			selfAckC = selfAck.C()
+		}
+		outgoing.DnsWatchOnly = kind == dnsReport
+		outgoing.DnsWatchResults = nil
+		if kind == dnsReport {
+			outgoing.DnsWatchResults = []*controlpb.DNSWatchResult{dnsResult}
+		}
+		outgoing.TrafficOnly, outgoing.Traffic = kind == trafficReport, nil
 		outgoing.Rotation = nil
 		outgoing.RotationOnly = kind == rotationReport
 		if kind == rotationReport {
@@ -302,7 +408,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		} else if err := limitConfigReport(outgoing); err != nil {
 			return err
 		}
-		if kind == probeReport || kind == eventReport || kind == rotationReport {
+		if kind == probeReport || kind == eventReport || kind == rotationReport || kind == selfCheckReport || kind == dnsReport || kind == trafficReport {
 			outgoing.AppliedRevision, outgoing.AppliedDigest = 0, ""
 		}
 		if kind == heartbeatReport {
@@ -323,7 +429,6 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				outgoing.Events = append(outgoing.Events, e.Proto())
 				pending[e.ID] = true
 			}
-			pendingFull = len(batch) == eventlog.MaxBatch
 			if len(batch) > 0 {
 				eventAck = clock.NewTimer(15 * time.Second)
 				eventAckC = eventAck.C()
@@ -332,11 +437,22 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		if kind == eventReport && len(outgoing.Events) == 0 {
 			return nil
 		}
+		if kind == trafficReport {
+			outgoing.Traffic = deps.Traffic.Batch()
+			if len(outgoing.Traffic) == 0 {
+				return nil
+			}
+			for _, s := range outgoing.Traffic {
+				pendingTraffic[trafficAckKey(s.ProcessInstance, s.Sequence)] = true
+			}
+			trafficAck = clock.NewTimer(15 * time.Second)
+			trafficAckC = trafficAck.C()
+		}
 		// 发送串行，传输只持有本轮不可变副本；接收持续独立运行。
 		result := make(chan error, 1)
-		go func() { result <- stream.Send(outgoing) }()
 		timer := clock.NewTimer(15 * time.Second)
 		defer timer.Stop()
+		go func() { result <- stream.Send(outgoing) }()
 		select {
 		case err := <-result:
 			if err != nil {
@@ -347,7 +463,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		case <-timer.C():
 			return errors.New("控制发送超时")
 		}
-		if kind != configReport && responseC == nil {
+		if kind != configReport && kind != trafficReport && responseC == nil {
 			response = clock.NewTimer(15 * time.Second)
 			responseC = response.C()
 		}
@@ -356,6 +472,10 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	var rotationWake <-chan struct{}
 	if deps.rotations != nil {
 		rotationWake = deps.rotations.wake
+	}
+	var selfWake <-chan struct{}
+	if deps.selfChecks != nil {
+		selfWake = deps.selfChecks.wake
 	}
 	nextHeartbeat := clock.Now().Add(10 * time.Second)
 	if err := send(heartbeatReport, nil); err != nil {
@@ -400,15 +520,35 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			}
 		default:
 		}
+		if drainSelf && len(selfPending) == 0 {
+			drainSelf = false
+			if err := send(selfCheckReport, nil); err != nil {
+				return err
+			}
+		}
 		if drainEvents && len(pending) == 0 {
 			drainEvents = false
 			if err := send(eventReport, nil); err != nil {
 				return err
 			}
 		}
+		if drainTraffic && len(pendingTraffic) == 0 {
+			drainTraffic = false
+			if err := send(trafficReport, nil); err != nil {
+				return err
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-selfAckC:
+			return errors.New("自测确认超时")
+		case <-selfWake:
+			drainSelf = true
+		case dnsResult = <-dnsResults:
+			if err := send(dnsReport, nil); err != nil {
+				return err
+			}
 		case <-rotationWake:
 			if err := send(rotationReport, nil); err != nil {
 				return err
@@ -417,6 +557,13 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			return errors.New("控制响应超时")
 		case <-eventAckC:
 			return errors.New("事件确认超时")
+		case <-trafficAckC:
+			// 只重发流量，不清除其他报告的确认/超时状态。
+			pendingTraffic = map[string]bool{}
+			trafficAckC = nil
+			drainTraffic = true
+		case <-deps.trafficUpdates:
+			drainTraffic = true
 		case <-heartbeat.C():
 		case update := <-updates:
 			if err := sendProbe(update); err != nil {
@@ -430,10 +577,50 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			if m.ProtocolVersion != ProtocolVersion {
 				return errors.New("控制协议不兼容")
 			}
+			if m.TrafficOnly {
+				matched := make([]*controlpb.TrafficAck, 0, len(m.AcknowledgedTraffic))
+				for _, a := range m.AcknowledgedTraffic {
+					if a != nil && pendingTraffic[trafficAckKey(a.ProcessInstance, a.Sequence)] {
+						matched = append(matched, a)
+					}
+				}
+				// 累计报告可能超时重传；迟到或重复 ACK 只忽略，不重置控制流。
+				if len(matched) == 0 {
+					continue
+				}
+				saveErr := deps.Traffic.Ack(ctx, matched)
+				for _, a := range matched {
+					delete(pendingTraffic, trafficAckKey(a.ProcessInstance, a.Sequence))
+				}
+				if len(pendingTraffic) == 0 {
+					trafficAck.Stop()
+					trafficAckC = nil
+					drainTraffic = saveErr == nil
+				}
+				continue
+			}
 			if response != nil {
 				response.Stop()
 			}
 			responseC = nil
+			if len(m.AcknowledgedSelfCheckIds) > 0 {
+				for _, id := range m.AcknowledgedSelfCheckIds {
+					if !selfPending[id] {
+						return errors.New("自测确认不属于在途批次")
+					}
+				}
+				if err := deps.selfChecks.ack(ctx, m.AcknowledgedSelfCheckIds); err != nil {
+					return err
+				}
+				for _, id := range m.AcknowledgedSelfCheckIds {
+					delete(selfPending, id)
+				}
+				if len(selfPending) == 0 {
+					selfAck.Stop()
+					selfAckC = nil
+					drainSelf = true
+				}
+			}
 			if len(m.AcknowledgedEventIds) > 0 {
 				for _, id := range m.AcknowledgedEventIds {
 					if !pending[id] {
@@ -449,7 +636,29 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				if len(pending) == 0 {
 					eventAck.Stop()
 					eventAckC = nil
-					drainEvents = drainEvents || pendingFull
+					// 重启可恢复未满在途批次；确认后仍须尝试后续事件。
+					drainEvents = true
+				}
+			}
+			if len(dnsSeen) > 1024 {
+				dnsSeen = map[string]bool{}
+			}
+			if len(m.DnsWatchTasks) > 0 && dnsJobs == nil {
+				dnsJobs, dnsResults, stopDNS = startDNSWatchRunner(streamCtx, deps)
+			}
+			for _, task := range m.DnsWatchTasks {
+				if task == nil || dnsSeen[task.TaskId] || len(task.TaskId) != 43 || !clock.Now().Before(time.Unix(0, task.ExpiresAt)) {
+					continue
+				}
+				resolver := dnswatch.Resolver{Kind: "dns", Address: task.Resolver}
+				domain, err := dnswatch.Domain(task.Domain)
+				if resolver.Validate() != nil || err != nil || domain != task.Domain {
+					continue
+				}
+				select {
+				case dnsJobs <- task:
+					dnsSeen[task.TaskId] = true
+				default:
 				}
 			}
 			if m.RotationCommand != nil {
@@ -468,7 +677,13 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			}
 			report.AttemptedRevision = snapshot.Revision
 			report.AttemptedDigest = snapshot.Digest
-			err := engine.ApplyContext(onlineCtx, snapshot)
+			err := forwarding.ValidateSnapshot(snapshot)
+			if err == nil {
+				err = deps.selfChecks.apply(ctx, snapshot.SelfCheckConfig, snapshot.Revision)
+			}
+			if err == nil {
+				err = engine.ApplyContext(onlineCtx, snapshot)
+			}
 			report.AppliedRevision, report.AppliedDigest = engine.Applied()
 			state := engine.State()
 			report.RuleResults = state.Results

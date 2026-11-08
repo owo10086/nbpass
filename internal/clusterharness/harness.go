@@ -20,21 +20,23 @@ import (
 
 	"google.golang.org/grpc"
 
+	"nbpass/internal/dnswatch"
 	"nbpass/internal/panel"
 	"nbpass/internal/platform"
 )
 
 type Harness struct {
-	t             testing.TB
-	Dir           string
-	Clock         *Clock
-	Dependencies  panel.Dependencies
-	Panel         *panel.Panel
-	Server        *httptest.Server
-	PublicOrigin  string
-	Control       *httptest.Server
-	controlServer atomic.Pointer[grpc.Server]
-	ports         portReservations
+	t                      testing.TB
+	Dir                    string
+	Clock                  *Clock
+	Dependencies           panel.Dependencies
+	Panel                  *panel.Panel
+	Server                 *httptest.Server
+	PublicOrigin           string
+	Control                *httptest.Server
+	controlServer          atomic.Pointer[grpc.Server]
+	repeatRotationCommands atomic.Bool
+	ports                  portReservations
 }
 
 type Client struct {
@@ -47,7 +49,10 @@ func New(t testing.TB, options ...func(*panel.Dependencies)) *Harness {
 	h := &Harness{t: t, Dir: t.TempDir(), Clock: &Clock{now: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)}}
 	t.Cleanup(h.ports.close)
 	h.Dependencies = panel.Dependencies{
-		Clock:       h.Clock,
+		Clock: h.Clock,
+		DNSWatchLookup: func(context.Context, string, dnswatch.Resolver) ([]string, error) {
+			return nil, errors.New("测试台未配置 DoH")
+		},
 		Persistence: platform.SQLite{Path: filepath.Join(h.Dir, "panel.db")},
 		KeyFile:     platform.LocalKeyFile{Path: filepath.Join(h.Dir, "panel.key")},
 		Random:      rand.Reader,
@@ -84,7 +89,7 @@ func (h *Harness) start() error {
 		return err
 	}
 	h.Panel = core
-	control := grpc.NewServer(grpc.MaxRecvMsgSize(64<<10), grpc.MaxSendMsgSize(64<<10))
+	control := grpc.NewServer(grpc.MaxRecvMsgSize(64<<10), grpc.MaxSendMsgSize(64<<10), grpc.StreamInterceptor(h.repeatControlDelivery))
 	core.RegisterControl(control)
 	h.controlServer.Store(control)
 	server.Config.Handler = core.Handler()

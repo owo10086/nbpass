@@ -90,6 +90,11 @@ var migrations = []string{
 	offlineMigration + telegramMigration,
 	rotationMigration,
 	configResultsMigration,
+	selfCheckMigration,
+	dnsWatchMigration,
+	tunnelAuthorizationMigration,
+	trafficMigration,
+	rotationFreezeMigration,
 	entryManualSwitchMigration,
 }
 

@@ -99,6 +99,9 @@ func (p *Panel) commitForwarding(ctx context.Context, change func(*sql.Tx) error
 	}
 	changed, err := p.compileSnapshots(ctx, tx)
 	if err == nil {
+		err = recordTrafficSources(ctx, tx)
+	}
+	if err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {
@@ -244,7 +247,12 @@ func (p *Panel) listRules(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "存储暂不可用")
 		return
 	}
-	respond(w, 200, map[string]any{"rules": rules})
+	views, err := p.rulesWithTraffic(r.Context(), rules)
+	if err != nil {
+		problem(w, 503, "存储暂不可用")
+		return
+	}
+	respond(w, 200, map[string]any{"rules": views})
 }
 
 func (p *Panel) ruleSyncViews(ctx context.Context) ([]ruleView, error) {

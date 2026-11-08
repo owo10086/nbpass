@@ -66,7 +66,8 @@ func TestEntryMembersAllListenDirectAndTunnelAndRemovalRevokes(t *testing.T) {
 				eg := c.Do("POST", "/api/exit-groups", map[string]any{"name": "出口组", "members": []string{exitID}, "strategy": "primary_backup"}, 201)
 				body["kind"], body["exit_group_id"] = "tunnel", eg["id"]
 			}
-			c.Do("POST", "/api/rules", body, 201)
+			ruleID := c.Do("POST", "/api/rules", body, 201)["id"].(string)
+			awaitRule(t, c, ruleID, "正常")
 			for i, id := range ids {
 				awaitRevision(t, c, id, 0)
 				tcpExchange(t, ports[i], "M:")
@@ -80,6 +81,7 @@ func TestEntryMembersAllListenDirectAndTunnelAndRemovalRevokes(t *testing.T) {
 			saveMembers(c, gid, 200, ids[0])
 			awaitRevision(t, c, ids[1], before)
 			assertRevoked(t, ports[1], existing)
+			awaitRule(t, c, ruleID, "正常")
 			tcpExchange(t, ports[0], "M:")
 		})
 	}
@@ -117,7 +119,7 @@ func TestEntryMembersKeepPortLoopAndDeletionChecks(t *testing.T) {
 	c.Do("DELETE", "/api/entry-groups/"+gid, nil, 409)
 }
 
-// 出口被确定性地阻塞在 bind 前；入口必须报告未就绪并拒绝新连接，
+// 出口被确定性地阻塞在 bind 前；规则必须报告未同步且入口不监听，
 // 出口确认后由控制消息重试，不依赖心跳推进或业务连接重试。
 func TestEntryMembersWaitForExitAuthorizationBeforeListening(t *testing.T) {
 	h, c := nodeBrowser(t)
@@ -163,20 +165,30 @@ func TestEntryMembersWaitForExitAuthorizationBeforeListening(t *testing.T) {
 	gid := c.Do("POST", "/api/entry-groups", map[string]any{"name": "多成员", "members": ids}, 201)["id"].(string)
 	body := directBody(gid, 29001, "127.0.0.1", echoTarget(t, "R:"))
 	body["kind"], body["exit_group_id"] = "tunnel", eg["id"]
-	c.Do("POST", "/api/rules", body, 201)
+	ruleID := c.Do("POST", "/api/rules", body, 201)["id"].(string)
 	for i, id := range ids {
 		awaitNode(t, c, id, func(row map[string]any) bool {
-			return row["desired_revision"].(float64) > 0 && (row["config_status"] == "正常" || row["config_status"] == "同步失败")
+			return row["desired_revision"].(float64) > 0 && row["desired_revision"] == row["applied_revision"]
 		})
-		row := nodeRow(t, c, id)
-		if row["config_status"] != "同步失败" || row["apply_error"] == "" {
-			t.Fatalf("出口未就绪却确认了入口监听: %v", row)
-		}
 		if listens[i].Load() != 0 {
 			t.Fatal("出口授权前启动了业务监听")
 		}
 	}
+	// 票 09 从完整快照中门禁掉未确认的规则，节点可以确认空快照；
+	// 必须逐成员核对规则仍未同步，不能把节点版本确认当作入口规则成功。
+	waiting := awaitRule(t, c, ruleID, "未同步")
+	members := waiting["sync_members"].([]any)
+	if len(members) != len(ids) {
+		t.Fatalf("门禁丢失入口成员: %v", waiting)
+	}
+	for _, value := range members {
+		member := value.(map[string]any)
+		if member["sync_status"] != "未同步" || member["applied_revision"] != float64(0) {
+			t.Fatalf("出口未确认却报告规则已应用: %v", member)
+		}
+	}
 	unblock()
+	awaitRule(t, c, ruleID, "正常")
 	awaitRevision(t, c, exitID, 0)
 	for i, id := range ids {
 		awaitRevision(t, c, id, 0)

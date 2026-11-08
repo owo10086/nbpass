@@ -32,13 +32,20 @@ type tunnelAuth struct {
 	Credential string `json:"credential"`
 }
 type tunnelRequest struct {
-	RuleID string `json:"rule_id"`
-	// Check 只核验出口当前授权，不拨目标、不创建业务流。
+	RuleID        string                  `json:"rule_id"`
+	EntryID       string                  `json:"entry_id,omitempty"`
+	Generation    uint64                  `json:"generation,omitempty"`
+	TargetAddress string                  `json:"target_address,omitempty"`
+	TargetPort    uint32                  `json:"target_port,omitempty"`
+	TargetFamily  controlpb.AddressFamily `json:"target_family,omitempty"`
+	// Check 仅核验同一逐流授权，不拨目标、不创建业务流。
 	Check *controlpb.ForwardRule `json:"check,omitempty"`
 }
 type tunnelResult struct {
 	OK    bool `json:"ok"`
 	Ready bool `json:"ready,omitempty"`
+	// 仅认证响应声明预检能力；旧节点缺省不支持。
+	CheckSupported bool `json:"check_supported,omitempty"`
 }
 
 // 有界长度帧精确消费控制消息，不会吞掉紧随其后的业务字节。
@@ -81,11 +88,17 @@ func yamuxConfig() *yamux.Config {
 	return c
 }
 
+// 能力绑定到经过 TLS/凭据认证的具体会话，重连时重新协商。
+type tunnelSession struct {
+	*yamux.Session
+	checkSupported bool
+}
+
 // 每个入口—出口复用一个 WSS/yamux 会话。变更只淘汰对应出口会话。
 type tunnelClient struct {
 	mu       sync.Mutex
 	endpoint *controlpb.TunnelEndpoint
-	session  *yamux.Session
+	session  *tunnelSession
 	engine   *Engine
 	closed   bool
 }
@@ -98,7 +111,7 @@ func (c *tunnelClient) close() {
 		c.session.Close()
 	}
 }
-func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
+func (c *tunnelClient) getSession(ctx context.Context) (*tunnelSession, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -164,20 +177,22 @@ func (c *tunnelClient) getSession(ctx context.Context) (*yamux.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.session = session
+	c.session = &tunnelSession{Session: session, checkSupported: result.CheckSupported}
 	ok = true
 	c.engine.tunnelConnections.Add(1)
 	go func() { <-session.CloseChan(); c.engine.tunnelConnections.Add(^uint64(0)) }()
-	return session, nil
+	return c.session, nil
 }
-func (c *tunnelClient) dial(ctx context.Context, ruleID string) (net.Conn, error) {
+func (c *tunnelClient) dial(ctx context.Context, rule *controlpb.ForwardRule) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	return c.open(ctx, tunnelRequest{RuleID: ruleID})
+	return c.open(ctx, streamAuthorization(c.endpoint.EntryId, rule))
 }
 
 func (c *tunnelClient) ready(ctx context.Context, rule *controlpb.ForwardRule) error {
-	stream, err := c.open(ctx, tunnelRequest{RuleID: rule.Id, Check: rule})
+	request := streamAuthorization(c.endpoint.EntryId, rule)
+	request.Check = rule
+	stream, err := c.open(ctx, request)
 	if stream != nil {
 		stream.Close()
 	}
@@ -193,6 +208,11 @@ func (c *tunnelClient) open(ctx context.Context, request tunnelRequest) (net.Con
 	stop()
 	if err != nil {
 		return nil, err
+	}
+	if request.Check != nil && !session.checkSupported {
+		// 旧出口不识别 Check，发送它会误创建业务流。旧端沿用票09的
+		// 面板授权确认门禁/既有零代次兼容；新业务流仍由出口逐流授权。
+		return nil, ctx.Err()
 	}
 	stream, err := session.OpenStream()
 	if err != nil {
@@ -334,7 +354,7 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		writeTunnelMessage(conn, tunnelResult{})
 		return
 	}
-	if err := writeTunnelMessage(conn, tunnelResult{OK: true}); err != nil {
+	if err := writeTunnelMessage(conn, tunnelResult{OK: true, CheckSupported: true}); err != nil {
 		return
 	}
 	conn.SetDeadline(time.Time{})
@@ -366,6 +386,8 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (s *tunnelServer) serveStream(ctx context.Context, stream net.Conn, auth tunnelAuth) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	defer stream.Close()
 	stream.SetDeadline(time.Now().Add(10 * time.Second))
 	stop := context.AfterFunc(ctx, func() { stream.Close() })
@@ -374,15 +396,28 @@ func (s *tunnelServer) serveStream(ctx context.Context, stream net.Conn, auth tu
 	if err := readTunnelMessage(stream, &request); err != nil || request.RuleID == "" {
 		return
 	}
-	rule := s.authorized(auth.EntryID, auth.Credential, request.RuleID)
-	if rule == nil || request.Check != nil && !proto.Equal(rule, request.Check) {
+	check := request.Check != nil
+	if check {
+		if request.RuleID != request.Check.Id {
+			writeTunnelMessage(stream, tunnelResult{})
+			return
+		}
+		// 保留票22的规则对象线格式；身份取自认证会话，代次与目标
+		// 转为同一逐流授权，监听端口等元数据不参与跨节点授权。
+		request = streamAuthorization(auth.EntryID, request.Check)
+	}
+	rule := s.authorizeStream(auth, request)
+	if rule == nil {
 		writeTunnelMessage(stream, tunnelResult{})
 		return
 	}
-	if request.Check != nil {
+	if check {
 		writeTunnelMessage(stream, tunnelResult{OK: true, Ready: true})
 		return
 	}
+	// 在目标拨号前开始复查，撤销同样取消尚未完成的 DNS/拨号。
+	stopAuthorization := s.watchStreamAuthorization(ctx, cancel, stream, auth, request)
+	defer stopAuthorization()
 	// 本机入口已计量的流不重复计数；其他入口交来的业务在出口计一次。
 	if auth.EntryID != s.engine.deps.NodeID {
 		s.engine.businessConnections.Add(1)
@@ -395,6 +430,10 @@ func (s *tunnelServer) serveStream(ctx context.Context, stream net.Conn, auth tu
 		return
 	}
 	defer target.Close()
+	if ctx.Err() != nil || s.authorizeStream(auth, request) == nil {
+		writeTunnelMessage(stream, tunnelResult{})
+		return
+	}
 	if err := writeTunnelMessage(stream, tunnelResult{OK: true}); err != nil {
 		return
 	}

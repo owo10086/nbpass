@@ -233,7 +233,7 @@ func TestCachedTunnelPortConflictRejectedBeforeListening(t *testing.T) {
 }
 
 func TestTunnelApplyWaitsForMatchingExitGrant(t *testing.T) {
-	for _, mode := range []string{"missing_grant", "old_target"} {
+	for _, mode := range []string{"missing_grant", "old_target", "old_generation", "wrong_entry"} {
 		t.Run(mode, func(t *testing.T) {
 			deps := Dependencies{}
 			s := cachedTunnelFixture(t, &deps)
@@ -241,8 +241,13 @@ func TestTunnelApplyWaitsForMatchingExitGrant(t *testing.T) {
 			exitConfig.Rules, exitConfig.ExitGroups = nil, nil
 			if mode == "missing_grant" {
 				exitConfig.TunnelServer.Grants = nil
-			} else {
+			} else if mode == "old_target" {
 				exitConfig.TunnelServer.Grants[0].Rule.TargetAddress = "127.0.0.2"
+			} else if mode == "old_generation" {
+				exitConfig.TunnelServer.Grants[0].Rule.AuthorizationGeneration = 1
+			} else {
+				exitConfig.TunnelServer.Grants[0].EntryId = "other-entry"
+				exitConfig.TunnelServer.Peers = append(exitConfig.TunnelServer.Peers, &controlpb.TunnelPeer{EntryId: "other-entry", Credential: strings.Repeat("b", 43)})
 			}
 			exitConfig.Digest = SnapshotDigest(exitConfig)
 			var targetDials atomic.Int32
@@ -376,5 +381,39 @@ func TestTunnelApplyUnavailableExitDoesNotStarveHealthyExit(t *testing.T) {
 	results := entry.State().Results
 	if len(results) != 2 || results[0].ApplyError == "" || results[1].ApplyError != "" || results[1].AppliedRevision != s.Revision {
 		t.Fatalf("不可达出口阻止了正常出口的规则应用: %v", results)
+	}
+}
+
+// 监听端口等节点配置元数据不属于逐流授权；同代次与目标
+// 已获授权时，预检不能要求两端整条规则 protobuf 完全相等。
+func TestTunnelReadinessUsesGenerationAndTargetRatherThanListenerMetadata(t *testing.T) {
+	deps := Dependencies{}
+	snapshot := cachedTunnelFixture(t, &deps)
+	snapshot.Rules[0].AuthorizationGeneration = 7
+	exitConfig := proto.Clone(snapshot).(*controlpb.ConfigSnapshot)
+	exitConfig.Rules, exitConfig.ExitGroups = nil, nil
+	exitConfig.TunnelServer.Grants[0].Rule.ListenPort = reserveTestPort(t, &deps)
+	exitConfig.Digest = SnapshotDigest(exitConfig)
+	var targetDials atomic.Int32
+	exit := NewEngine(Dependencies{Listen: deps.Listen, DialTarget: func(context.Context, string) (net.Conn, error) {
+		targetDials.Add(1)
+		return nil, errors.New("预检不得拨号目标")
+	}})
+	defer exit.Close()
+	if err := exit.Apply(exitConfig); err != nil {
+		t.Fatal(err)
+	}
+	snapshot.TunnelServer = nil
+	snapshot.Digest = SnapshotDigest(snapshot)
+	entry := NewEngine(deps)
+	defer entry.Close()
+	if err := entry.Apply(snapshot); err != nil {
+		t.Fatalf("相同授权因监听元数据不同被拒绝: %v", err)
+	}
+	if revision, digest := entry.Applied(); revision != snapshot.Revision || digest != snapshot.Digest {
+		t.Fatalf("入口未确认相同授权: %d %q", revision, digest)
+	}
+	if targetDials.Load() != 0 {
+		t.Fatal("授权预检创建了目标连接")
 	}
 }
