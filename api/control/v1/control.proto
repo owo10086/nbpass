@@ -177,6 +177,9 @@ message RotationCommand {
  bytes config_json = 84;
  string node_name = 85;
  int64 issued_at = 86;
+ // 空值为原执行许可；reconcile / release 只操作已持久化动作，不调用商家。
+ string operation = 120;
+ uint64 control_sequence = 121;
 }
 message RotationProgress {
  string action_id = 80;
@@ -187,6 +190,8 @@ message RotationProgress {
  uint32 attempts = 85;
  string reason = 86;
  bool unsafe_network = 87;
+ uint64 control_sequence = 120;
+ bool observation_complete = 121;
 }
 
 // 票 20：每个消息的新增字段均限制在 100–109。

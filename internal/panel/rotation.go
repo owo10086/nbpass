@@ -31,29 +31,34 @@ CREATE UNIQUE INDEX rotation_node_pending ON rotation_actions(node_id)
  WHERE state NOT IN ('changed','cancelled');`
 
 type rotationAction struct {
-	ID            string    `json:"id"`
-	NodeID        string    `json:"node_id"`
-	OldIP         string    `json:"old_ip"`
-	NewIP         string    `json:"new_ip"`
-	State         string    `json:"state"`
-	Reason        string    `json:"reason"`
-	Sequence      uint64    `json:"sequence"`
-	Attempts      uint32    `json:"attempts"`
-	UnsafeNetwork bool      `json:"unsafe_network"`
-	CreatedAt     time.Time `json:"created_at"`
-	ExpiresAt     time.Time `json:"expires_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID                  string    `json:"id"`
+	NodeID              string    `json:"node_id"`
+	OldIP               string    `json:"old_ip"`
+	NewIP               string    `json:"new_ip"`
+	State               string    `json:"state"`
+	Reason              string    `json:"reason"`
+	Sequence            uint64    `json:"sequence"`
+	Attempts            uint32    `json:"attempts"`
+	UnsafeNetwork       bool      `json:"unsafe_network"`
+	CreatedAt           time.Time `json:"created_at"`
+	ExpiresAt           time.Time `json:"expires_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+	ControlSequence     uint64    `json:"control_sequence"`
+	PendingOperation    string    `json:"pending_operation"`
+	ObservationComplete bool      `json:"observation_complete"`
 }
 
 func (p *Panel) rotationRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/nodes/{id}/ip-rotation", p.getRotation)
 	mux.HandleFunc("PUT /api/nodes/{id}/ip-rotation", p.putRotation)
 	mux.HandleFunc("POST /api/nodes/{id}/ip-rotation/actions", p.startRotation)
+	mux.HandleFunc("POST /api/nodes/{id}/ip-rotation/reconcile", p.reconcileRotation)
+	mux.HandleFunc("POST /api/nodes/{id}/ip-rotation/unfreeze", p.unfreezeRotation)
 }
 func (p *Panel) latestRotation(ctx context.Context, id string) (*rotationAction, error) {
 	a := &rotationAction{}
 	var created, expires, updated int64
-	err := p.db.QueryRowContext(ctx, `SELECT id,node_id,old_ip,new_ip,state,reason,sequence,attempts,unsafe_network,created_at,expires_at,updated_at FROM rotation_actions WHERE node_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1`, id).Scan(&a.ID, &a.NodeID, &a.OldIP, &a.NewIP, &a.State, &a.Reason, &a.Sequence, &a.Attempts, &a.UnsafeNetwork, &created, &expires, &updated)
+	err := p.db.QueryRowContext(ctx, `SELECT id,node_id,old_ip,new_ip,state,reason,sequence,attempts,unsafe_network,created_at,expires_at,updated_at,control_sequence,pending_operation,observation_complete FROM rotation_actions WHERE node_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1`, id).Scan(&a.ID, &a.NodeID, &a.OldIP, &a.NewIP, &a.State, &a.Reason, &a.Sequence, &a.Attempts, &a.UnsafeNetwork, &created, &expires, &updated, &a.ControlSequence, &a.PendingOperation, &a.ObservationComplete)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -66,9 +71,15 @@ func (p *Panel) latestRotation(ctx context.Context, id string) (*rotationAction,
 	return a, nil
 }
 func (p *Panel) getRotation(w http.ResponseWriter, r *http.Request) {
+	p.controlMu.Lock()
 	var name string
 	var unsafe bool
 	err := p.db.QueryRowContext(r.Context(), `SELECT COALESCE(s.secret_name,''),COALESCE(s.unsafe_network,0) FROM nodes n LEFT JOIN rotation_settings s ON s.node_id=n.id WHERE n.id=?`, r.PathValue("id")).Scan(&name, &unsafe)
+	var a *rotationAction
+	if err == nil {
+		a, err = p.latestRotation(r.Context(), r.PathValue("id"))
+	}
+	p.controlMu.Unlock()
 	if errors.Is(err, sql.ErrNoRows) {
 		problem(w, 404, "节点不存在")
 		return
@@ -77,16 +88,20 @@ func (p *Panel) getRotation(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "无法读取换 IP 设置")
 		return
 	}
-	a, err := p.latestRotation(r.Context(), r.PathValue("id"))
-	if err != nil {
-		problem(w, 503, "无法读取换 IP 动作")
-		return
-	}
 	warning := ""
 	if unsafe {
 		warning = "检测到 NAT、多 IP 或查询源不一致的迹象，不支持自动换 IP；出站 IP 不能证明可直接入站。"
 	}
-	respond(w, 200, map[string]any{"configured": name != "", "unsafe_network": unsafe, "automatic_eligible": name != "" && !unsafe, "warning": warning, "action": a})
+	frozen, reason, operation, manageable := false, "", "", false
+	if a != nil {
+		frozen = a.State == "unconfirmed"
+		if frozen {
+			reason = a.Reason
+		}
+		operation = a.PendingOperation
+		manageable = frozen && a.ObservationComplete && operation == ""
+	}
+	respond(w, 200, map[string]any{"configured": name != "", "unsafe_network": unsafe, "automatic_eligible": name != "" && !unsafe && !rotationPending(a), "warning": warning, "action": a, "frozen": frozen, "freeze_reason": reason, "pending_operation": operation, "can_reconcile": manageable, "can_unfreeze": manageable})
 }
 func (p *Panel) putRotation(w http.ResponseWriter, r *http.Request) {
 	var c rotation.Config
@@ -159,7 +174,7 @@ func (p *Panel) startRotation(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "无法读取换 IP 动作")
 		return
 	}
-	if pending != nil && pending.State != "changed" && pending.State != "cancelled" {
+	if rotationPending(pending) {
 		problem(w, 409, "已有进行中或结果未确认的换 IP")
 		return
 	}
@@ -199,12 +214,17 @@ func (p *Panel) startRotation(w http.ResponseWriter, r *http.Request) {
 func (p *Panel) rotationCommand(ctx context.Context, id string) (*controlpb.RotationCommand, error) {
 	var actionID, oldIP, secret, name string
 	var expires, created int64
-	err := p.db.QueryRowContext(ctx, `SELECT a.id,a.old_ip,a.expires_at,a.created_at,a.secret_name,n.name FROM rotation_actions a JOIN nodes n ON n.id=a.node_id WHERE a.node_id=? AND a.state='authorized' ORDER BY a.created_at DESC LIMIT 1`, id).Scan(&actionID, &oldIP, &expires, &created, &secret, &name)
+	var operation string
+	var sequence uint64
+	err := p.db.QueryRowContext(ctx, `SELECT a.id,a.old_ip,a.expires_at,a.created_at,a.secret_name,n.name,a.pending_operation,a.control_sequence FROM rotation_actions a JOIN nodes n ON n.id=a.node_id WHERE a.node_id=? AND (a.state='authorized' OR a.pending_operation!='') ORDER BY a.created_at DESC LIMIT 1`, id).Scan(&actionID, &oldIP, &expires, &created, &secret, &name, &operation, &sequence)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if operation != "" {
+		return &controlpb.RotationCommand{ActionId: actionID, NodeId: id, OldIp: oldIP, Operation: operation, ControlSequence: sequence}, nil
 	}
 	data, err := p.secrets.Get(ctx, secret)
 	if err != nil {
@@ -225,16 +245,28 @@ func (p *Panel) acceptRotation(ctx context.Context, id string, result *controlpb
 	if a == nil || a.ID != result.ActionId || a.OldIP != result.OldIp || result.Sequence <= a.Sequence {
 		return nil
 	}
-	if a.State == "changed" || a.State == "cancelled" {
+	if !rotationPending(a) {
 		return nil
 	}
-	if result.Sequence > 100 || result.Attempts > 5 {
+	if result.ControlSequence < a.ControlSequence {
+		return nil
+	}
+	if result.Sequence > 1<<63-1 || result.Attempts > 5 || result.ControlSequence != a.ControlSequence {
 		return errors.New("换 IP 进度无效")
 	}
 	switch result.State {
-	case "started", "observing", "changed", "cancelled", "unconfirmed":
+	case "started", "observing", "changed", "cancelled", "unconfirmed", "released":
 	default:
 		return errors.New("换 IP 状态无效")
+	}
+	if result.State == "released" && (a.PendingOperation != "release" || !result.ObservationComplete || result.Reason != "manual_release") {
+		return errors.New("缺少解除冻结授权")
+	}
+	if a.PendingOperation == "release" && result.State != "released" {
+		return errors.New("解除冻结结果无效")
+	}
+	if a.PendingOperation == "reconcile" && result.State != "changed" && result.State != "unconfirmed" {
+		return errors.New("核对结果无效")
 	}
 	message, ok := rotation.Reasons[result.Reason]
 	if !ok {
@@ -261,7 +293,7 @@ func (p *Panel) acceptRotation(ctx context.Context, id string, result *controlpb
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `UPDATE rotation_actions SET new_ip=?,state=?,reason=?,sequence=?,attempts=?,unsafe_network=?,updated_at=? WHERE id=?`, result.NewIp, result.State, message, result.Sequence, result.Attempts, result.UnsafeNetwork, now.UnixNano(), a.ID)
+	_, err = tx.ExecContext(ctx, `UPDATE rotation_actions SET new_ip=?,state=?,reason=?,sequence=?,attempts=?,unsafe_network=?,updated_at=?,observation_complete=?,pending_operation='' WHERE id=?`, result.NewIp, result.State, message, result.Sequence, result.Attempts, result.UnsafeNetwork, now.UnixNano(), result.ObservationComplete, a.ID)
 	if err == nil && result.State == "changed" {
 		_, err = tx.ExecContext(ctx, `INSERT INTO node_regions(node_id,public_ipv4,auto_name,auto_mainland) VALUES(?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET public_ipv4=excluded.public_ipv4,auto_name=excluded.auto_name,auto_mainland=excluded.auto_mainland`, id, result.NewIp, region.Name, region.MainlandChina)
 	}
