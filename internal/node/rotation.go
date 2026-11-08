@@ -50,7 +50,15 @@ func openRotations(ctx context.Context, deps Dependencies) (*rotationRunner, err
 			return nil, errors.New("换 IP 动作缓存损坏")
 		}
 	}
-	if current := r.state.Results[r.state.Current]; current != nil && (current.State == "started" || current.State == "observing") {
+	// 票28的缓存不含完成标记；离线完成的终态也要以新序号补报，才能开放核对。
+	if current := r.state.Results[r.state.Current]; current != nil && current.State == "unconfirmed" && current.Attempts == 5 && !current.ObservationComplete {
+		completed := proto.Clone(current).(*controlpb.RotationProgress)
+		completed.ObservationComplete = true
+		if err := r.save(completed, 0); err != nil {
+			return nil, err
+		}
+	}
+	if current := r.state.Results[r.state.Current]; current != nil && (current.State == "started" || current.State == "observing" || (current.State == "unconfirmed" && current.Attempts < 5 && !current.ObservationComplete)) {
 		r.running = true
 		r.wg.Add(1)
 		go func() { defer r.wg.Done(); defer r.finished(); r.observe(current) }()
@@ -125,7 +133,11 @@ func (r *rotationRunner) blocksIPObservation() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	p := r.state.Results[r.state.Current]
-	return r.running || (p != nil && p.State != "changed" && p.State != "cancelled")
+	return r.running || (p != nil && !rotationTerminal(p.State))
+}
+
+func rotationTerminal(state string) bool {
+	return state == "changed" || state == "cancelled" || state == "released"
 }
 
 func (r *rotationRunner) submit(online context.Context, nodeID string, c *controlpb.RotationCommand) {
@@ -137,6 +149,10 @@ func (r *rotationRunner) submit(online context.Context, nodeID string, c *contro
 		r.mu.Unlock()
 		return
 	}
+	if c.Operation != "" {
+		r.submitControlLocked(online, c)
+		return
+	}
 	if _, ok := r.state.Results[c.ActionId]; ok {
 		r.mu.Unlock()
 		select {
@@ -145,7 +161,7 @@ func (r *rotationRunner) submit(online context.Context, nodeID string, c *contro
 		}
 		return
 	}
-	if old := r.state.Results[r.state.Current]; old != nil && old.State != "changed" && old.State != "cancelled" {
+	if old := r.state.Results[r.state.Current]; old != nil && !rotationTerminal(old.State) {
 		r.mu.Unlock()
 		return
 	}
@@ -179,7 +195,12 @@ func (r *rotationRunner) query(ctx context.Context) (string, bool, error) {
 }
 func (r *rotationRunner) execute(online context.Context, c *controlpb.RotationCommand) {
 	p := &controlpb.RotationProgress{ActionId: c.ActionId, OldIp: c.OldIp, State: "cancelled"}
-	cancel := func(reason string) { p.State = "cancelled"; p.Reason = reason; _ = r.persist(p, 0) }
+	cancel := func(reason string) {
+		p.State = "cancelled"
+		p.Reason = reason
+		p.ObservationComplete = true
+		_ = r.persist(p, 0)
+	}
 	valid := func() bool {
 		if online.Err() != nil {
 			cancel("offline")
@@ -227,6 +248,7 @@ func (r *rotationRunner) execute(online context.Context, c *controlpb.RotationCo
 	}
 	p.State, p.Reason = "started", "started"
 	if r.save(p, 0) != nil {
+		cancel("action_storage_failed")
 		return
 	} // 落盘失败绝不能调用外部接口。
 	if r.deps.Events != nil {
@@ -241,10 +263,13 @@ func (r *rotationRunner) execute(online context.Context, c *controlpb.RotationCo
 	}
 	callCtx, stop := timeout(r.ctx, r.deps.Clock, 60*time.Second)
 	err = r.deps.RotationHTTP(callCtx, config, rotation.Variables{NodeID: c.NodeId, NodeName: c.NodeName, OldIP: c.OldIp, ActionID: c.ActionId, Timestamp: r.deps.Clock.Now().UTC().Format(time.RFC3339Nano)})
+	if callCtx.Err() != nil {
+		err = callCtx.Err()
+	}
 	stop()
 	p.State, p.Reason = "observing", "observing"
 	if err != nil {
-		p.Reason = "http_unconfirmed"
+		p.State, p.Reason = "unconfirmed", "http_unconfirmed"
 	}
 	if r.persist(p, r.deps.Clock.Now().Add(60*time.Second).UnixNano()) != nil {
 		return
@@ -253,6 +278,12 @@ func (r *rotationRunner) execute(online context.Context, c *controlpb.RotationCo
 }
 func (r *rotationRunner) observe(input *controlpb.RotationProgress) {
 	p := proto.Clone(input).(*controlpb.RotationProgress)
+	if p.State == "started" {
+		p.State, p.Reason = "unconfirmed", "interrupted"
+		if r.persist(p, r.deps.Clock.Now().Add(time.Minute).UnixNano()) != nil {
+			return
+		}
+	}
 	for p.Attempts < 5 {
 		r.mu.Lock()
 		next := r.state.NextCheck
@@ -277,17 +308,25 @@ func (r *rotationRunner) observe(input *controlpb.RotationProgress) {
 		}
 		ip, unsafe, err := r.query(r.ctx)
 		p.Attempts++
-		p.UnsafeNetwork = p.UnsafeNetwork || unsafe
+		// 换后的短暂双源差异属于结果未知，不把它当作永久 NAT/多 IP 结论。
 		if err == nil && ip != p.OldIp {
-			p.State, p.Reason, p.NewIp = "changed", "changed", ip
+			p.State, p.Reason, p.NewIp, p.ObservationComplete = "changed", "changed", ip, true
 			if r.persist(p, 0) == nil && r.deps.Events != nil {
 				_ = r.deps.Events.Record(r.ctx, "ip_rotation_changed", "换 IP 动作 "+p.ActionId+" 已观察到公网 IPv4 变化，可达性尚未复检", 0)
 			}
 			return
 		}
-		p.State, p.Reason = "observing", "observing"
+		// 一旦结果不确定，即使下一次仍看到旧 IP，也不能自动解除冻结。
+		if unsafe {
+			p.State, p.Reason = "unconfirmed", "observation_inconsistent"
+		} else if err != nil {
+			p.State, p.Reason = "unconfirmed", "observation_query_failed"
+		}
 		if p.Attempts == 5 {
-			p.State, p.Reason = "unconfirmed", "unconfirmed"
+			p.State, p.ObservationComplete = "unconfirmed", true
+			if p.Reason == "observing" || p.Reason == "started" {
+				p.Reason = "unconfirmed"
+			}
 		}
 		if r.persist(p, r.deps.Clock.Now().Add(60*time.Second).UnixNano()) != nil {
 			return

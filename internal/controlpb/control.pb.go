@@ -1375,16 +1375,19 @@ func (x *TunnelServer) GetGrants() []*TunnelGrant {
 
 // 一次性命令独立于配置；秘密仅经已认证的执行节点控制流传输。
 type RotationCommand struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActionId      string                 `protobuf:"bytes,80,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
-	NodeId        string                 `protobuf:"bytes,81,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	OldIp         string                 `protobuf:"bytes,82,opt,name=old_ip,json=oldIp,proto3" json:"old_ip,omitempty"`
-	ExpiresAt     int64                  `protobuf:"varint,83,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	ConfigJson    []byte                 `protobuf:"bytes,84,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
-	NodeName      string                 `protobuf:"bytes,85,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
-	IssuedAt      int64                  `protobuf:"varint,86,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ActionId   string                 `protobuf:"bytes,80,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
+	NodeId     string                 `protobuf:"bytes,81,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	OldIp      string                 `protobuf:"bytes,82,opt,name=old_ip,json=oldIp,proto3" json:"old_ip,omitempty"`
+	ExpiresAt  int64                  `protobuf:"varint,83,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	ConfigJson []byte                 `protobuf:"bytes,84,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
+	NodeName   string                 `protobuf:"bytes,85,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
+	IssuedAt   int64                  `protobuf:"varint,86,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
+	// 空值为原执行许可；reconcile / release 只操作已持久化动作，不调用商家。
+	Operation       string `protobuf:"bytes,120,opt,name=operation,proto3" json:"operation,omitempty"`
+	ControlSequence uint64 `protobuf:"varint,121,opt,name=control_sequence,json=controlSequence,proto3" json:"control_sequence,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RotationCommand) Reset() {
@@ -1466,18 +1469,34 @@ func (x *RotationCommand) GetIssuedAt() int64 {
 	return 0
 }
 
+func (x *RotationCommand) GetOperation() string {
+	if x != nil {
+		return x.Operation
+	}
+	return ""
+}
+
+func (x *RotationCommand) GetControlSequence() uint64 {
+	if x != nil {
+		return x.ControlSequence
+	}
+	return 0
+}
+
 type RotationProgress struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActionId      string                 `protobuf:"bytes,80,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
-	Sequence      uint64                 `protobuf:"varint,81,opt,name=sequence,proto3" json:"sequence,omitempty"`
-	State         string                 `protobuf:"bytes,82,opt,name=state,proto3" json:"state,omitempty"`
-	OldIp         string                 `protobuf:"bytes,83,opt,name=old_ip,json=oldIp,proto3" json:"old_ip,omitempty"`
-	NewIp         string                 `protobuf:"bytes,84,opt,name=new_ip,json=newIp,proto3" json:"new_ip,omitempty"`
-	Attempts      uint32                 `protobuf:"varint,85,opt,name=attempts,proto3" json:"attempts,omitempty"`
-	Reason        string                 `protobuf:"bytes,86,opt,name=reason,proto3" json:"reason,omitempty"`
-	UnsafeNetwork bool                   `protobuf:"varint,87,opt,name=unsafe_network,json=unsafeNetwork,proto3" json:"unsafe_network,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ActionId            string                 `protobuf:"bytes,80,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
+	Sequence            uint64                 `protobuf:"varint,81,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	State               string                 `protobuf:"bytes,82,opt,name=state,proto3" json:"state,omitempty"`
+	OldIp               string                 `protobuf:"bytes,83,opt,name=old_ip,json=oldIp,proto3" json:"old_ip,omitempty"`
+	NewIp               string                 `protobuf:"bytes,84,opt,name=new_ip,json=newIp,proto3" json:"new_ip,omitempty"`
+	Attempts            uint32                 `protobuf:"varint,85,opt,name=attempts,proto3" json:"attempts,omitempty"`
+	Reason              string                 `protobuf:"bytes,86,opt,name=reason,proto3" json:"reason,omitempty"`
+	UnsafeNetwork       bool                   `protobuf:"varint,87,opt,name=unsafe_network,json=unsafeNetwork,proto3" json:"unsafe_network,omitempty"`
+	ControlSequence     uint64                 `protobuf:"varint,120,opt,name=control_sequence,json=controlSequence,proto3" json:"control_sequence,omitempty"`
+	ObservationComplete bool                   `protobuf:"varint,121,opt,name=observation_complete,json=observationComplete,proto3" json:"observation_complete,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *RotationProgress) Reset() {
@@ -1562,6 +1581,20 @@ func (x *RotationProgress) GetReason() string {
 func (x *RotationProgress) GetUnsafeNetwork() bool {
 	if x != nil {
 		return x.UnsafeNetwork
+	}
+	return false
+}
+
+func (x *RotationProgress) GetControlSequence() uint64 {
+	if x != nil {
+		return x.ControlSequence
+	}
+	return 0
+}
+
+func (x *RotationProgress) GetObservationComplete() bool {
+	if x != nil {
+		return x.ObservationComplete
 	}
 	return false
 }
@@ -1683,7 +1716,7 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x0fcertificate_pem\x18+ \x01(\fR\x0ecertificatePem\x12&\n" +
 	"\x0fprivate_key_pem\x18, \x01(\fR\rprivateKeyPem\x123\n" +
 	"\x05peers\x18- \x03(\v2\x1d.nbpass.control.v1.TunnelPeerR\x05peers\x126\n" +
-	"\x06grants\x18. \x03(\v2\x1e.nbpass.control.v1.TunnelGrantR\x06grants\"\xd8\x01\n" +
+	"\x06grants\x18. \x03(\v2\x1e.nbpass.control.v1.TunnelGrantR\x06grants\"\xa1\x02\n" +
 	"\x0fRotationCommand\x12\x1b\n" +
 	"\taction_id\x18P \x01(\tR\bactionId\x12\x17\n" +
 	"\anode_id\x18Q \x01(\tR\x06nodeId\x12\x15\n" +
@@ -1693,7 +1726,9 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\vconfig_json\x18T \x01(\fR\n" +
 	"configJson\x12\x1b\n" +
 	"\tnode_name\x18U \x01(\tR\bnodeName\x12\x1b\n" +
-	"\tissued_at\x18V \x01(\x03R\bissuedAt\"\xea\x01\n" +
+	"\tissued_at\x18V \x01(\x03R\bissuedAt\x12\x1c\n" +
+	"\toperation\x18x \x01(\tR\toperation\x12)\n" +
+	"\x10control_sequence\x18y \x01(\x04R\x0fcontrolSequence\"\xc8\x02\n" +
 	"\x10RotationProgress\x12\x1b\n" +
 	"\taction_id\x18P \x01(\tR\bactionId\x12\x1a\n" +
 	"\bsequence\x18Q \x01(\x04R\bsequence\x12\x14\n" +
@@ -1702,7 +1737,9 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x06new_ip\x18T \x01(\tR\x05newIp\x12\x1a\n" +
 	"\battempts\x18U \x01(\rR\battempts\x12\x16\n" +
 	"\x06reason\x18V \x01(\tR\x06reason\x12%\n" +
-	"\x0eunsafe_network\x18W \x01(\bR\runsafeNetwork*H\n" +
+	"\x0eunsafe_network\x18W \x01(\bR\runsafeNetwork\x12)\n" +
+	"\x10control_sequence\x18x \x01(\x04R\x0fcontrolSequence\x121\n" +
+	"\x14observation_complete\x18y \x01(\bR\x13observationComplete*H\n" +
 	"\rAddressFamily\x12\x1e\n" +
 	"\x1aADDRESS_FAMILY_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ADDRESS_FAMILY_IPV4\x10\x01*Q\n" +

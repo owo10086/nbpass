@@ -400,7 +400,7 @@ func TestRotationContinuesObservingOfflineAndReportsAfterRestart(t *testing.T) {
 	awaitNode(t, c, id, connected)
 	c.Do("PUT", path, map[string]any{"url": vendor.URL + "/change?token=rotation-private-marker", "method": "POST", "private_endpoints": []string{vendor.URL + "/change"}}, 200)
 	c.Do("POST", path+"/actions", nil, 202)
-	awaitRotation(t, c, path, "observing")
+	awaitRotation(t, c, path, "unconfirmed")
 	n.Disconnect()
 	awaitNode(t, c, id, func(row map[string]any) bool { return row["connected"] == false })
 	h.Clock.Advance(60 * time.Second)
