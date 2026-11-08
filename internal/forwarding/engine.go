@@ -36,6 +36,8 @@ type Engine struct {
 	businessConnections atomic.Uint64
 	tunnelConnections   atomic.Uint64
 	tunnelServer        *tunnelServer
+	healthMu            sync.Mutex
+	probeSlots          chan struct{}
 	tunnelClients       map[string]*tunnelClient
 	deps                Dependencies
 	rules               map[string]*listenerRule
@@ -72,7 +74,7 @@ func NewEngine(deps Dependencies) *Engine {
 	if deps.Listen == nil {
 		deps.Listen = net.Listen
 	}
-	return &Engine{resources: &resourceLimiter{limits: deps.Limits.defaults(), rules: map[string]int{}}, deps: deps, rules: map[string]*listenerRule{}, tunnelClients: map[string]*tunnelClient{}}
+	return &Engine{probeSlots: make(chan struct{}, 8), resources: &resourceLimiter{limits: deps.Limits.defaults(), rules: map[string]int{}}, deps: deps, rules: map[string]*listenerRule{}, tunnelClients: map[string]*tunnelClient{}}
 }
 
 // Connections 返回逻辑业务连接数；目标侧 TCP 和控制连接不重复计数。
@@ -110,7 +112,7 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 	}
 	for _, r := range s.Rules {
 		result := &controlpb.RuleApplyResult{RuleId: r.Id, ApplyError: "配置应用尚未完成"}
-		if current := e.rules[r.Id]; current != nil && proto.Equal(current.config, r) && proto.Equal(current.exit, groups[r.ExitGroupId]) {
+		if current := e.rules[r.Id]; current != nil && sameListenerRule(current.config, r) && proto.Equal(current.exit, groups[r.ExitGroupId]) {
 			checkpoint.Rules = append(checkpoint.Rules, r)
 			result.AppliedRevision, result.ApplyError = s.Revision, ""
 		}
@@ -122,11 +124,7 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 	e.highest, e.highestDigest = s.Revision, s.Digest
 	for id, current := range e.rules {
 		next := desired[id]
-		var ep *controlpb.TunnelEndpoint
-		if next != nil {
-			ep = groups[next.ExitGroupId]
-		}
-		if !proto.Equal(current.config, next) || !proto.Equal(current.exit, ep) {
+		if !sameListenerRule(current.config, next) {
 			current.stop()
 			delete(e.rules, id)
 		}
@@ -165,19 +163,21 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 	return errors.Join(failures...)
 }
 
-func tunnelEndpoints(exitGroups []*controlpb.ExitGroup) (map[string]*controlpb.TunnelEndpoint, map[string]*controlpb.TunnelEndpoint) {
+func tunnelEndpoints(exitGroups []*controlpb.ExitGroup) (map[string]*controlpb.TunnelEndpoint, map[string]*controlpb.ExitGroup) {
 	endpoints := map[string]*controlpb.TunnelEndpoint{}
-	groups := map[string]*controlpb.TunnelEndpoint{}
+	groups := map[string]*controlpb.ExitGroup{}
 	for _, g := range exitGroups {
+		groups[g.Id] = g
 		for _, ep := range g.Exits {
 			endpoints[ep.NodeId] = ep
-			groups[g.Id] = ep
 		}
 	}
 	return endpoints, groups
 }
 
 func (e *Engine) applyTunnelClients(endpoints map[string]*controlpb.TunnelEndpoint) {
+	e.healthMu.Lock()
+	defer e.healthMu.Unlock()
 	for id, client := range e.tunnelClients {
 		if !proto.Equal(client.endpoint, endpoints[id]) {
 			client.close()
@@ -186,13 +186,35 @@ func (e *Engine) applyTunnelClients(endpoints map[string]*controlpb.TunnelEndpoi
 	}
 	for id, ep := range endpoints {
 		if e.tunnelClients[id] == nil {
-			e.tunnelClients[id] = &tunnelClient{endpoint: proto.Clone(ep).(*controlpb.TunnelEndpoint), engine: e}
+			client := &tunnelClient{endpoint: proto.Clone(ep).(*controlpb.TunnelEndpoint), engine: e}
+			e.tunnelClients[id] = client
+			client.startProbes()
 		}
 	}
 }
 
-func (e *Engine) startRule(r *controlpb.ForwardRule, ep *controlpb.TunnelEndpoint) error {
-	if e.rules[r.Id] != nil {
+func sameListenerRule(a, b *controlpb.ForwardRule) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	a, b = proto.Clone(a).(*controlpb.ForwardRule), proto.Clone(b).(*controlpb.ForwardRule)
+	a.AuthorizedExitIds, b.AuthorizedExitIds = nil, nil
+	return proto.Equal(a, b)
+}
+func (e *Engine) startRule(r *controlpb.ForwardRule, ep *controlpb.ExitGroup) error {
+	selection := &tunnelSelection{rule: proto.Clone(r).(*controlpb.ForwardRule)}
+	for _, endpoint := range ep.GetExits() {
+		allowed := len(r.AuthorizedExitIds) == 0 && len(ep.Exits) == 1
+		for _, id := range r.AuthorizedExitIds {
+			allowed = allowed || id == endpoint.NodeId
+		}
+		if allowed {
+			selection.clients = append(selection.clients, e.tunnelClients[endpoint.NodeId])
+		}
+	}
+	if current := e.rules[r.Id]; current != nil {
+		current.exit = ep
+		current.selection.Store(selection)
 		return nil
 	}
 	listener, err := e.deps.Listen("tcp4", net.JoinHostPort("0.0.0.0", strconv.Itoa(int(r.ListenPort))))
@@ -200,11 +222,8 @@ func (e *Engine) startRule(r *controlpb.ForwardRule, ep *controlpb.TunnelEndpoin
 		return fmt.Errorf("规则 %s 端口 %d 监听失败: %w", r.Id, r.ListenPort, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	var client *tunnelClient
-	if ep != nil {
-		client = e.tunnelClients[ep.NodeId]
-	}
-	current := &listenerRule{exit: ep, tunnel: client, config: proto.Clone(r).(*controlpb.ForwardRule), listener: listener, ctx: ctx, cancel: cancel, connections: map[net.Conn]struct{}{}, engine: e}
+	current := &listenerRule{exit: ep, config: proto.Clone(r).(*controlpb.ForwardRule), listener: listener, ctx: ctx, cancel: cancel, connections: map[net.Conn]struct{}{}, engine: e}
+	current.selection.Store(selection)
 	e.rules[r.Id] = current
 	e.registerTrafficRule(r.Id)
 	current.wg.Add(1)
@@ -212,9 +231,17 @@ func (e *Engine) startRule(r *controlpb.ForwardRule, ep *controlpb.TunnelEndpoin
 	return nil
 }
 func (e *Engine) Close() {
+	e.healthMu.Lock()
 	for _, client := range e.tunnelClients {
 		client.close()
 	}
+	for _, client := range e.tunnelClients {
+		if client.probeDone != nil {
+			<-client.probeDone
+		}
+	}
+	e.tunnelClients = map[string]*tunnelClient{}
+	e.healthMu.Unlock()
 	if e.tunnelServer != nil {
 		e.tunnelServer.close()
 	}
@@ -226,8 +253,8 @@ func (e *Engine) Close() {
 
 type listenerRule struct {
 	config      *controlpb.ForwardRule
-	exit        *controlpb.TunnelEndpoint
-	tunnel      *tunnelClient
+	exit        *controlpb.ExitGroup
+	selection   atomic.Pointer[tunnelSelection]
 	listener    net.Listener
 	ctx         context.Context
 	cancel      context.CancelFunc
@@ -293,10 +320,7 @@ func (r *listenerRule) serve(client net.Conn) {
 	var target net.Conn
 	var err error
 	if r.config.Kind == controlpb.RuleKind_RULE_KIND_TUNNEL {
-		if r.tunnel == nil {
-			return
-		}
-		target, err = r.tunnel.dial(r.ctx, r.config)
+		target, err = r.selection.Load().dial(r.ctx)
 	} else {
 		target, err = r.engine.dialTarget(r.ctx, r.config)
 	}

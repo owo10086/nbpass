@@ -326,8 +326,12 @@ func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, sess
 		}
 	}
 	var authorizationChanges []string
+	var failoverChanged bool
 	if err == nil {
-		authorizationChanges, err = p.admitTunnelAuthorization(ctx, tx, id, previous != first.ProcessInstance, first.TunnelAuthorizationVersion)
+		failoverChanged, err = p.admitExitFailover(ctx, tx, id, first.ExitFailoverVersion)
+	}
+	if err == nil {
+		authorizationChanges, err = p.admitTunnelAuthorization(ctx, tx, id, previous != first.ProcessInstance, first.TunnelAuthorizationVersion, failoverChanged)
 	}
 	if err == nil {
 		err = tx.Commit()

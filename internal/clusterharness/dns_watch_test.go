@@ -7,6 +7,7 @@ import (
 	"nbpass/internal/dnswatch"
 	"nbpass/internal/node"
 	"nbpass/internal/panel"
+	"nbpass/internal/timing"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -72,20 +73,70 @@ func sampledPaths(row map[string]any, n int) bool {
 }
 
 // 快进后持续驱动调度用的假时钟，直到后台真正开始下一轮；不以真实等待替代业务时间。
-func nextWatchRound(t *testing.T, h *clusterharness.Harness, c *clusterharness.Client, id string, old float64, n int) map[string]any {
+func nextWatchRound(t *testing.T, h *clusterharness.Harness, c *clusterharness.Client, id string, old float64, n int, clock *dnsWatchControlClock) map[string]any {
 	t.Helper()
 	for range 30 {
 		if c.Do("GET", "/api/dns-watches/"+id, nil, 200)["round"].(float64) > old {
 			break
+		}
+		if clock != nil {
+			clock.awaitIdle(t)
 		}
 		h.Clock.Advance(time.Second)
 		time.Sleep(5 * time.Millisecond)
 	}
 	return watchResult(t, c, id, func(row map[string]any) bool { return row["round"].(float64) > old && sampledPaths(row, n) })
 }
-func advanceWatch(t *testing.T, h *clusterharness.Harness, c *clusterharness.Client, id string) map[string]any {
+
+// 只观察真实节点控制发送/响应/ACK计时器的生命周期，不改变任何期限。
+// HTTP心跳入库之后还须等响应被节点消费，才可继续加速DNS业务时间。
+type dnsWatchControlClock struct {
+	timing.Clock
+	pending atomic.Int64
+	changed chan struct{}
+}
+
+type dnsWatchControlTimer struct {
+	timing.Timer
+	clock   *dnsWatchControlClock
+	stopped atomic.Bool
+}
+
+func (c *dnsWatchControlClock) NewTimer(d time.Duration) timing.Timer {
+	if d != 15*time.Second {
+		return c.Clock.NewTimer(d)
+	}
+	c.pending.Add(1)
+	return &dnsWatchControlTimer{Timer: c.Clock.NewTimer(d), clock: c}
+}
+func (t *dnsWatchControlTimer) Stop() bool {
+	result := t.Timer.Stop()
+	if t.stopped.CompareAndSwap(false, true) {
+		t.clock.pending.Add(-1)
+		select {
+		case t.clock.changed <- struct{}{}:
+		default:
+		}
+	}
+	return result
+}
+func (c *dnsWatchControlClock) awaitIdle(t *testing.T) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for c.pending.Load() != 0 {
+		select {
+		case <-deadline.C:
+			t.Fatalf("节点控制响应尚未消费: %d 个在途计时器", c.pending.Load())
+		case <-c.changed:
+		}
+	}
+}
+
+func advanceWatch(t *testing.T, h *clusterharness.Harness, c *clusterharness.Client, id string, clock *dnsWatchControlClock) map[string]any {
 	t.Helper()
 	round := c.Do("GET", "/api/dns-watches/"+id, nil, 200)["round"].(float64)
+	clock.awaitIdle(t)
 	for range 30 {
 		before := c.Do("GET", "/api/nodes", nil, 200)["nodes"].([]any)
 		h.Clock.Advance(10 * time.Second)
@@ -93,11 +144,10 @@ func advanceWatch(t *testing.T, h *clusterharness.Harness, c *clusterharness.Cli
 			nodeID := before[0].(map[string]any)["id"].(string)
 			last := before[0].(map[string]any)["last_seen_at"]
 			awaitNode(t, c, nodeID, func(r map[string]any) bool { return r["last_seen_at"] != last })
-		} else {
-			time.Sleep(2 * time.Millisecond)
 		}
+		clock.awaitIdle(t)
 	}
-	return nextWatchRound(t, h, c, id, round, 2)
+	return nextWatchRound(t, h, c, id, round, 2, clock)
 }
 
 // 若把不同路径混计、未达到三次就告警，或任何 DNS 差异触发写入，此场景失败。
@@ -108,10 +158,11 @@ func TestDNSWatchPoisoningRequiresThreeSamePathSamplesAndNeverWrites(t *testing.
 	fake.Set("watch.example", "223.5.5.5:53", "9.9.9.9")
 	fake.Set("watch.example", "https://dns.example/dns-query", "8.8.8.8")
 	h, c := telegramBrowser(t, telegram, func(d *panel.Dependencies) { d.DNSWatchLookup = fake.Lookup; d.DNSProvider = provider })
+	clock := &dnsWatchControlClock{Clock: h.Clock, changed: make(chan struct{}, 1)}
 	created := addNode(c, "国内检测点")
 	nid := created["id"].(string)
 	c.Do("PUT", "/api/nodes/"+nid+"/region", map[string]any{"name": "中国大陆", "mainland_china": true}, 204)
-	h.StartNode(created["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) { d.DNSWatchLookup = fake.Lookup })
+	h.StartNode(created["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) { d.DNSWatchLookup = fake.Lookup; d.Clock = clock })
 	awaitNode(t, c, nid, connected)
 	c.Do("PUT", "/api/settings/dns-watch", map[string]any{"resolvers": []map[string]string{{"kind": "dns", "address": "223.5.5.5:53"}, {"kind": "doh", "address": "https://dns.example/dns-query"}}}, 200)
 	id := c.Do("POST", "/api/dns-watches", map[string]any{"domain": "watch.example", "expected_ips": []string{"8.8.8.8"}}, 201)["id"].(string)
@@ -119,11 +170,11 @@ func TestDNSWatchPoisoningRequiresThreeSamePathSamplesAndNeverWrites(t *testing.
 	if row["status"] == "疑似污染" {
 		t.Fatal("第一次不符即污染")
 	}
-	row = advanceWatch(t, h, c, id)
+	row = advanceWatch(t, h, c, id, clock)
 	if row["status"] == "疑似污染" {
 		t.Fatal("第二次不符即污染")
 	}
-	row = advanceWatch(t, h, c, id)
+	row = advanceWatch(t, h, c, id, clock)
 	if row["status"] != "疑似污染" {
 		t.Fatalf("第三次未判疑似污染: %v", row)
 	}
@@ -170,18 +221,19 @@ func TestDNSWatchExpectedVersionAndFailuresResetEvidence(t *testing.T) {
 	fake.Set("version.example", "223.5.5.5:53", "9.9.9.9")
 	fake.Set("version.example", "https://dns.example/dns-query", "8.8.8.8")
 	h := clusterharness.New(t, func(d *panel.Dependencies) { d.Passwords = nodePasswords{}; d.DNSWatchLookup = fake.Lookup })
+	clock := &dnsWatchControlClock{Clock: h.Clock, changed: make(chan struct{}, 1)}
 	c := h.Client()
 	setup(c)
 	login(c)
 	created := addNode(c, "国内检测点")
 	nid := created["id"].(string)
 	c.Do("PUT", "/api/nodes/"+nid+"/region", map[string]any{"name": "中国大陆", "mainland_china": true}, 204)
-	h.StartNode(created["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) { d.DNSWatchLookup = fake.Lookup })
+	h.StartNode(created["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) { d.DNSWatchLookup = fake.Lookup; d.Clock = clock })
 	awaitNode(t, c, nid, connected)
 	c.Do("PUT", "/api/settings/dns-watch", map[string]any{"resolvers": []map[string]string{{"kind": "dns", "address": "223.5.5.5:53"}, {"kind": "doh", "address": "https://dns.example/dns-query"}}}, 200)
 	id := c.Do("POST", "/api/dns-watches", map[string]any{"domain": "version.example", "expected_ips": []string{"8.8.8.8"}}, 201)["id"].(string)
 	watchResult(t, c, id, func(r map[string]any) bool { return sampledPaths(r, 2) })
-	advanceWatch(t, h, c, id)
+	advanceWatch(t, h, c, id, clock)
 	fake.Set("version.example", "https://dns.example/dns-query", "1.1.1.1")
 	c.Do("PUT", "/api/dns-watches/"+id, map[string]any{"expected_ips": []string{"1.1.1.1"}}, 200)
 	row := watchResult(t, c, id, func(r map[string]any) bool { return r["expected_version"] == float64(2) && sampledPaths(r, 2) })
@@ -189,18 +241,18 @@ func TestDNSWatchExpectedVersionAndFailuresResetEvidence(t *testing.T) {
 		t.Fatal("旧期望的异常被沿用")
 	}
 	fake.Fail("version.example", "223.5.5.5:53")
-	row = advanceWatch(t, h, c, id)
+	row = advanceWatch(t, h, c, id, clock)
 	if row["status"] != "采样失败" {
 		t.Fatalf("解析失败未保留未知: %v", row)
 	}
 	fake.Set("version.example", "223.5.5.5:53", "9.9.9.9")
 	for range 2 {
-		row = advanceWatch(t, h, c, id)
+		row = advanceWatch(t, h, c, id, clock)
 		if row["status"] == "疑似污染" {
 			t.Fatal("失败没有中断连续异常")
 		}
 	}
-	row = advanceWatch(t, h, c, id)
+	row = advanceWatch(t, h, c, id, clock)
 	if row["status"] != "疑似污染" {
 		t.Fatalf("新期望第三次异常未告警: %v", row)
 	}
@@ -225,7 +277,7 @@ func TestDNSWatchHistoryCountsSetsAndSurvivesRestart(t *testing.T) {
 	sample := func() map[string]any {
 		old := c.Do("GET", "/api/dns-watches/"+id, nil, 200)["round"].(float64)
 		h.Clock.Advance(5 * time.Minute)
-		return nextWatchRound(t, h, c, id, old, 1)
+		return nextWatchRound(t, h, c, id, old, 1, nil)
 	}
 	fake.Set(domain, address, "1.1.1.1", "8.8.8.8")
 	row = sample()
@@ -379,7 +431,7 @@ func TestDNSWatchNotificationStorageFailureDoesNotBlockSampling(t *testing.T) {
 		h.Clock.Advance(10 * time.Second)
 		time.Sleep(time.Millisecond * 2)
 	}
-	nextWatchRound(t, h, c, id, 1, 1)
+	nextWatchRound(t, h, c, id, 1, 1, nil)
 	watchResult(t, c, id, func(r map[string]any) bool { return r["different_ip_count"] == float64(1) })
 	if _, err := disk.db.Exec("DROP TRIGGER fail_dns_notice"); err != nil {
 		t.Fatal(err)

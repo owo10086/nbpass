@@ -13,6 +13,7 @@ message EnrollResponse { string node_id = 1; string token = 2; }
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 message NodeReport {
+  uint32 exit_failover_version = 150;
   // 自测独立补报，只消费自测结果，不推进活性、探针、事件或配置确认。
   bool self_check_only = 90;
   repeated bytes self_check_results = 91;
@@ -57,6 +58,7 @@ message RuleApplyResult {
 }
 
 message ProbeSample {
+  repeated ExitHealth exit_health = 150;
   uint64 sequence = 1;
   // 缺少的 key 表示缺测；单位及允许字段由 internal/probe 定义。
   map<string, double> values = 2;
@@ -117,6 +119,8 @@ message ConfigSnapshot {
 }
 
 message ForwardRule {
+  // 当前代次已由出口确认的候选；缺失仅兼容旧版单成员快照。
+  repeated string authorized_exit_ids = 150;
   uint64 authorization_generation = 110;
   string id = 1;
   string entry_group_id = 2;
@@ -207,4 +211,15 @@ message DNSWatchResult {
  string task_id = 100;
  repeated string ips = 101;
  bool failed = 102;
+}
+
+// 入口观测的出口链路状态，不代表出口到所有目标的可达性。
+message ExitHealth {
+  string exit_id = 150;
+  string state = 151;
+  uint32 consecutive_failures = 152;
+  string last_probe = 153;
+  string failure_class = 154;
+  int64 recovery_since_unix = 155;
+  int64 checked_at_unix = 156;
 }

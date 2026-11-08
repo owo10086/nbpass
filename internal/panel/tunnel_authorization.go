@@ -123,9 +123,11 @@ func gateTunnelRules(ctx context.Context, tx *sql.Tx, compiled map[string]*contr
 			r.AuthorizationGeneration = generations[r.Id]
 			for _, exit := range groups[r.ExitGroupId].Members {
 				if capable[entry] && capable[exit] && confirmed[[3]string{exit, entry, r.Id}] == r.AuthorizationGeneration {
-					ready = append(ready, r)
-					break
+					r.AuthorizedExitIds = append(r.AuthorizedExitIds, exit)
 				}
+			}
+			if len(r.AuthorizedExitIds) > 0 {
+				ready = append(ready, r)
 			}
 		}
 		snapshot.Rules = ready
@@ -190,12 +192,13 @@ func (p *Panel) notifyConfiguration(changed []string) {
 	}
 }
 
-func (p *Panel) admitTunnelAuthorization(ctx context.Context, tx *sql.Tx, id string, newInstance bool, version uint32) ([]string, error) {
+func (p *Panel) admitTunnelAuthorization(ctx context.Context, tx *sql.Tx, id string, newInstance bool, version uint32, otherCapabilityChanged ...bool) ([]string, error) {
 	var previous uint32
 	if err := tx.QueryRowContext(ctx, "SELECT tunnel_authorization_version FROM nodes WHERE id=?", id).Scan(&previous); err != nil {
 		return nil, err
 	}
-	if !newInstance && previous == version {
+	force := len(otherCapabilityChanged) > 0 && otherCapabilityChanged[0]
+	if !newInstance && previous == version && !force {
 		return nil, nil
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE nodes SET tunnel_authorization_version=? WHERE id=?", version, id); err != nil {

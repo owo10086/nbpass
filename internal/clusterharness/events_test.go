@@ -103,25 +103,41 @@ func TestEventOverflowProducesVisibleGap(t *testing.T) {
 	awaitNode(t, c, a["id"].(string), connected)
 	n.Disconnect()
 	awaitNode(t, c, a["id"].(string), func(row map[string]any) bool { return row["connected"] == false })
-	for i := 0; i < 5; i++ {
+	// 断线交接可能冻结一个在途批次；本夹具在冻结前也受3条容量限制。
+	// 它不占3条待发容量，因此最多保留6条，其他事件必须有缺口记录。
+	for i := 0; i < 25; i++ {
 		if err := n.RecordEvent("sync_failed", fmt.Sprintf("失败 %d", i), 2); err != nil {
 			t.Fatal(err)
 		}
 	}
 	n.Restore()
 	query := "?node_id=" + a["id"].(string)
-	rows := awaitEvents(t, h, c, query+"&type=sync_failed", 3)
-	want := map[string]bool{"失败 2": true, "失败 3": true, "失败 4": true}
-	for _, row := range rows {
-		if !want[row.(map[string]any)["message"].(string)] {
-			t.Fatal("没有保留最新事件")
+	deadline := time.Now().Add(5 * time.Second)
+	var rows, gaps []any
+	for time.Now().Before(deadline) {
+		rows = eventRows(c, query+"&type=sync_failed")
+		gaps = eventRows(c, query+"&type=event_gap")
+		latest := map[string]bool{}
+		for _, row := range rows {
+			latest[row.(map[string]any)["message"].(string)] = true
 		}
+		var lost float64
+		for _, row := range gaps {
+			gap := row.(map[string]any)["gap"].(map[string]any)
+			if gap["reason"] == "overflow" {
+				lost += gap["count"].(float64)
+			}
+		}
+		if latest["失败 22"] && latest["失败 23"] && latest["失败 24"] && lost >= 25-float64(len(rows)) {
+			if len(rows) > 6 {
+				t.Fatalf("超出待发与在途总预算: %d", len(rows))
+			}
+			return
+		}
+		h.Clock.Advance(time.Second)
+		time.Sleep(5 * time.Millisecond)
 	}
-	gaps := awaitEvents(t, h, c, query+"&type=event_gap", 1)
-	gap := gaps[0].(map[string]any)["gap"].(map[string]any)
-	if gap["reason"] != "overflow" || gap["count"].(float64) < 2 {
-		t.Fatalf("缺口未记录淘汰数量: %v", gap)
-	}
+	t.Fatalf("未保留最新事件或未记录容量缺口: events=%v gaps=%v", rows, gaps)
 }
 
 // 超过 24 小时的内容不得补报，恰好 24 小时的内容仍在允许窗口内。

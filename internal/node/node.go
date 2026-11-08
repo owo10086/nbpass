@@ -51,6 +51,7 @@ type Config struct {
 }
 
 type Dependencies struct {
+	exitHealth          func() []*controlpb.ExitHealth
 	SelfCheckLookup     func(context.Context, string) ([]string, error)
 	SelfCheckDial       func(context.Context, string) (net.Conn, error)
 	SelfCheckStore      SelfCheckStore
@@ -200,7 +201,8 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 		deps.Forwarding.Clock = deps.Clock
 	}
 	engine := forwarding.NewEngine(deps.Forwarding)
-	report := &controlpb.NodeReport{DnsWatchCapable: true, TunnelAuthorizationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
+	deps.exitHealth = engine.ExitHealth
+	report := &controlpb.NodeReport{ExitFailoverVersion: 1, DnsWatchCapable: true, TunnelAuthorizationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
 	defer func() {
 		engine.Close()
 		if deps.Traffic != nil {

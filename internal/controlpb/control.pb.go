@@ -306,7 +306,8 @@ func (x *EnrollResponse) GetToken() string {
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 type NodeReport struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ExitFailoverVersion uint32                 `protobuf:"varint,150,opt,name=exit_failover_version,json=exitFailoverVersion,proto3" json:"exit_failover_version,omitempty"`
 	// 自测独立补报，只消费自测结果，不推进活性、探针、事件或配置确认。
 	SelfCheckOnly    bool     `protobuf:"varint,90,opt,name=self_check_only,json=selfCheckOnly,proto3" json:"self_check_only,omitempty"`
 	SelfCheckResults [][]byte `protobuf:"bytes,91,rep,name=self_check_results,json=selfCheckResults,proto3" json:"self_check_results,omitempty"`
@@ -374,6 +375,13 @@ func (x *NodeReport) ProtoReflect() protoreflect.Message {
 // Deprecated: Use NodeReport.ProtoReflect.Descriptor instead.
 func (*NodeReport) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *NodeReport) GetExitFailoverVersion() uint32 {
+	if x != nil {
+		return x.ExitFailoverVersion
+	}
+	return 0
 }
 
 func (x *NodeReport) GetSelfCheckOnly() bool {
@@ -619,8 +627,9 @@ func (x *RuleApplyResult) GetApplyError() string {
 }
 
 type ProbeSample struct {
-	state    protoimpl.MessageState `protogen:"open.v1"`
-	Sequence uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ExitHealth []*ExitHealth          `protobuf:"bytes,150,rep,name=exit_health,json=exitHealth,proto3" json:"exit_health,omitempty"`
+	Sequence   uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	// 缺少的 key 表示缺测；单位及允许字段由 internal/probe 定义。
 	Values        map[string]float64 `protobuf:"bytes,2,rep,name=values,proto3" json:"values,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"fixed64,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
@@ -655,6 +664,13 @@ func (x *ProbeSample) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ProbeSample.ProtoReflect.Descriptor instead.
 func (*ProbeSample) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *ProbeSample) GetExitHealth() []*ExitHealth {
+	if x != nil {
+		return x.ExitHealth
+	}
+	return nil
 }
 
 func (x *ProbeSample) GetSequence() uint64 {
@@ -1170,17 +1186,19 @@ func (x *ConfigSnapshot) GetTunnelServer() *TunnelServer {
 }
 
 type ForwardRule struct {
-	state                   protoimpl.MessageState `protogen:"open.v1"`
-	AuthorizationGeneration uint64                 `protobuf:"varint,110,opt,name=authorization_generation,json=authorizationGeneration,proto3" json:"authorization_generation,omitempty"`
-	Id                      string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	EntryGroupId            string                 `protobuf:"bytes,2,opt,name=entry_group_id,json=entryGroupId,proto3" json:"entry_group_id,omitempty"`
-	ListenPort              uint32                 `protobuf:"varint,3,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
-	TargetAddress           string                 `protobuf:"bytes,4,opt,name=target_address,json=targetAddress,proto3" json:"target_address,omitempty"`
-	TargetFamily            AddressFamily          `protobuf:"varint,5,opt,name=target_family,json=targetFamily,proto3,enum=nbpass.control.v1.AddressFamily" json:"target_family,omitempty"`
-	TargetPort              uint32                 `protobuf:"varint,6,opt,name=target_port,json=targetPort,proto3" json:"target_port,omitempty"`
-	AllowPrivate            bool                   `protobuf:"varint,7,opt,name=allow_private,json=allowPrivate,proto3" json:"allow_private,omitempty"`
-	Kind                    RuleKind               `protobuf:"varint,8,opt,name=kind,proto3,enum=nbpass.control.v1.RuleKind" json:"kind,omitempty"`
-	ExitGroupId             string                 `protobuf:"bytes,40,opt,name=exit_group_id,json=exitGroupId,proto3" json:"exit_group_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 当前代次已由出口确认的候选；缺失仅兼容旧版单成员快照。
+	AuthorizedExitIds       []string      `protobuf:"bytes,150,rep,name=authorized_exit_ids,json=authorizedExitIds,proto3" json:"authorized_exit_ids,omitempty"`
+	AuthorizationGeneration uint64        `protobuf:"varint,110,opt,name=authorization_generation,json=authorizationGeneration,proto3" json:"authorization_generation,omitempty"`
+	Id                      string        `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	EntryGroupId            string        `protobuf:"bytes,2,opt,name=entry_group_id,json=entryGroupId,proto3" json:"entry_group_id,omitempty"`
+	ListenPort              uint32        `protobuf:"varint,3,opt,name=listen_port,json=listenPort,proto3" json:"listen_port,omitempty"`
+	TargetAddress           string        `protobuf:"bytes,4,opt,name=target_address,json=targetAddress,proto3" json:"target_address,omitempty"`
+	TargetFamily            AddressFamily `protobuf:"varint,5,opt,name=target_family,json=targetFamily,proto3,enum=nbpass.control.v1.AddressFamily" json:"target_family,omitempty"`
+	TargetPort              uint32        `protobuf:"varint,6,opt,name=target_port,json=targetPort,proto3" json:"target_port,omitempty"`
+	AllowPrivate            bool          `protobuf:"varint,7,opt,name=allow_private,json=allowPrivate,proto3" json:"allow_private,omitempty"`
+	Kind                    RuleKind      `protobuf:"varint,8,opt,name=kind,proto3,enum=nbpass.control.v1.RuleKind" json:"kind,omitempty"`
+	ExitGroupId             string        `protobuf:"bytes,40,opt,name=exit_group_id,json=exitGroupId,proto3" json:"exit_group_id,omitempty"`
 	unknownFields           protoimpl.UnknownFields
 	sizeCache               protoimpl.SizeCache
 }
@@ -1213,6 +1231,13 @@ func (x *ForwardRule) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ForwardRule.ProtoReflect.Descriptor instead.
 func (*ForwardRule) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ForwardRule) GetAuthorizedExitIds() []string {
+	if x != nil {
+		return x.AuthorizedExitIds
+	}
+	return nil
 }
 
 func (x *ForwardRule) GetAuthorizationGeneration() uint64 {
@@ -2013,6 +2038,99 @@ func (x *DNSWatchResult) GetFailed() bool {
 	return false
 }
 
+// 入口观测的出口链路状态，不代表出口到所有目标的可达性。
+type ExitHealth struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	ExitId              string                 `protobuf:"bytes,150,opt,name=exit_id,json=exitId,proto3" json:"exit_id,omitempty"`
+	State               string                 `protobuf:"bytes,151,opt,name=state,proto3" json:"state,omitempty"`
+	ConsecutiveFailures uint32                 `protobuf:"varint,152,opt,name=consecutive_failures,json=consecutiveFailures,proto3" json:"consecutive_failures,omitempty"`
+	LastProbe           string                 `protobuf:"bytes,153,opt,name=last_probe,json=lastProbe,proto3" json:"last_probe,omitempty"`
+	FailureClass        string                 `protobuf:"bytes,154,opt,name=failure_class,json=failureClass,proto3" json:"failure_class,omitempty"`
+	RecoverySinceUnix   int64                  `protobuf:"varint,155,opt,name=recovery_since_unix,json=recoverySinceUnix,proto3" json:"recovery_since_unix,omitempty"`
+	CheckedAtUnix       int64                  `protobuf:"varint,156,opt,name=checked_at_unix,json=checkedAtUnix,proto3" json:"checked_at_unix,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *ExitHealth) Reset() {
+	*x = ExitHealth{}
+	mi := &file_control_v1_control_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExitHealth) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExitHealth) ProtoMessage() {}
+
+func (x *ExitHealth) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExitHealth.ProtoReflect.Descriptor instead.
+func (*ExitHealth) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ExitHealth) GetExitId() string {
+	if x != nil {
+		return x.ExitId
+	}
+	return ""
+}
+
+func (x *ExitHealth) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *ExitHealth) GetConsecutiveFailures() uint32 {
+	if x != nil {
+		return x.ConsecutiveFailures
+	}
+	return 0
+}
+
+func (x *ExitHealth) GetLastProbe() string {
+	if x != nil {
+		return x.LastProbe
+	}
+	return ""
+}
+
+func (x *ExitHealth) GetFailureClass() string {
+	if x != nil {
+		return x.FailureClass
+	}
+	return ""
+}
+
+func (x *ExitHealth) GetRecoverySinceUnix() int64 {
+	if x != nil {
+		return x.RecoverySinceUnix
+	}
+	return 0
+}
+
+func (x *ExitHealth) GetCheckedAtUnix() int64 {
+	if x != nil {
+		return x.CheckedAtUnix
+	}
+	return 0
+}
+
 var File_control_v1_control_proto protoreflect.FileDescriptor
 
 const file_control_v1_control_proto_rawDesc = "" +
@@ -2022,9 +2140,10 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\xb0\t\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\xe5\t\n" +
 	"\n" +
-	"NodeReport\x12&\n" +
+	"NodeReport\x123\n" +
+	"\x15exit_failover_version\x18\x96\x01 \x01(\rR\x13exitFailoverVersion\x12&\n" +
 	"\x0fself_check_only\x18Z \x01(\bR\rselfCheckOnly\x12,\n" +
 	"\x12self_check_results\x18[ \x03(\fR\x10selfCheckResults\x12$\n" +
 	"\x0edns_watch_only\x18d \x01(\bR\fdnsWatchOnly\x12M\n" +
@@ -2059,8 +2178,10 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\arule_id\x18\x01 \x01(\tR\x06ruleId\x12)\n" +
 	"\x10applied_revision\x18\x02 \x01(\x04R\x0fappliedRevision\x12\x1f\n" +
 	"\vapply_error\x18\x03 \x01(\tR\n" +
-	"applyError\"\xa8\x01\n" +
-	"\vProbeSample\x12\x1a\n" +
+	"applyError\"\xe9\x01\n" +
+	"\vProbeSample\x12?\n" +
+	"\vexit_health\x18\x96\x01 \x03(\v2\x1d.nbpass.control.v1.ExitHealthR\n" +
+	"exitHealth\x12\x1a\n" +
 	"\bsequence\x18\x01 \x01(\x04R\bsequence\x12B\n" +
 	"\x06values\x18\x02 \x03(\v2*.nbpass.control.v1.ProbeSample.ValuesEntryR\x06values\x1a9\n" +
 	"\vValuesEntry\x12\x10\n" +
@@ -2111,8 +2232,9 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x05rules\x18\x03 \x03(\v2\x1e.nbpass.control.v1.ForwardRuleR\x05rules\x12=\n" +
 	"\vexit_groups\x18( \x03(\v2\x1c.nbpass.control.v1.ExitGroupR\n" +
 	"exitGroups\x12D\n" +
-	"\rtunnel_server\x18) \x01(\v2\x1f.nbpass.control.v1.TunnelServerR\ftunnelServer\"\xa8\x03\n" +
-	"\vForwardRule\x129\n" +
+	"\rtunnel_server\x18) \x01(\v2\x1f.nbpass.control.v1.TunnelServerR\ftunnelServer\"\xd9\x03\n" +
+	"\vForwardRule\x12/\n" +
+	"\x13authorized_exit_ids\x18\x96\x01 \x03(\tR\x11authorizedExitIds\x129\n" +
 	"\x18authorization_generation\x18n \x01(\x04R\x17authorizationGeneration\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12$\n" +
 	"\x0eentry_group_id\x18\x02 \x01(\tR\fentryGroupId\x12\x1f\n" +
@@ -2194,7 +2316,17 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x0eDNSWatchResult\x12\x17\n" +
 	"\atask_id\x18d \x01(\tR\x06taskId\x12\x10\n" +
 	"\x03ips\x18e \x03(\tR\x03ips\x12\x16\n" +
-	"\x06failed\x18f \x01(\bR\x06failed*H\n" +
+	"\x06failed\x18f \x01(\bR\x06failed\"\x91\x02\n" +
+	"\n" +
+	"ExitHealth\x12\x18\n" +
+	"\aexit_id\x18\x96\x01 \x01(\tR\x06exitId\x12\x15\n" +
+	"\x05state\x18\x97\x01 \x01(\tR\x05state\x122\n" +
+	"\x14consecutive_failures\x18\x98\x01 \x01(\rR\x13consecutiveFailures\x12\x1e\n" +
+	"\n" +
+	"last_probe\x18\x99\x01 \x01(\tR\tlastProbe\x12$\n" +
+	"\rfailure_class\x18\x9a\x01 \x01(\tR\ffailureClass\x12/\n" +
+	"\x13recovery_since_unix\x18\x9b\x01 \x01(\x03R\x11recoverySinceUnix\x12'\n" +
+	"\x0fchecked_at_unix\x18\x9c\x01 \x01(\x03R\rcheckedAtUnix*H\n" +
 	"\rAddressFamily\x12\x1e\n" +
 	"\x1aADDRESS_FAMILY_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ADDRESS_FAMILY_IPV4\x10\x01*Q\n" +
@@ -2225,7 +2357,7 @@ func file_control_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
 var file_control_v1_control_proto_goTypes = []any{
 	(AddressFamily)(0),       // 0: nbpass.control.v1.AddressFamily
 	(RuleKind)(0),            // 1: nbpass.control.v1.RuleKind
@@ -2252,7 +2384,8 @@ var file_control_v1_control_proto_goTypes = []any{
 	(*RotationProgress)(nil), // 22: nbpass.control.v1.RotationProgress
 	(*DNSWatchTask)(nil),     // 23: nbpass.control.v1.DNSWatchTask
 	(*DNSWatchResult)(nil),   // 24: nbpass.control.v1.DNSWatchResult
-	nil,                      // 25: nbpass.control.v1.ProbeSample.ValuesEntry
+	(*ExitHealth)(nil),       // 25: nbpass.control.v1.ExitHealth
+	nil,                      // 26: nbpass.control.v1.ProbeSample.ValuesEntry
 }
 var file_control_v1_control_proto_depIdxs = []int32{
 	24, // 0: nbpass.control.v1.NodeReport.dns_watch_results:type_name -> nbpass.control.v1.DNSWatchResult
@@ -2261,33 +2394,34 @@ var file_control_v1_control_proto_depIdxs = []int32{
 	12, // 3: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
 	7,  // 4: nbpass.control.v1.NodeReport.rule_results:type_name -> nbpass.control.v1.RuleApplyResult
 	10, // 5: nbpass.control.v1.NodeReport.traffic:type_name -> nbpass.control.v1.RuleTraffic
-	25, // 6: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
-	23, // 7: nbpass.control.v1.PanelMessage.dns_watch_tasks:type_name -> nbpass.control.v1.DNSWatchTask
-	21, // 8: nbpass.control.v1.PanelMessage.rotation_command:type_name -> nbpass.control.v1.RotationCommand
-	14, // 9: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
-	11, // 10: nbpass.control.v1.PanelMessage.acknowledged_traffic:type_name -> nbpass.control.v1.TrafficAck
-	13, // 11: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
-	15, // 12: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
-	17, // 13: nbpass.control.v1.ConfigSnapshot.exit_groups:type_name -> nbpass.control.v1.ExitGroup
-	20, // 14: nbpass.control.v1.ConfigSnapshot.tunnel_server:type_name -> nbpass.control.v1.TunnelServer
-	0,  // 15: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
-	1,  // 16: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
-	2,  // 17: nbpass.control.v1.TunnelEndpoint.transport:type_name -> nbpass.control.v1.TunnelTransport
-	3,  // 18: nbpass.control.v1.ExitGroup.strategy:type_name -> nbpass.control.v1.ExitStrategy
-	16, // 19: nbpass.control.v1.ExitGroup.exits:type_name -> nbpass.control.v1.TunnelEndpoint
-	15, // 20: nbpass.control.v1.TunnelGrant.rule:type_name -> nbpass.control.v1.ForwardRule
-	2,  // 21: nbpass.control.v1.TunnelServer.transport:type_name -> nbpass.control.v1.TunnelTransport
-	18, // 22: nbpass.control.v1.TunnelServer.peers:type_name -> nbpass.control.v1.TunnelPeer
-	19, // 23: nbpass.control.v1.TunnelServer.grants:type_name -> nbpass.control.v1.TunnelGrant
-	4,  // 24: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
-	6,  // 25: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
-	5,  // 26: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
-	9,  // 27: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
-	26, // [26:28] is the sub-list for method output_type
-	24, // [24:26] is the sub-list for method input_type
-	24, // [24:24] is the sub-list for extension type_name
-	24, // [24:24] is the sub-list for extension extendee
-	0,  // [0:24] is the sub-list for field type_name
+	25, // 6: nbpass.control.v1.ProbeSample.exit_health:type_name -> nbpass.control.v1.ExitHealth
+	26, // 7: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
+	23, // 8: nbpass.control.v1.PanelMessage.dns_watch_tasks:type_name -> nbpass.control.v1.DNSWatchTask
+	21, // 9: nbpass.control.v1.PanelMessage.rotation_command:type_name -> nbpass.control.v1.RotationCommand
+	14, // 10: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
+	11, // 11: nbpass.control.v1.PanelMessage.acknowledged_traffic:type_name -> nbpass.control.v1.TrafficAck
+	13, // 12: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
+	15, // 13: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
+	17, // 14: nbpass.control.v1.ConfigSnapshot.exit_groups:type_name -> nbpass.control.v1.ExitGroup
+	20, // 15: nbpass.control.v1.ConfigSnapshot.tunnel_server:type_name -> nbpass.control.v1.TunnelServer
+	0,  // 16: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
+	1,  // 17: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
+	2,  // 18: nbpass.control.v1.TunnelEndpoint.transport:type_name -> nbpass.control.v1.TunnelTransport
+	3,  // 19: nbpass.control.v1.ExitGroup.strategy:type_name -> nbpass.control.v1.ExitStrategy
+	16, // 20: nbpass.control.v1.ExitGroup.exits:type_name -> nbpass.control.v1.TunnelEndpoint
+	15, // 21: nbpass.control.v1.TunnelGrant.rule:type_name -> nbpass.control.v1.ForwardRule
+	2,  // 22: nbpass.control.v1.TunnelServer.transport:type_name -> nbpass.control.v1.TunnelTransport
+	18, // 23: nbpass.control.v1.TunnelServer.peers:type_name -> nbpass.control.v1.TunnelPeer
+	19, // 24: nbpass.control.v1.TunnelServer.grants:type_name -> nbpass.control.v1.TunnelGrant
+	4,  // 25: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
+	6,  // 26: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
+	5,  // 27: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
+	9,  // 28: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
+	27, // [27:29] is the sub-list for method output_type
+	25, // [25:27] is the sub-list for method input_type
+	25, // [25:25] is the sub-list for extension type_name
+	25, // [25:25] is the sub-list for extension extendee
+	0,  // [0:25] is the sub-list for field type_name
 }
 
 func init() { file_control_v1_control_proto_init() }
@@ -2301,7 +2435,7 @@ func file_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_v1_control_proto_rawDesc), len(file_control_v1_control_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   22,
+			NumMessages:   23,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
