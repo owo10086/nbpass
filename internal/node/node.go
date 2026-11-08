@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -52,6 +53,10 @@ type Config struct {
 }
 
 type Dependencies struct {
+	SelfCheckLookup     func(context.Context, string) ([]string, error)
+	SelfCheckDial       func(context.Context, string) (net.Conn, error)
+	SelfCheckStore      SelfCheckStore
+	selfChecks          *selfCheckRunner
 	RotationStore       RotationStore
 	RotationIPv4Sources [2]func(context.Context) (string, error)
 	RotationLocalIPv4   func(context.Context) ([]string, error)
@@ -96,6 +101,9 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 	if deps.RotationHTTP == nil {
 		deps.RotationHTTP = (rotation.HTTPExecutor{}).Do
+	}
+	if deps.SelfCheckStore == nil {
+		deps.SelfCheckStore, _ = deps.Store.(SelfCheckStore)
 	}
 	started := deps.Clock.Now()
 	address := u.Host
@@ -182,6 +190,18 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 			deps.rotations.wg.Wait()
 		}
 	}()
+	selfCtx, stopSelfChecks := context.WithCancel(ctx)
+	deps.selfChecks, err = openSelfChecks(selfCtx, deps)
+	if err != nil {
+		stopSelfChecks()
+		return errors.New("无法打开自测缓存")
+	}
+	defer func() {
+		stopSelfChecks()
+		if deps.selfChecks != nil {
+			deps.selfChecks.wg.Wait()
+		}
+	}()
 	report := &controlpb.NodeReport{NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
 	probeCtx, stopProbe := context.WithCancel(ctx)
 	defer stopProbe()
@@ -242,7 +262,10 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	pending := map[string]bool{}
 	pendingFull := false
 	drainEvents := false
-	var response, eventAck timing.Timer
+	var response, eventAck, selfAck timing.Timer
+	var selfAckC <-chan time.Time
+	selfPending := map[string]bool{}
+	drainSelf := true
 	var responseC, eventAckC <-chan time.Time
 	defer func() {
 		if response != nil {
@@ -250,6 +273,9 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		}
 		if eventAck != nil {
 			eventAck.Stop()
+		}
+		if selfAck != nil {
+			selfAck.Stop()
 		}
 	}()
 	type reportKind int
@@ -259,11 +285,34 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		eventReport
 		configReport
 		rotationReport
+		selfCheckReport
 	)
 	send := func(kind reportKind, sample *controlpb.ProbeSample) error {
 		outgoing := proto.Clone(report).(*controlpb.NodeReport)
 		outgoing.Probe, outgoing.ProbeOnly, outgoing.EventsOnly = sample, kind == probeReport, kind == eventReport
 		outgoing.Events, outgoing.PublicIpv4 = nil, ""
+		outgoing.SelfCheckOnly = kind == selfCheckReport
+		outgoing.SelfCheckResults = nil
+		if kind == selfCheckReport {
+			if len(selfPending) > 0 {
+				return nil
+			}
+			outgoing.SelfCheckResults = deps.selfChecks.batch()
+			if len(outgoing.SelfCheckResults) == 0 {
+				return nil
+			}
+			for _, data := range outgoing.SelfCheckResults {
+				var round struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal(data, &round); err != nil {
+					return err
+				}
+				selfPending[round.ID] = true
+			}
+			selfAck = clock.NewTimer(15 * time.Second)
+			selfAckC = selfAck.C()
+		}
 		outgoing.Rotation = nil
 		outgoing.RotationOnly = kind == rotationReport
 		if kind == rotationReport {
@@ -272,7 +321,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		if kind != configReport {
 			outgoing.AttemptedRevision, outgoing.ApplyError = 0, ""
 		}
-		if kind == probeReport || kind == eventReport || kind == rotationReport {
+		if kind == probeReport || kind == eventReport || kind == rotationReport || kind == selfCheckReport {
 			outgoing.AppliedRevision, outgoing.AppliedDigest = 0, ""
 		}
 		if kind == heartbeatReport {
@@ -327,6 +376,10 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	if deps.rotations != nil {
 		rotationWake = deps.rotations.wake
 	}
+	var selfWake <-chan struct{}
+	if deps.selfChecks != nil {
+		selfWake = deps.selfChecks.wake
+	}
 	nextHeartbeat := clock.Now().Add(10 * time.Second)
 	if err := send(heartbeatReport, nil); err != nil {
 		return err
@@ -365,6 +418,12 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			}
 		default:
 		}
+		if drainSelf && len(selfPending) == 0 {
+			drainSelf = false
+			if err := send(selfCheckReport, nil); err != nil {
+				return err
+			}
+		}
 		if drainEvents && len(pending) == 0 {
 			drainEvents = false
 			if err := send(eventReport, nil); err != nil {
@@ -374,6 +433,10 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-selfAckC:
+			return errors.New("自测确认超时")
+		case <-selfWake:
+			drainSelf = true
 		case <-rotationWake:
 			if err := send(rotationReport, nil); err != nil {
 				return err
@@ -399,6 +462,24 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				response.Stop()
 			}
 			responseC = nil
+			if len(m.AcknowledgedSelfCheckIds) > 0 {
+				for _, id := range m.AcknowledgedSelfCheckIds {
+					if !selfPending[id] {
+						return errors.New("自测确认不属于在途批次")
+					}
+				}
+				if err := deps.selfChecks.ack(ctx, m.AcknowledgedSelfCheckIds); err != nil {
+					return err
+				}
+				for _, id := range m.AcknowledgedSelfCheckIds {
+					delete(selfPending, id)
+				}
+				if len(selfPending) == 0 {
+					selfAck.Stop()
+					selfAckC = nil
+					drainSelf = true
+				}
+			}
 			if len(m.AcknowledgedEventIds) > 0 {
 				for _, id := range m.AcknowledgedEventIds {
 					if !pending[id] {
@@ -432,7 +513,13 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				continue
 			}
 			report.AttemptedRevision = snapshot.Revision
-			err := engine.Apply(snapshot)
+			err := forwarding.ValidateSnapshot(snapshot)
+			if err == nil {
+				err = deps.selfChecks.apply(ctx, snapshot.SelfCheckConfig, snapshot.Revision)
+			}
+			if err == nil {
+				err = engine.Apply(snapshot)
+			}
 			report.AppliedRevision, report.AppliedDigest = engine.Applied()
 			report.ApplyError = ""
 			if err != nil {

@@ -149,6 +149,7 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 	p.stopBackground = cancel
 	p.startOffline(background)
 	p.startTelegram(background)
+	p.startSelfCheckNotifications(background)
 	return p, nil
 }
 

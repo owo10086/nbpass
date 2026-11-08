@@ -13,6 +13,9 @@ message EnrollResponse { string node_id = 1; string token = 2; }
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 message NodeReport {
+  // 自测独立补报，只消费自测结果，不推进活性、探针、事件或配置确认。
+  bool self_check_only = 90;
+  repeated bytes self_check_results = 91;
   bool rotation_only = 80;
   RotationProgress rotation = 81;
   string node_id = 1;
@@ -41,6 +44,7 @@ message ProbeSample {
 
 // 配置为完整快照；缺失规则表示撤销，摘要覆盖版本与全部内容。
 message PanelMessage {
+  repeated string acknowledged_self_check_ids = 90;
   RotationCommand rotation_command = 80;
   uint32 protocol_version = 1;
   uint64 desired_revision = 2;
@@ -65,6 +69,7 @@ message EventGap {
 }
 
 message ConfigSnapshot {
+  bytes self_check_config = 90;
   uint64 revision = 1;
   string digest = 2;
   repeated ForwardRule rules = 3;

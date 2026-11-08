@@ -178,6 +178,7 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 			response, err = p.controlMessage(stream.Context(), id)
 			if response != nil && ack != nil {
 				response.AcknowledgedEventIds = ack.AcknowledgedEventIds
+				response.AcknowledgedSelfCheckIds = ack.AcknowledgedSelfCheckIds
 			}
 		}
 		p.controlMu.Unlock()
@@ -241,13 +242,13 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 				return err
 			}
 			report := message.report
-			heartbeat := !report.ProbeOnly && !report.EventsOnly && !report.RotationOnly && report.AttemptedRevision == 0
+			heartbeat := !report.ProbeOnly && !report.EventsOnly && !report.RotationOnly && !report.SelfCheckOnly && report.AttemptedRevision == 0
 			if heartbeat {
 				alive.Stop()
 				alive = p.deps.Clock.NewTimer(90 * time.Second)
 			}
 			// 配置确认没有回包；探针/事件回包不附配置，避免相互触发同步。
-			if heartbeat || report.ProbeOnly || report.EventsOnly || report.RotationOnly || len(response.AcknowledgedEventIds) > 0 {
+			if heartbeat || report.ProbeOnly || report.EventsOnly || report.RotationOnly || report.SelfCheckOnly || len(response.AcknowledgedEventIds) > 0 {
 				if err := send(response, heartbeat); err != nil {
 					return err
 				}
@@ -354,6 +355,13 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, status.Error(codes.FailedPrecondition, "旧进程实例报告无效")
 	}
 	session.instance = report.ProcessInstance
+	if report.SelfCheckOnly {
+		ack, err := p.acceptSelfChecks(ctx, id, report.SelfCheckResults)
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, "自测结果无法保存")
+		}
+		return &controlpb.PanelMessage{ProtocolVersion: 1, AcknowledgedSelfCheckIds: ack}, nil
+	}
 	if report.RotationOnly {
 		if err := p.acceptRotation(ctx, id, report.Rotation); err != nil {
 			return nil, status.Error(codes.InvalidArgument, "换 IP 进度无法保存")
