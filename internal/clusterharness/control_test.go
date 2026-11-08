@@ -99,7 +99,7 @@ func TestNodeNetworkIsolationOfflineThresholdAndRecovery(t *testing.T) {
 	if nodeRow(t, c, id)["status"] == "offline" {
 		t.Fatal("不足 90 秒过早离线")
 	}
-	h.Clock.Advance(time.Second)
+	h.Clock.Advance(time.Second + time.Nanosecond)
 	row := nodeRow(t, c, id)
 	if row["status"] != "offline" || row["config_status"] != "待确认" {
 		t.Fatalf("90 秒后: %v", row)
@@ -201,19 +201,23 @@ func TestMaintenanceExpiresAndStartsFreshOfflineObservation(t *testing.T) {
 		t.Fatal("维护期满复用了累计失联")
 	}
 	h.Clock.Advance(90 * time.Second)
+	if nodeRow(t, c, id)["status"] == "offline" {
+		t.Fatal("维护期满的完整观察窗口内提前判离线")
+	}
+	h.Clock.Advance(time.Nanosecond)
 	if nodeRow(t, c, id)["status"] != "offline" {
 		t.Fatal("维护期满未重新评估")
 	}
 }
 
-func TestSilentControlLinkIsOfflineAtNinetySeconds(t *testing.T) {
+func TestSilentControlLinkIsOfflineAfterNinetySeconds(t *testing.T) {
 	h, c := nodeBrowser(t)
 	created := addNode(c, "静默节点")
 	id := created["id"].(string)
 	n := h.StartNode(created["installation_ticket"].(string))
 	awaitNode(t, c, id, connected)
 	n.Blackhole()
-	h.Clock.Advance(90 * time.Second)
+	h.Clock.Advance(90*time.Second + time.Nanosecond)
 	awaitNode(t, c, id, func(row map[string]any) bool { return row["status"] == "offline" })
 	if nodeRow(t, c, id)["config_status"] != "待确认" {
 		t.Fatal("离线配置仍标正常")

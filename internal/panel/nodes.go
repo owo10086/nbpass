@@ -100,6 +100,10 @@ func nullableTime(value sql.NullInt64) *time.Time {
 }
 
 func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
+	if err := p.observeAllOffline(r.Context()); err != nil {
+		problem(w, 503, "离线状态存储暂不可用")
+		return
+	}
 	p.controlMu.Lock()
 	defer p.controlMu.Unlock()
 	rows, err := p.db.QueryContext(r.Context(), `SELECT id, name, last_seen_at, disconnected_at, maintenance_until,
@@ -126,30 +130,8 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 		}
 		n.resolve(override, mainland)
 		n.LastSeenAt, n.MaintenanceUntil = nullableTime(last), nullableTime(maintenance)
-		n.Connected = p.controls[n.ID] != nil && last.Valid && now.Sub(*n.LastSeenAt) < 90*time.Second
-		n.Status, n.StatusLabel = "online", "在线"
-		base := nullableTime(disconnected)
-		if base == nil {
-			base = n.LastSeenAt
-		}
-		if base == nil {
-			n.Status, n.StatusLabel = "pending", "待接入"
-		} else {
-			// 维护结束后重新给出完整观察窗口，不能沿用维护期间的累计失联。
-			if n.MaintenanceUntil != nil && n.MaintenanceUntil.After(*base) {
-				base = n.MaintenanceUntil
-			}
-			if !n.Connected && now.Sub(*base) >= 90*time.Second {
-				if now.Sub(p.startedAt) >= 90*time.Second {
-					n.Status, n.StatusLabel = "offline", "离线"
-				} else {
-					n.Status, n.StatusLabel = "pending", "待确认"
-				}
-			}
-		}
-		if n.MaintenanceUntil != nil && now.Before(*n.MaintenanceUntil) {
-			n.Status, n.StatusLabel = "maintenance", "维护中"
-		}
+		state := p.presence(n.ID, last, disconnected, maintenance, now)
+		n.Connected, n.Status, n.StatusLabel = state.connected, state.status, state.label
 		n.ConfigStatus = "待确认"
 		if n.Connected {
 			n.ConfigStatus = "未同步"

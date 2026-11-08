@@ -40,6 +40,7 @@ type Dependencies struct {
 	Assets       fs.FS
 	NodeBinary   func() (io.ReadCloser, error)
 	RegionLookup func(context.Context, string) (Region, error)
+	Telegram     func(context.Context, TelegramMessage) error
 }
 
 type Config struct {
@@ -58,6 +59,13 @@ type Panel struct {
 	controls        map[string]*controlSession
 	pendingControls map[string]map[*controlSession]struct{}
 	startedAt       time.Time
+	background      sync.WaitGroup
+	stopBackground  context.CancelFunc
+	closeOnce       sync.Once
+	closeErr        error
+	telegramMu      sync.Mutex
+	telegramWake    chan struct{}
+	offlineWake     chan struct{}
 }
 
 func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error) {
@@ -98,6 +106,9 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 	if deps.Passwords == nil {
 		deps.Passwords = BcryptPasswords{}
 	}
+	if deps.Telegram == nil {
+		deps.Telegram = defaultTelegram.Send
+	}
 	deps.Random = &lockedReader{Reader: deps.Random}
 	db, err := deps.Persistence.Open(ctx)
 	if err != nil {
@@ -121,21 +132,30 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 		db.Close()
 		return nil, err
 	}
+	background, cancel := context.WithCancel(ctx)
+	p.stopBackground = cancel
+	p.startOffline(background)
+	p.startTelegram(background)
 	return p, nil
 }
 
 func (p *Panel) Close() error {
-	p.controlMu.Lock()
-	defer p.controlMu.Unlock()
-	for _, session := range p.controls {
-		session.stop()
-	}
-	for _, pending := range p.pendingControls {
-		for session := range pending {
+	p.closeOnce.Do(func() {
+		p.stopBackground()
+		p.controlMu.Lock()
+		for _, session := range p.controls {
 			session.stop()
 		}
-	}
-	return p.db.Close()
+		for _, pending := range p.pendingControls {
+			for session := range pending {
+				session.stop()
+			}
+		}
+		p.controlMu.Unlock()
+		p.background.Wait()
+		p.closeErr = p.db.Close()
+	})
+	return p.closeErr
 }
 
 func (p *Panel) Secrets() SecretStore { return p.secrets }
