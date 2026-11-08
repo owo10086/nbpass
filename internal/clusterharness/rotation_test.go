@@ -331,9 +331,14 @@ func TestRotationTransportLossDuringBlockedHeartbeatCancelsExecution(t *testing.
 	time.Sleep(50 * time.Millisecond)
 	close(releaseHeartbeat)
 	n.Restore()
-	for i := 0; i < 5; i++ {
+	// 取消结果须在真实控制流重连后补报；持续驱动重连用的假时钟，不在五次推进后冻结它。
+	for i := 0; i < 50; i++ {
 		h.Clock.Advance(time.Second)
 		time.Sleep(20 * time.Millisecond)
+		state, _ := c.Do("GET", path, nil, 200)["action"].(map[string]any)
+		if state != nil && state["state"] == "cancelled" {
+			break
+		}
 	}
 	if calls.Load() != 0 {
 		t.Fatal("接收协程已知断流，仍调用接口")

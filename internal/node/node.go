@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"nbpass/internal/controlpb"
+	"nbpass/internal/dnswatch"
 	"nbpass/internal/eventlog"
 	"nbpass/internal/forwarding"
 	"nbpass/internal/probe"
@@ -52,6 +53,7 @@ type Config struct {
 }
 
 type Dependencies struct {
+	DNSWatchLookup      func(context.Context, string, dnswatch.Resolver) ([]string, error)
 	RotationStore       RotationStore
 	RotationIPv4Sources [2]func(context.Context) (string, error)
 	RotationLocalIPv4   func(context.Context) ([]string, error)
@@ -76,6 +78,9 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 	if deps.Clock == nil || deps.Store == nil || deps.Random == nil {
 		return errors.New("节点外部依赖不完整")
+	}
+	if deps.DNSWatchLookup == nil {
+		deps.DNSWatchLookup = (dnswatch.Client{}).Lookup
 	}
 	if deps.PublicIPv4 == nil {
 		deps.PublicIPv4 = defaultPublicIPv4.Query
@@ -182,7 +187,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 			deps.rotations.wg.Wait()
 		}
 	}()
-	report := &controlpb.NodeReport{NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
+	report := &controlpb.NodeReport{DnsWatchCapable: true, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
 	probeCtx, stopProbe := context.WithCancel(ctx)
 	defer stopProbe()
 	updates := make(chan probeUpdate, 1)
@@ -213,6 +218,16 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	defer cancel()
 	onlineCtx, markOffline := context.WithCancel(streamCtx)
 	defer markOffline()
+	var dnsJobs chan<- *controlpb.DNSWatchTask
+	var dnsResults <-chan *controlpb.DNSWatchResult
+	var stopDNS func()
+	defer func() {
+		if stopDNS != nil {
+			stopDNS()
+		}
+	}()
+	dnsSeen := map[string]bool{}
+	var dnsResult *controlpb.DNSWatchResult
 	stream, err := service.Connect(streamCtx)
 	if err != nil {
 		return err
@@ -259,11 +274,17 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		eventReport
 		configReport
 		rotationReport
+		dnsReport
 	)
 	send := func(kind reportKind, sample *controlpb.ProbeSample) error {
 		outgoing := proto.Clone(report).(*controlpb.NodeReport)
 		outgoing.Probe, outgoing.ProbeOnly, outgoing.EventsOnly = sample, kind == probeReport, kind == eventReport
 		outgoing.Events, outgoing.PublicIpv4 = nil, ""
+		outgoing.DnsWatchOnly = kind == dnsReport
+		outgoing.DnsWatchResults = nil
+		if kind == dnsReport {
+			outgoing.DnsWatchResults = []*controlpb.DNSWatchResult{dnsResult}
+		}
 		outgoing.Rotation = nil
 		outgoing.RotationOnly = kind == rotationReport
 		if kind == rotationReport {
@@ -272,7 +293,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		if kind != configReport {
 			outgoing.AttemptedRevision, outgoing.ApplyError = 0, ""
 		}
-		if kind == probeReport || kind == eventReport || kind == rotationReport {
+		if kind == probeReport || kind == eventReport || kind == rotationReport || kind == dnsReport {
 			outgoing.AppliedRevision, outgoing.AppliedDigest = 0, ""
 		}
 		if kind == heartbeatReport {
@@ -374,6 +395,10 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case dnsResult = <-dnsResults:
+			if err := send(dnsReport, nil); err != nil {
+				return err
+			}
 		case <-rotationWake:
 			if err := send(rotationReport, nil); err != nil {
 				return err
@@ -415,6 +440,27 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 					eventAck.Stop()
 					eventAckC = nil
 					drainEvents = drainEvents || pendingFull
+				}
+			}
+			if len(dnsSeen) > 1024 {
+				dnsSeen = map[string]bool{}
+			}
+			if len(m.DnsWatchTasks) > 0 && dnsJobs == nil {
+				dnsJobs, dnsResults, stopDNS = startDNSWatchRunner(streamCtx, deps)
+			}
+			for _, task := range m.DnsWatchTasks {
+				if task == nil || dnsSeen[task.TaskId] || len(task.TaskId) != 43 || !clock.Now().Before(time.Unix(0, task.ExpiresAt)) {
+					continue
+				}
+				resolver := dnswatch.Resolver{Kind: "dns", Address: task.Resolver}
+				domain, err := dnswatch.Domain(task.Domain)
+				if resolver.Validate() != nil || err != nil || domain != task.Domain {
+					continue
+				}
+				select {
+				case dnsJobs <- task:
+					dnsSeen[task.TaskId] = true
+				default:
 				}
 			}
 			if m.RotationCommand != nil {

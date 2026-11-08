@@ -89,6 +89,7 @@ var migrations = []string{
 	managedDNSMigration,
 	offlineMigration + telegramMigration,
 	rotationMigration,
+	dnsWatchMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

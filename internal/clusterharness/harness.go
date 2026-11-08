@@ -20,6 +20,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"nbpass/internal/dnswatch"
 	"nbpass/internal/panel"
 	"nbpass/internal/platform"
 )
@@ -45,7 +46,10 @@ func New(t testing.TB, options ...func(*panel.Dependencies)) *Harness {
 	t.Helper()
 	h := &Harness{t: t, Dir: t.TempDir(), Clock: &Clock{now: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)}}
 	h.Dependencies = panel.Dependencies{
-		Clock:       h.Clock,
+		Clock: h.Clock,
+		DNSWatchLookup: func(context.Context, string, dnswatch.Resolver) ([]string, error) {
+			return nil, errors.New("测试台未配置 DoH")
+		},
 		Persistence: platform.SQLite{Path: filepath.Join(h.Dir, "panel.db")},
 		KeyFile:     platform.LocalKeyFile{Path: filepath.Join(h.Dir, "panel.key")},
 		Random:      rand.Reader,

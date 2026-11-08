@@ -306,18 +306,22 @@ func (x *EnrollResponse) GetToken() string {
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 type NodeReport struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	RotationOnly      bool                   `protobuf:"varint,80,opt,name=rotation_only,json=rotationOnly,proto3" json:"rotation_only,omitempty"`
-	Rotation          *RotationProgress      `protobuf:"bytes,81,opt,name=rotation,proto3" json:"rotation,omitempty"`
-	NodeId            string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	ProcessInstance   string                 `protobuf:"bytes,2,opt,name=process_instance,json=processInstance,proto3" json:"process_instance,omitempty"`
-	ProtocolVersion   uint32                 `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	SoftwareVersion   string                 `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
-	AppliedRevision   uint64                 `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
-	AppliedDigest     string                 `protobuf:"bytes,6,opt,name=applied_digest,json=appliedDigest,proto3" json:"applied_digest,omitempty"`
-	AttemptedRevision uint64                 `protobuf:"varint,7,opt,name=attempted_revision,json=attemptedRevision,proto3" json:"attempted_revision,omitempty"`
-	ApplyError        string                 `protobuf:"bytes,8,opt,name=apply_error,json=applyError,proto3" json:"apply_error,omitempty"`
-	Probe             *ProbeSample           `protobuf:"bytes,14,opt,name=probe,proto3" json:"probe,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 解析采样独立上报，不能推进活性、配置、探针或事件。
+	DnsWatchOnly      bool              `protobuf:"varint,100,opt,name=dns_watch_only,json=dnsWatchOnly,proto3" json:"dns_watch_only,omitempty"`
+	DnsWatchResults   []*DNSWatchResult `protobuf:"bytes,101,rep,name=dns_watch_results,json=dnsWatchResults,proto3" json:"dns_watch_results,omitempty"`
+	DnsWatchCapable   bool              `protobuf:"varint,102,opt,name=dns_watch_capable,json=dnsWatchCapable,proto3" json:"dns_watch_capable,omitempty"`
+	RotationOnly      bool              `protobuf:"varint,80,opt,name=rotation_only,json=rotationOnly,proto3" json:"rotation_only,omitempty"`
+	Rotation          *RotationProgress `protobuf:"bytes,81,opt,name=rotation,proto3" json:"rotation,omitempty"`
+	NodeId            string            `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	ProcessInstance   string            `protobuf:"bytes,2,opt,name=process_instance,json=processInstance,proto3" json:"process_instance,omitempty"`
+	ProtocolVersion   uint32            `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	SoftwareVersion   string            `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
+	AppliedRevision   uint64            `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
+	AppliedDigest     string            `protobuf:"bytes,6,opt,name=applied_digest,json=appliedDigest,proto3" json:"applied_digest,omitempty"`
+	AttemptedRevision uint64            `protobuf:"varint,7,opt,name=attempted_revision,json=attemptedRevision,proto3" json:"attempted_revision,omitempty"`
+	ApplyError        string            `protobuf:"bytes,8,opt,name=apply_error,json=applyError,proto3" json:"apply_error,omitempty"`
+	Probe             *ProbeSample      `protobuf:"bytes,14,opt,name=probe,proto3" json:"probe,omitempty"`
 	// 探针独立上报不推进 10 秒活性时间，也不改变配置应用状态。
 	ProbeOnly bool `protobuf:"varint,15,opt,name=probe_only,json=probeOnly,proto3" json:"probe_only,omitempty"`
 	// 节点查询的出站公网 IPv4，不作为已验证可入站的业务地址。
@@ -357,6 +361,27 @@ func (x *NodeReport) ProtoReflect() protoreflect.Message {
 // Deprecated: Use NodeReport.ProtoReflect.Descriptor instead.
 func (*NodeReport) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *NodeReport) GetDnsWatchOnly() bool {
+	if x != nil {
+		return x.DnsWatchOnly
+	}
+	return false
+}
+
+func (x *NodeReport) GetDnsWatchResults() []*DNSWatchResult {
+	if x != nil {
+		return x.DnsWatchResults
+	}
+	return nil
+}
+
+func (x *NodeReport) GetDnsWatchCapable() bool {
+	if x != nil {
+		return x.DnsWatchCapable
+	}
+	return false
 }
 
 func (x *NodeReport) GetRotationOnly() bool {
@@ -520,6 +545,7 @@ func (x *ProbeSample) GetValues() map[string]float64 {
 // 配置为完整快照；缺失规则表示撤销，摘要覆盖版本与全部内容。
 type PanelMessage struct {
 	state                protoimpl.MessageState `protogen:"open.v1"`
+	DnsWatchTasks        []*DNSWatchTask        `protobuf:"bytes,100,rep,name=dns_watch_tasks,json=dnsWatchTasks,proto3" json:"dns_watch_tasks,omitempty"`
 	RotationCommand      *RotationCommand       `protobuf:"bytes,80,opt,name=rotation_command,json=rotationCommand,proto3" json:"rotation_command,omitempty"`
 	ProtocolVersion      uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	DesiredRevision      uint64                 `protobuf:"varint,2,opt,name=desired_revision,json=desiredRevision,proto3" json:"desired_revision,omitempty"`
@@ -557,6 +583,13 @@ func (x *PanelMessage) ProtoReflect() protoreflect.Message {
 // Deprecated: Use PanelMessage.ProtoReflect.Descriptor instead.
 func (*PanelMessage) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *PanelMessage) GetDnsWatchTasks() []*DNSWatchTask {
+	if x != nil {
+		return x.DnsWatchTasks
+	}
+	return nil
 }
 
 func (x *PanelMessage) GetRotationCommand() *RotationCommand {
@@ -1480,6 +1513,151 @@ func (x *RotationProgress) GetUnsafeNetwork() bool {
 	return false
 }
 
+// 票 20：每个消息的新增字段均限制在 100–109。
+type DNSWatchTask struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	TaskId          string                 `protobuf:"bytes,100,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Domain          string                 `protobuf:"bytes,101,opt,name=domain,proto3" json:"domain,omitempty"`
+	Resolver        string                 `protobuf:"bytes,102,opt,name=resolver,proto3" json:"resolver,omitempty"`
+	ExpiresAt       int64                  `protobuf:"varint,103,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	ExpectedVersion int64                  `protobuf:"varint,104,opt,name=expected_version,json=expectedVersion,proto3" json:"expected_version,omitempty"`
+	Round           int64                  `protobuf:"varint,105,opt,name=round,proto3" json:"round,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *DNSWatchTask) Reset() {
+	*x = DNSWatchTask{}
+	mi := &file_control_v1_control_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DNSWatchTask) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DNSWatchTask) ProtoMessage() {}
+
+func (x *DNSWatchTask) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DNSWatchTask.ProtoReflect.Descriptor instead.
+func (*DNSWatchTask) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *DNSWatchTask) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *DNSWatchTask) GetDomain() string {
+	if x != nil {
+		return x.Domain
+	}
+	return ""
+}
+
+func (x *DNSWatchTask) GetResolver() string {
+	if x != nil {
+		return x.Resolver
+	}
+	return ""
+}
+
+func (x *DNSWatchTask) GetExpiresAt() int64 {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return 0
+}
+
+func (x *DNSWatchTask) GetExpectedVersion() int64 {
+	if x != nil {
+		return x.ExpectedVersion
+	}
+	return 0
+}
+
+func (x *DNSWatchTask) GetRound() int64 {
+	if x != nil {
+		return x.Round
+	}
+	return 0
+}
+
+type DNSWatchResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskId        string                 `protobuf:"bytes,100,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	Ips           []string               `protobuf:"bytes,101,rep,name=ips,proto3" json:"ips,omitempty"`
+	Failed        bool                   `protobuf:"varint,102,opt,name=failed,proto3" json:"failed,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DNSWatchResult) Reset() {
+	*x = DNSWatchResult{}
+	mi := &file_control_v1_control_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DNSWatchResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DNSWatchResult) ProtoMessage() {}
+
+func (x *DNSWatchResult) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DNSWatchResult.ProtoReflect.Descriptor instead.
+func (*DNSWatchResult) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *DNSWatchResult) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+func (x *DNSWatchResult) GetIps() []string {
+	if x != nil {
+		return x.Ips
+	}
+	return nil
+}
+
+func (x *DNSWatchResult) GetFailed() bool {
+	if x != nil {
+		return x.Failed
+	}
+	return false
+}
+
 var File_control_v1_control_proto protoreflect.FileDescriptor
 
 const file_control_v1_control_proto_rawDesc = "" +
@@ -1489,9 +1667,12 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\xf7\x04\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\x98\x06\n" +
 	"\n" +
-	"NodeReport\x12#\n" +
+	"NodeReport\x12$\n" +
+	"\x0edns_watch_only\x18d \x01(\bR\fdnsWatchOnly\x12M\n" +
+	"\x11dns_watch_results\x18e \x03(\v2!.nbpass.control.v1.DNSWatchResultR\x0fdnsWatchResults\x12*\n" +
+	"\x11dns_watch_capable\x18f \x01(\bR\x0fdnsWatchCapable\x12#\n" +
 	"\rrotation_only\x18P \x01(\bR\frotationOnly\x12?\n" +
 	"\brotation\x18Q \x01(\v2#.nbpass.control.v1.RotationProgressR\brotation\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
@@ -1516,8 +1697,9 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x06values\x18\x02 \x03(\v2*.nbpass.control.v1.ProbeSample.ValuesEntryR\x06values\x1a9\n" +
 	"\vValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xa8\x02\n" +
-	"\fPanelMessage\x12M\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xf1\x02\n" +
+	"\fPanelMessage\x12G\n" +
+	"\x0fdns_watch_tasks\x18d \x03(\v2\x1f.nbpass.control.v1.DNSWatchTaskR\rdnsWatchTasks\x12M\n" +
 	"\x10rotation_command\x18P \x01(\v2\".nbpass.control.v1.RotationCommandR\x0frotationCommand\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12)\n" +
 	"\x10desired_revision\x18\x02 \x01(\x04R\x0fdesiredRevision\x12=\n" +
@@ -1608,7 +1790,19 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x06new_ip\x18T \x01(\tR\x05newIp\x12\x1a\n" +
 	"\battempts\x18U \x01(\rR\battempts\x12\x16\n" +
 	"\x06reason\x18V \x01(\tR\x06reason\x12%\n" +
-	"\x0eunsafe_network\x18W \x01(\bR\runsafeNetwork*H\n" +
+	"\x0eunsafe_network\x18W \x01(\bR\runsafeNetwork\"\xbb\x01\n" +
+	"\fDNSWatchTask\x12\x17\n" +
+	"\atask_id\x18d \x01(\tR\x06taskId\x12\x16\n" +
+	"\x06domain\x18e \x01(\tR\x06domain\x12\x1a\n" +
+	"\bresolver\x18f \x01(\tR\bresolver\x12\x1d\n" +
+	"\n" +
+	"expires_at\x18g \x01(\x03R\texpiresAt\x12)\n" +
+	"\x10expected_version\x18h \x01(\x03R\x0fexpectedVersion\x12\x14\n" +
+	"\x05round\x18i \x01(\x03R\x05round\"S\n" +
+	"\x0eDNSWatchResult\x12\x17\n" +
+	"\atask_id\x18d \x01(\tR\x06taskId\x12\x10\n" +
+	"\x03ips\x18e \x03(\tR\x03ips\x12\x16\n" +
+	"\x06failed\x18f \x01(\bR\x06failed*H\n" +
 	"\rAddressFamily\x12\x1e\n" +
 	"\x1aADDRESS_FAMILY_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ADDRESS_FAMILY_IPV4\x10\x01*Q\n" +
@@ -1639,7 +1833,7 @@ func file_control_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_control_v1_control_proto_goTypes = []any{
 	(AddressFamily)(0),       // 0: nbpass.control.v1.AddressFamily
 	(RuleKind)(0),            // 1: nbpass.control.v1.RuleKind
@@ -1661,37 +1855,41 @@ var file_control_v1_control_proto_goTypes = []any{
 	(*TunnelServer)(nil),     // 17: nbpass.control.v1.TunnelServer
 	(*RotationCommand)(nil),  // 18: nbpass.control.v1.RotationCommand
 	(*RotationProgress)(nil), // 19: nbpass.control.v1.RotationProgress
-	nil,                      // 20: nbpass.control.v1.ProbeSample.ValuesEntry
+	(*DNSWatchTask)(nil),     // 20: nbpass.control.v1.DNSWatchTask
+	(*DNSWatchResult)(nil),   // 21: nbpass.control.v1.DNSWatchResult
+	nil,                      // 22: nbpass.control.v1.ProbeSample.ValuesEntry
 }
 var file_control_v1_control_proto_depIdxs = []int32{
-	19, // 0: nbpass.control.v1.NodeReport.rotation:type_name -> nbpass.control.v1.RotationProgress
-	7,  // 1: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
-	9,  // 2: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
-	20, // 3: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
-	18, // 4: nbpass.control.v1.PanelMessage.rotation_command:type_name -> nbpass.control.v1.RotationCommand
-	11, // 5: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
-	10, // 6: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
-	12, // 7: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
-	14, // 8: nbpass.control.v1.ConfigSnapshot.exit_groups:type_name -> nbpass.control.v1.ExitGroup
-	17, // 9: nbpass.control.v1.ConfigSnapshot.tunnel_server:type_name -> nbpass.control.v1.TunnelServer
-	0,  // 10: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
-	1,  // 11: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
-	2,  // 12: nbpass.control.v1.TunnelEndpoint.transport:type_name -> nbpass.control.v1.TunnelTransport
-	3,  // 13: nbpass.control.v1.ExitGroup.strategy:type_name -> nbpass.control.v1.ExitStrategy
-	13, // 14: nbpass.control.v1.ExitGroup.exits:type_name -> nbpass.control.v1.TunnelEndpoint
-	12, // 15: nbpass.control.v1.TunnelGrant.rule:type_name -> nbpass.control.v1.ForwardRule
-	2,  // 16: nbpass.control.v1.TunnelServer.transport:type_name -> nbpass.control.v1.TunnelTransport
-	15, // 17: nbpass.control.v1.TunnelServer.peers:type_name -> nbpass.control.v1.TunnelPeer
-	16, // 18: nbpass.control.v1.TunnelServer.grants:type_name -> nbpass.control.v1.TunnelGrant
-	4,  // 19: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
-	6,  // 20: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
-	5,  // 21: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
-	8,  // 22: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
-	21, // [21:23] is the sub-list for method output_type
-	19, // [19:21] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	21, // 0: nbpass.control.v1.NodeReport.dns_watch_results:type_name -> nbpass.control.v1.DNSWatchResult
+	19, // 1: nbpass.control.v1.NodeReport.rotation:type_name -> nbpass.control.v1.RotationProgress
+	7,  // 2: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
+	9,  // 3: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
+	22, // 4: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
+	20, // 5: nbpass.control.v1.PanelMessage.dns_watch_tasks:type_name -> nbpass.control.v1.DNSWatchTask
+	18, // 6: nbpass.control.v1.PanelMessage.rotation_command:type_name -> nbpass.control.v1.RotationCommand
+	11, // 7: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
+	10, // 8: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
+	12, // 9: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
+	14, // 10: nbpass.control.v1.ConfigSnapshot.exit_groups:type_name -> nbpass.control.v1.ExitGroup
+	17, // 11: nbpass.control.v1.ConfigSnapshot.tunnel_server:type_name -> nbpass.control.v1.TunnelServer
+	0,  // 12: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
+	1,  // 13: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
+	2,  // 14: nbpass.control.v1.TunnelEndpoint.transport:type_name -> nbpass.control.v1.TunnelTransport
+	3,  // 15: nbpass.control.v1.ExitGroup.strategy:type_name -> nbpass.control.v1.ExitStrategy
+	13, // 16: nbpass.control.v1.ExitGroup.exits:type_name -> nbpass.control.v1.TunnelEndpoint
+	12, // 17: nbpass.control.v1.TunnelGrant.rule:type_name -> nbpass.control.v1.ForwardRule
+	2,  // 18: nbpass.control.v1.TunnelServer.transport:type_name -> nbpass.control.v1.TunnelTransport
+	15, // 19: nbpass.control.v1.TunnelServer.peers:type_name -> nbpass.control.v1.TunnelPeer
+	16, // 20: nbpass.control.v1.TunnelServer.grants:type_name -> nbpass.control.v1.TunnelGrant
+	4,  // 21: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
+	6,  // 22: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
+	5,  // 23: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
+	8,  // 24: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
+	23, // [23:25] is the sub-list for method output_type
+	21, // [21:23] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_control_v1_control_proto_init() }
@@ -1705,7 +1903,7 @@ func file_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_v1_control_proto_rawDesc), len(file_control_v1_control_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   17,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

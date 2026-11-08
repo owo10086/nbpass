@@ -13,6 +13,10 @@ message EnrollResponse { string node_id = 1; string token = 2; }
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 message NodeReport {
+  // 解析采样独立上报，不能推进活性、配置、探针或事件。
+  bool dns_watch_only = 100;
+  repeated DNSWatchResult dns_watch_results = 101;
+  bool dns_watch_capable = 102;
   bool rotation_only = 80;
   RotationProgress rotation = 81;
   string node_id = 1;
@@ -41,6 +45,7 @@ message ProbeSample {
 
 // 配置为完整快照；缺失规则表示撤销，摘要覆盖版本与全部内容。
 message PanelMessage {
+  repeated DNSWatchTask dns_watch_tasks = 100;
   RotationCommand rotation_command = 80;
   uint32 protocol_version = 1;
   uint64 desired_revision = 2;
@@ -142,4 +147,19 @@ message RotationProgress {
  uint32 attempts = 85;
  string reason = 86;
  bool unsafe_network = 87;
+}
+
+// 票 20：每个消息的新增字段均限制在 100–109。
+message DNSWatchTask {
+ string task_id = 100;
+ string domain = 101;
+ string resolver = 102;
+ int64 expires_at = 103;
+ int64 expected_version = 104;
+ int64 round = 105;
+}
+message DNSWatchResult {
+ string task_id = 100;
+ repeated string ips = 101;
+ bool failed = 102;
 }

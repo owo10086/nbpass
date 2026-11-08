@@ -19,11 +19,12 @@ import (
 )
 
 type controlSession struct {
-	done         chan struct{}
-	once         sync.Once
-	instance     string
-	changed      chan struct{}
-	eventsLogged bool
+	done            chan struct{}
+	once            sync.Once
+	instance        string
+	changed         chan struct{}
+	eventsLogged    bool
+	dnsWatchCapable bool
 }
 
 func (s *controlSession) stop() { s.once.Do(func() { close(s.done) }) }
@@ -153,6 +154,9 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 	if err != nil {
 		return err
 	}
+	if first.DnsWatchOnly {
+		return status.Error(codes.InvalidArgument, "首报告必须为活性报告")
+	}
 	if err := p.admitControl(stream.Context(), id, digest, session, first); err != nil {
 		return err
 	}
@@ -187,11 +191,16 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 		sent := make(chan error, 1)
 		go func() {
 			// 命令独立发送：不占快照空间，也不能阻塞后续完整配置/撤权同步。
+			tasks := response.DnsWatchTasks
+			response.DnsWatchTasks = nil
 			command := response.RotationCommand
 			response.RotationCommand = nil
 			err := stream.Send(response)
 			if err == nil && command != nil {
 				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: response.DesiredRevision, RotationCommand: command})
+			}
+			if err == nil && len(tasks) > 0 {
+				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, DnsWatchTasks: tasks})
 			}
 			sent <- err
 		}()
@@ -241,13 +250,13 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 				return err
 			}
 			report := message.report
-			heartbeat := !report.ProbeOnly && !report.EventsOnly && !report.RotationOnly && report.AttemptedRevision == 0
+			heartbeat := !report.ProbeOnly && !report.EventsOnly && !report.RotationOnly && !report.DnsWatchOnly && report.AttemptedRevision == 0
 			if heartbeat {
 				alive.Stop()
 				alive = p.deps.Clock.NewTimer(90 * time.Second)
 			}
 			// 配置确认没有回包；探针/事件回包不附配置，避免相互触发同步。
-			if heartbeat || report.ProbeOnly || report.EventsOnly || report.RotationOnly || len(response.AcknowledgedEventIds) > 0 {
+			if heartbeat || report.ProbeOnly || report.EventsOnly || report.RotationOnly || report.DnsWatchOnly || len(response.AcknowledgedEventIds) > 0 {
 				if err := send(response, heartbeat); err != nil {
 					return err
 				}
@@ -314,6 +323,7 @@ func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, sess
 	if err != nil {
 		return status.Error(codes.Unavailable, "存储暂不可用")
 	}
+	session.dnsWatchCapable = first.DnsWatchCapable
 	session.instance = first.ProcessInstance
 	delete(p.pendingControls[id], session)
 	if len(p.pendingControls[id]) == 0 {
@@ -354,6 +364,12 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, status.Error(codes.FailedPrecondition, "旧进程实例报告无效")
 	}
 	session.instance = report.ProcessInstance
+	if report.DnsWatchOnly {
+		if err := p.acceptDNSWatchResults(ctx, id, session.instance, report.DnsWatchResults); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "解析采样无法保存")
+		}
+		return &controlpb.PanelMessage{ProtocolVersion: 1}, nil
+	}
 	if report.RotationOnly {
 		if err := p.acceptRotation(ctx, id, report.Rotation); err != nil {
 			return nil, status.Error(codes.InvalidArgument, "换 IP 进度无法保存")
