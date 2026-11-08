@@ -51,19 +51,21 @@ type Config struct {
 }
 
 type Dependencies struct {
-	Probe       probe.Collector
-	Connections probe.Connections
-	Clock       timing.Clock
-	Store       Store
-	Random      io.Reader
-	RootCAs     *x509.CertPool
-	DialContext func(context.Context, string) (net.Conn, error)
-	PublicIPv4  func(context.Context) (string, error)
-	Events      *EventQueue
-	Forwarding  forwarding.Dependencies
+	Probe          probe.Collector
+	Connections    probe.Connections
+	Clock          timing.Clock
+	Store          Store
+	Random         io.Reader
+	RootCAs        *x509.CertPool
+	DialContext    func(context.Context, string) (net.Conn, error)
+	PublicIPv4     func(context.Context) (string, error)
+	Events         *EventQueue
+	Traffic        *TrafficQueue
+	trafficUpdates <-chan struct{}
+	Forwarding     forwarding.Dependencies
 }
 
-func Run(ctx context.Context, config Config, deps Dependencies) error {
+func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 	u, err := url.Parse(config.ControlURL)
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return errors.New("控制地址必须是不带路径的 HTTPS 地址")
@@ -143,11 +145,30 @@ func Run(ctx context.Context, config Config, deps Dependencies) error {
 	}
 	deps.Forwarding.NodeID = credential.NodeID
 	engine := forwarding.NewEngine(deps.Forwarding)
-	defer engine.Close()
 	if deps.Connections == nil {
 		deps.Connections = engine
 	}
 	report := &controlpb.NodeReport{NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
+	if deps.Traffic == nil {
+		store, _ := deps.Store.(TrafficStore)
+		deps.Traffic, err = OpenTrafficQueue(ctx, store, deps.Clock)
+		if err != nil {
+			return errors.New("无法打开节点流量队列")
+		}
+	}
+	trafficCtx, stopTraffic := context.WithCancel(ctx)
+	trafficUpdates, trafficDone := make(chan struct{}, 1), make(chan struct{})
+	deps.trafficUpdates = trafficUpdates
+	go sampleTraffic(trafficCtx, deps.Traffic, report.ProcessInstance, engine, trafficUpdates, trafficDone)
+	defer func() {
+		stopTraffic()
+		<-trafficDone
+		engine.Close()
+		if saveErr := deps.Traffic.Capture(context.WithoutCancel(ctx), report.ProcessInstance, engine.Traffic()); saveErr != nil && runErr == nil {
+			// 周期采样仍保留最后成功落盘的累计值；运行期写失败会继续重试。
+			runErr = errors.New("节点最后一轮流量持久化失败")
+		}
+	}()
 	probeCtx, stopProbe := context.WithCancel(ctx)
 	defer stopProbe()
 	updates := make(chan probeUpdate, 1)
@@ -202,6 +223,15 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	pending := map[string]bool{}
 	pendingFull := false
 	drainEvents := false
+	pendingTraffic := map[string]bool{}
+	drainTraffic := deps.Traffic != nil
+	var trafficAck timing.Timer
+	var trafficAckC <-chan time.Time
+	defer func() {
+		if trafficAck != nil {
+			trafficAck.Stop()
+		}
+	}()
 	var response, eventAck timing.Timer
 	var responseC, eventAckC <-chan time.Time
 	defer func() {
@@ -218,15 +248,17 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		probeReport
 		eventReport
 		configReport
+		trafficReport
 	)
 	send := func(kind reportKind, sample *controlpb.ProbeSample) error {
 		outgoing := proto.Clone(report).(*controlpb.NodeReport)
 		outgoing.Probe, outgoing.ProbeOnly, outgoing.EventsOnly = sample, kind == probeReport, kind == eventReport
 		outgoing.Events, outgoing.PublicIpv4 = nil, ""
+		outgoing.TrafficOnly, outgoing.Traffic = kind == trafficReport, nil
 		if kind != configReport {
 			outgoing.AttemptedRevision, outgoing.ApplyError = 0, ""
 		}
-		if kind == probeReport || kind == eventReport {
+		if kind == probeReport || kind == eventReport || kind == trafficReport {
 			outgoing.AppliedRevision, outgoing.AppliedDigest = 0, ""
 		}
 		if kind == heartbeatReport {
@@ -254,6 +286,17 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		if kind == eventReport && len(outgoing.Events) == 0 {
 			return nil
 		}
+		if kind == trafficReport {
+			outgoing.Traffic = deps.Traffic.Batch()
+			if len(outgoing.Traffic) == 0 {
+				return nil
+			}
+			for _, s := range outgoing.Traffic {
+				pendingTraffic[trafficAckKey(s.ProcessInstance, s.Sequence)] = true
+			}
+			trafficAck = clock.NewTimer(15 * time.Second)
+			trafficAckC = trafficAck.C()
+		}
 		// 发送串行，传输只持有本轮不可变副本；接收持续独立运行。
 		result := make(chan error, 1)
 		go func() { result <- stream.Send(outgoing) }()
@@ -269,7 +312,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		case <-timer.C():
 			return errors.New("控制发送超时")
 		}
-		if kind != configReport && responseC == nil {
+		if kind != configReport && kind != trafficReport && responseC == nil {
 			response = clock.NewTimer(15 * time.Second)
 			responseC = response.C()
 		}
@@ -314,6 +357,12 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				return err
 			}
 		}
+		if drainTraffic && len(pendingTraffic) == 0 {
+			drainTraffic = false
+			if err := send(trafficReport, nil); err != nil {
+				return err
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -321,6 +370,13 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			return errors.New("控制响应超时")
 		case <-eventAckC:
 			return errors.New("事件确认超时")
+		case <-trafficAckC:
+			// 只重发流量，不清除其他报告的确认/超时状态。
+			pendingTraffic = map[string]bool{}
+			trafficAckC = nil
+			drainTraffic = true
+		case <-deps.trafficUpdates:
+			drainTraffic = true
 		case <-heartbeat.C():
 		case update := <-updates:
 			if err := sendProbe(update); err != nil {
@@ -333,6 +389,28 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			m := received.message
 			if m.ProtocolVersion != ProtocolVersion {
 				return errors.New("控制协议不兼容")
+			}
+			if m.TrafficOnly {
+				matched := make([]*controlpb.TrafficAck, 0, len(m.AcknowledgedTraffic))
+				for _, a := range m.AcknowledgedTraffic {
+					if a != nil && pendingTraffic[trafficAckKey(a.ProcessInstance, a.Sequence)] {
+						matched = append(matched, a)
+					}
+				}
+				// 累计报告可能超时重传；迟到或重复 ACK 只忽略，不重置控制流。
+				if len(matched) == 0 {
+					continue
+				}
+				saveErr := deps.Traffic.Ack(ctx, matched)
+				for _, a := range matched {
+					delete(pendingTraffic, trafficAckKey(a.ProcessInstance, a.Sequence))
+				}
+				if len(pendingTraffic) == 0 {
+					trafficAck.Stop()
+					trafficAckC = nil
+					drainTraffic = saveErr == nil
+				}
+				continue
 			}
 			if response != nil {
 				response.Stop()

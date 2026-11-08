@@ -27,6 +27,7 @@ type Dependencies struct {
 }
 
 type Engine struct {
+	traffic             trafficMeter
 	businessConnections atomic.Uint64
 	tunnelConnections   atomic.Uint64
 	tunnelServer        *tunnelServer
@@ -136,6 +137,7 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 		}
 		current := &listenerRule{exit: ep, tunnel: client, config: proto.Clone(r).(*controlpb.ForwardRule), listener: listener, ctx: ctx, cancel: cancel, connections: map[net.Conn]struct{}{}, engine: e}
 		e.rules[r.Id] = current
+		e.registerTrafficRule(r.Id)
 		current.wg.Add(1)
 		go current.accept()
 	}
@@ -196,6 +198,7 @@ func (r *listenerRule) stop() {
 	}
 	r.mu.Unlock()
 	r.wg.Wait()
+	r.engine.unregisterTrafficRule(r.config.Id)
 }
 func (r *listenerRule) accept() {
 	defer r.wg.Done()
@@ -218,6 +221,7 @@ func (r *listenerRule) accept() {
 	}
 }
 func (r *listenerRule) serve(client net.Conn) {
+	defer r.engine.meterConnection(r.config.Id)()
 	var target net.Conn
 	var err error
 	if r.config.Kind == controlpb.RuleKind_RULE_KIND_TUNNEL {
@@ -235,7 +239,7 @@ func (r *listenerRule) serve(client net.Conn) {
 		return
 	}
 	defer r.untrack(target)
-	proxyTCP(client, target)
+	r.engine.proxyMetered(r.config.Id, client, target)
 }
 
 // 每个新连接最多尝试三个不同 IPv4，总预算 10 秒；只在交付业务数据前重试。
