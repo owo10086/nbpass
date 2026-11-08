@@ -136,6 +136,12 @@ func (p *Panel) controlMessage(ctx context.Context, id string) (*controlpb.Panel
 			return nil, err
 		}
 	}
+	if session := p.controls[id]; session != nil && session.dnsWatchCapable {
+		m.DnsWatchTasks, err = p.dnsWatchCommands(ctx, id, session.instance)
+		if err != nil {
+			return nil, err
+		}
+	}
 	m.RotationCommand, err = p.rotationCommand(ctx, id)
 	if err != nil {
 		return nil, err

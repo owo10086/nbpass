@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"nbpass/internal/dnswatch"
 	"nbpass/internal/node"
 )
 
@@ -59,6 +60,9 @@ func (h *Harness) StartNode(ticket string, options ...func(*node.Config, *node.D
 	// 测试台始终替换外部公网 IP 查询，不访问公网；地区用例按需注入地址。
 	n.deps.PublicIPv4 = func(context.Context) (string, error) { return "", errors.New("测试台未配置公网 IP") }
 	n.deps.Probe = emptyProbe{}
+	n.deps.DNSWatchLookup = func(context.Context, string, dnswatch.Resolver) ([]string, error) {
+		return nil, errors.New("测试台未配置 DNS 解析器")
+	}
 	for _, option := range options {
 		option(&n.config, &n.deps)
 	}

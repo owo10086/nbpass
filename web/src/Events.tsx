@@ -9,7 +9,7 @@ type EventRow = {
 };
 type EventPage = { events: EventRow[]; next_before: number | null };
 type Filters = { node_id?: string; type?: string; from?: string; to?: string };
-const labels: Record<string, string> = { node_blocked: '被墙', node_unblocked: '解除疑似被墙或被墙', node_online: '节点上线', node_offline: '节点离线', node_recovered: '节点恢复上线', node_started: '节点启动', sync_failed: '同步失败', event_gap: '事件缺口' };
+const labels: Record<string, string> = { node_blocked: '被墙', node_unblocked: '解除疑似被墙或被墙', node_online: '节点上线', node_offline: '节点离线', node_recovered: '节点恢复上线', node_started: '节点启动', sync_failed: '同步失败', dns_watch_failed: '解析采样失败', dns_watch_mismatch: '解析期望不符', dns_watch_poisoned: '解析疑似污染', event_gap: '事件缺口' };
 const date = (value: string) => new Date(value).toLocaleString();
 
 export function Events({ onSessionExpired }: { onSessionExpired: () => void }) {

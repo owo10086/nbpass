@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"nbpass/internal/dnsprovider"
+	"nbpass/internal/dnswatch"
 	"nbpass/internal/timing"
 )
 
@@ -34,17 +35,18 @@ type PasswordHasher interface {
 }
 
 type Dependencies struct {
-	DNSProvider  dnsprovider.Provider
-	Clock        Clock
-	Persistence  Persistence
-	KeyFile      KeyFile
-	Random       io.Reader
-	Passwords    PasswordHasher
-	Assets       fs.FS
-	NodeBinary   func() (io.ReadCloser, error)
-	RegionLookup func(context.Context, string) (Region, error)
-	LookupIPv4   func(context.Context, string) ([]netip.Addr, error)
-	Telegram     func(context.Context, TelegramMessage) error
+	DNSWatchLookup func(context.Context, string, dnswatch.Resolver) ([]string, error)
+	DNSProvider    dnsprovider.Provider
+	Clock          Clock
+	Persistence    Persistence
+	KeyFile        KeyFile
+	Random         io.Reader
+	Passwords      PasswordHasher
+	Assets         fs.FS
+	NodeBinary     func() (io.ReadCloser, error)
+	RegionLookup   func(context.Context, string) (Region, error)
+	LookupIPv4     func(context.Context, string) ([]netip.Addr, error)
+	Telegram       func(context.Context, TelegramMessage) error
 }
 
 type Config struct {
@@ -54,6 +56,8 @@ type Config struct {
 }
 
 type Panel struct {
+	dnsWatchMu      sync.Mutex
+	dnsWatchWake    chan struct{}
 	entryMu         sync.Mutex
 	coordinator     *entryCoordinator
 	config          Config
@@ -115,6 +119,9 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 	if deps.Passwords == nil {
 		deps.Passwords = BcryptPasswords{}
 	}
+	if deps.DNSWatchLookup == nil {
+		deps.DNSWatchLookup = (dnswatch.Client{}).Lookup
+	}
 	if deps.Telegram == nil {
 		deps.Telegram = defaultTelegram.Send
 	}
@@ -150,6 +157,7 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 	p.startOffline(background)
 	p.startTelegram(background)
 	p.startSelfCheckNotifications(background)
+	p.startDNSWatch(background)
 	return p, nil
 }
 
