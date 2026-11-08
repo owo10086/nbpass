@@ -1,5 +1,5 @@
 export class APIError extends Error {
-  constructor(message: string, public status: number) { super(message); }
+  constructor(message: string, public status: number, public details: Record<string, unknown> = {}) { super(message); }
 }
 
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
@@ -11,6 +11,6 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
   });
   if (response.status === 204) return undefined as T;
   const result = await response.json();
-  if (!response.ok) throw new APIError(result.error ?? '操作失败，请重试', response.status);
+  if (!response.ok) throw new APIError(result.error ?? '操作失败，请重试', response.status, result);
   return result as T;
 }

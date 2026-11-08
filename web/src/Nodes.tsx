@@ -3,6 +3,7 @@ import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag,
 import { api, APIError } from './api';
 import { NodeRegion, type NodeRegionFields } from './NodeRegion';
 import { ProbeDetails } from './ProbeDetails';
+import { NodeValidationActions } from './NodeValidationActions';
 
 type NodeRow = NodeRegionFields & {
   id: string; name: string; status: string; status_label: string; connected: boolean;
@@ -86,6 +87,7 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
           <Button size="small" onClick={() => void maintenance(row)}>{row.status === 'maintenance' ? '结束维护' : '维护 10 分钟'}</Button>
           <Popconfirm title="重置节点 token？" description="当前控制连接将断开，需要重新执行安装命令。" onConfirm={() => credential(row, 'reset')}><Button size="small">重置 token</Button></Popconfirm>
           <Popconfirm title="吊销节点 token？" description="当前控制连接将断开，原凭据将失效。" onConfirm={() => credential(row, 'revoke')}><Button danger size="small">吊销</Button></Popconfirm>
+          <NodeValidationActions node={row} onSaved={load} onError={failed} />
         </Space> },
       ]} />
     </Card>
