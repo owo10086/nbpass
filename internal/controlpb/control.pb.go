@@ -306,18 +306,21 @@ func (x *EnrollResponse) GetToken() string {
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 type NodeReport struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	RotationOnly      bool                   `protobuf:"varint,80,opt,name=rotation_only,json=rotationOnly,proto3" json:"rotation_only,omitempty"`
-	Rotation          *RotationProgress      `protobuf:"bytes,81,opt,name=rotation,proto3" json:"rotation,omitempty"`
-	NodeId            string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	ProcessInstance   string                 `protobuf:"bytes,2,opt,name=process_instance,json=processInstance,proto3" json:"process_instance,omitempty"`
-	ProtocolVersion   uint32                 `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	SoftwareVersion   string                 `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
-	AppliedRevision   uint64                 `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
-	AppliedDigest     string                 `protobuf:"bytes,6,opt,name=applied_digest,json=appliedDigest,proto3" json:"applied_digest,omitempty"`
-	AttemptedRevision uint64                 `protobuf:"varint,7,opt,name=attempted_revision,json=attemptedRevision,proto3" json:"attempted_revision,omitempty"`
-	ApplyError        string                 `protobuf:"bytes,8,opt,name=apply_error,json=applyError,proto3" json:"apply_error,omitempty"`
-	Probe             *ProbeSample           `protobuf:"bytes,14,opt,name=probe,proto3" json:"probe,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 自测独立补报，只消费自测结果，不推进活性、探针、事件或配置确认。
+	SelfCheckOnly     bool              `protobuf:"varint,90,opt,name=self_check_only,json=selfCheckOnly,proto3" json:"self_check_only,omitempty"`
+	SelfCheckResults  [][]byte          `protobuf:"bytes,91,rep,name=self_check_results,json=selfCheckResults,proto3" json:"self_check_results,omitempty"`
+	RotationOnly      bool              `protobuf:"varint,80,opt,name=rotation_only,json=rotationOnly,proto3" json:"rotation_only,omitempty"`
+	Rotation          *RotationProgress `protobuf:"bytes,81,opt,name=rotation,proto3" json:"rotation,omitempty"`
+	NodeId            string            `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	ProcessInstance   string            `protobuf:"bytes,2,opt,name=process_instance,json=processInstance,proto3" json:"process_instance,omitempty"`
+	ProtocolVersion   uint32            `protobuf:"varint,3,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	SoftwareVersion   string            `protobuf:"bytes,4,opt,name=software_version,json=softwareVersion,proto3" json:"software_version,omitempty"`
+	AppliedRevision   uint64            `protobuf:"varint,5,opt,name=applied_revision,json=appliedRevision,proto3" json:"applied_revision,omitempty"`
+	AppliedDigest     string            `protobuf:"bytes,6,opt,name=applied_digest,json=appliedDigest,proto3" json:"applied_digest,omitempty"`
+	AttemptedRevision uint64            `protobuf:"varint,7,opt,name=attempted_revision,json=attemptedRevision,proto3" json:"attempted_revision,omitempty"`
+	ApplyError        string            `protobuf:"bytes,8,opt,name=apply_error,json=applyError,proto3" json:"apply_error,omitempty"`
+	Probe             *ProbeSample      `protobuf:"bytes,14,opt,name=probe,proto3" json:"probe,omitempty"`
 	// 探针独立上报不推进 10 秒活性时间，也不改变配置应用状态。
 	ProbeOnly bool `protobuf:"varint,15,opt,name=probe_only,json=probeOnly,proto3" json:"probe_only,omitempty"`
 	// 节点查询的出站公网 IPv4，不作为已验证可入站的业务地址。
@@ -362,6 +365,20 @@ func (x *NodeReport) ProtoReflect() protoreflect.Message {
 // Deprecated: Use NodeReport.ProtoReflect.Descriptor instead.
 func (*NodeReport) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *NodeReport) GetSelfCheckOnly() bool {
+	if x != nil {
+		return x.SelfCheckOnly
+	}
+	return false
+}
+
+func (x *NodeReport) GetSelfCheckResults() [][]byte {
+	if x != nil {
+		return x.SelfCheckResults
+	}
+	return nil
 }
 
 func (x *NodeReport) GetRotationOnly() bool {
@@ -605,14 +622,15 @@ func (x *ProbeSample) GetValues() map[string]float64 {
 
 // 配置为完整快照；缺失规则表示撤销，摘要覆盖版本与全部内容。
 type PanelMessage struct {
-	state                protoimpl.MessageState `protogen:"open.v1"`
-	RotationCommand      *RotationCommand       `protobuf:"bytes,80,opt,name=rotation_command,json=rotationCommand,proto3" json:"rotation_command,omitempty"`
-	ProtocolVersion      uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	DesiredRevision      uint64                 `protobuf:"varint,2,opt,name=desired_revision,json=desiredRevision,proto3" json:"desired_revision,omitempty"`
-	Snapshot             *ConfigSnapshot        `protobuf:"bytes,3,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
-	AcknowledgedEventIds []string               `protobuf:"bytes,15,rep,name=acknowledged_event_ids,json=acknowledgedEventIds,proto3" json:"acknowledged_event_ids,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	state                    protoimpl.MessageState `protogen:"open.v1"`
+	AcknowledgedSelfCheckIds []string               `protobuf:"bytes,90,rep,name=acknowledged_self_check_ids,json=acknowledgedSelfCheckIds,proto3" json:"acknowledged_self_check_ids,omitempty"`
+	RotationCommand          *RotationCommand       `protobuf:"bytes,80,opt,name=rotation_command,json=rotationCommand,proto3" json:"rotation_command,omitempty"`
+	ProtocolVersion          uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
+	DesiredRevision          uint64                 `protobuf:"varint,2,opt,name=desired_revision,json=desiredRevision,proto3" json:"desired_revision,omitempty"`
+	Snapshot                 *ConfigSnapshot        `protobuf:"bytes,3,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
+	AcknowledgedEventIds     []string               `protobuf:"bytes,15,rep,name=acknowledged_event_ids,json=acknowledgedEventIds,proto3" json:"acknowledged_event_ids,omitempty"`
+	unknownFields            protoimpl.UnknownFields
+	sizeCache                protoimpl.SizeCache
 }
 
 func (x *PanelMessage) Reset() {
@@ -643,6 +661,13 @@ func (x *PanelMessage) ProtoReflect() protoreflect.Message {
 // Deprecated: Use PanelMessage.ProtoReflect.Descriptor instead.
 func (*PanelMessage) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *PanelMessage) GetAcknowledgedSelfCheckIds() []string {
+	if x != nil {
+		return x.AcknowledgedSelfCheckIds
+	}
+	return nil
 }
 
 func (x *PanelMessage) GetRotationCommand() *RotationCommand {
@@ -833,14 +858,15 @@ func (x *EventGap) GetReason() string {
 }
 
 type ConfigSnapshot struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Revision      uint64                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
-	Digest        string                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
-	Rules         []*ForwardRule         `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
-	ExitGroups    []*ExitGroup           `protobuf:"bytes,40,rep,name=exit_groups,json=exitGroups,proto3" json:"exit_groups,omitempty"`
-	TunnelServer  *TunnelServer          `protobuf:"bytes,41,opt,name=tunnel_server,json=tunnelServer,proto3" json:"tunnel_server,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	SelfCheckConfig []byte                 `protobuf:"bytes,90,opt,name=self_check_config,json=selfCheckConfig,proto3" json:"self_check_config,omitempty"`
+	Revision        uint64                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
+	Digest          string                 `protobuf:"bytes,2,opt,name=digest,proto3" json:"digest,omitempty"`
+	Rules           []*ForwardRule         `protobuf:"bytes,3,rep,name=rules,proto3" json:"rules,omitempty"`
+	ExitGroups      []*ExitGroup           `protobuf:"bytes,40,rep,name=exit_groups,json=exitGroups,proto3" json:"exit_groups,omitempty"`
+	TunnelServer    *TunnelServer          `protobuf:"bytes,41,opt,name=tunnel_server,json=tunnelServer,proto3" json:"tunnel_server,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ConfigSnapshot) Reset() {
@@ -871,6 +897,13 @@ func (x *ConfigSnapshot) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ConfigSnapshot.ProtoReflect.Descriptor instead.
 func (*ConfigSnapshot) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ConfigSnapshot) GetSelfCheckConfig() []byte {
+	if x != nil {
+		return x.SelfCheckConfig
+	}
+	return nil
 }
 
 func (x *ConfigSnapshot) GetRevision() uint64 {
@@ -1575,9 +1608,11 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\x9a\x06\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\xf0\x06\n" +
 	"\n" +
-	"NodeReport\x12#\n" +
+	"NodeReport\x12&\n" +
+	"\x0fself_check_only\x18Z \x01(\bR\rselfCheckOnly\x12,\n" +
+	"\x12self_check_results\x18[ \x03(\fR\x10selfCheckResults\x12#\n" +
 	"\rrotation_only\x18P \x01(\bR\frotationOnly\x12?\n" +
 	"\brotation\x18Q \x01(\v2#.nbpass.control.v1.RotationProgressR\brotation\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
@@ -1610,8 +1645,9 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x06values\x18\x02 \x03(\v2*.nbpass.control.v1.ProbeSample.ValuesEntryR\x06values\x1a9\n" +
 	"\vValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xa8\x02\n" +
-	"\fPanelMessage\x12M\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xe7\x02\n" +
+	"\fPanelMessage\x12=\n" +
+	"\x1backnowledged_self_check_ids\x18Z \x03(\tR\x18acknowledgedSelfCheckIds\x12M\n" +
 	"\x10rotation_command\x18P \x01(\v2\".nbpass.control.v1.RotationCommandR\x0frotationCommand\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12)\n" +
 	"\x10desired_revision\x18\x02 \x01(\x04R\x0fdesiredRevision\x12=\n" +
@@ -1629,8 +1665,9 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\x12\x12\n" +
 	"\x04from\x18\x02 \x01(\tR\x04from\x12\x0e\n" +
 	"\x02to\x18\x03 \x01(\tR\x02to\x12\x16\n" +
-	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xff\x01\n" +
-	"\x0eConfigSnapshot\x12\x1a\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xab\x02\n" +
+	"\x0eConfigSnapshot\x12*\n" +
+	"\x11self_check_config\x18Z \x01(\fR\x0fselfCheckConfig\x12\x1a\n" +
 	"\brevision\x18\x01 \x01(\x04R\brevision\x12\x16\n" +
 	"\x06digest\x18\x02 \x01(\tR\x06digest\x124\n" +
 	"\x05rules\x18\x03 \x03(\v2\x1e.nbpass.control.v1.ForwardRuleR\x05rules\x12=\n" +

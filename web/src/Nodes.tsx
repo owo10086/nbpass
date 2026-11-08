@@ -5,6 +5,7 @@ import { NodeRegion, type NodeRegionFields } from './NodeRegion';
 import { ProbeDetails } from './ProbeDetails';
 import { NodeValidationActions } from './NodeValidationActions';
 import { NodeRotation } from './NodeRotation';
+import { NodeSelfCheck, SelfCheckSettings } from './NodeSelfCheck';
 
 type NodeRow = NodeRegionFields & {
   id: string; name: string; status: string; status_label: string; connected: boolean;
@@ -22,7 +23,9 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
   const [installation, setInstallation] = useState<Installation>();
   const [regionNode, setRegionNode] = useState<NodeRow>();
   const [rotationNode, setRotationNode] = useState<string>();
-  const [probeNode, setProbeNode] = useState<string>();
+  const [selfCheckNode, setSelfCheckNode] = useState<string>();
+ const [selfCheckSettings, setSelfCheckSettings] = useState(false);
+ const [probeNode, setProbeNode] = useState<string>();
   const [form] = Form.useForm();
   const expired = useRef(onSessionExpired);
   expired.current = onSessionExpired;
@@ -72,7 +75,7 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
   return <>
     <div className="nodes-heading">
       <div><Typography.Title level={2}>节点</Typography.Title><Typography.Paragraph type="secondary">查看控制连接、最近活性与配置版本。</Typography.Paragraph></div>
-      <Space><Button onClick={() => void load()}>刷新</Button><Button type="primary" onClick={() => setAdding(true)}>添加节点</Button></Space>
+      <Space wrap><Button onClick={() => setSelfCheckSettings(true)}>自测设置</Button><Button onClick={() => void load()}>刷新</Button><Button type="primary" onClick={() => setAdding(true)}>添加节点</Button></Space>
     </div>
     {error && <Alert title={error} type="error" showIcon className="message" />}
     <Card styles={{ body: { padding: 0 } }}>
@@ -86,6 +89,7 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
         { title: '操作', key: 'actions', render: (_, row) => <Space wrap>
           <Button size="small" onClick={() => setRegionNode(row)}>地区与检测点</Button>
           <Button size="small" onClick={() => setProbeNode(row.id)}>查看探针</Button>
+ <Button size="small" onClick={() => setSelfCheckNode(row.id)}>自测与被墙认定</Button>
           <Button size="small" onClick={() => setRotationNode(row.id)}>换 IP</Button>
           <Button size="small" onClick={() => void maintenance(row)}>{row.status === 'maintenance' ? '结束维护' : '维护 10 分钟'}</Button>
           <Popconfirm title="重置节点 token？" description="当前控制连接将断开，需要重新执行安装命令。" onConfirm={() => credential(row, 'reset')}><Button size="small">重置 token</Button></Popconfirm>
@@ -94,7 +98,9 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
         </Space> },
       ]} />
     </Card>
-    <NodeRotation node={rows.find(row => row.id === rotationNode)} onClose={() => setRotationNode(undefined)} onError={failed} />
+    {selfCheckSettings && <SelfCheckSettings onClose={() => setSelfCheckSettings(false)} onError={failed} />}
+ {rows.find(row => row.id === selfCheckNode) && <NodeSelfCheck key={selfCheckNode} node={rows.find(row => row.id === selfCheckNode)!} onClose={() => setSelfCheckNode(undefined)} onError={failed} />}
+ <NodeRotation node={rows.find(row => row.id === rotationNode)} onClose={() => setRotationNode(undefined)} onError={failed} />
     <NodeRegion node={regionNode} onClose={() => setRegionNode(undefined)} onSaved={load} onError={failed} />
     {rows.find(row => row.id === probeNode) && <ProbeDetails node={rows.find(row => row.id === probeNode)!} onClose={() => setProbeNode(undefined)} onSessionExpired={onSessionExpired} />}
     <Modal title="添加节点" open={adding} onCancel={() => { setAdding(false); form.resetFields(); }} footer={null} destroyOnHidden>
