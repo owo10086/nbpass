@@ -29,6 +29,17 @@ message NodeReport {
   repeated Event events = 18;
   // 独立补报只处理事件，不改变活性、探针或配置状态。
   bool events_only = 19;
+  // 仅配置报告携带；逐规则结果绑定本次完整快照的版本与摘要。
+  repeated RuleApplyResult rule_results = 20;
+  string attempted_digest = 21;
+  // 停用/删除在磁盘检查点及运行时均已撤销；不能只根据快照缺失推断。
+  bool revocations_applied = 22;
+}
+
+message RuleApplyResult {
+  string rule_id = 1;
+  uint64 applied_revision = 2;
+  string apply_error = 3;
 }
 
 message ProbeSample {

@@ -20,6 +20,7 @@ type Dependencies struct {
 	LookupIPv4 func(context.Context, string) ([]netip.Addr, error)
 	DialTarget func(context.Context, string) (net.Conn, error)
 	Listen     func(string, string) (net.Listener, error)
+	Persist    func(State) error
 }
 
 type Engine struct {
@@ -30,6 +31,7 @@ type Engine struct {
 	digest              string
 	highest             uint64
 	highestDigest       string
+	results             []*controlpb.RuleApplyResult
 }
 
 func NewEngine(deps Dependencies) *Engine {
@@ -55,7 +57,7 @@ func (e *Engine) Connections() (business, tunnel uint64) { return e.businessConn
 func (e *Engine) Applied() (uint64, string) { return e.revision, e.digest }
 
 // Apply 保留未变化的监听，先撤销缺失/变化的规则，再启动新规则。
-// 调用方串行使用引擎；逐规则缓存与部分应用结果由票 04 在此边界扩展。
+// 调用方串行使用引擎；任何运行时撤销之前必须先提交不含旧规则的缓存。
 func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 	if err := ValidateSnapshot(s); err != nil {
 		return err
@@ -63,11 +65,25 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 	if s.Revision < e.highest || s.Revision == e.highest && s.Digest != e.highestDigest {
 		return errors.New("拒绝旧版本或同版本不同内容的快照")
 	}
-	e.highest, e.highestDigest = s.Revision, s.Digest
 	desired := map[string]*controlpb.ForwardRule{}
 	for _, r := range s.Rules {
 		desired[r.Id] = r
 	}
+	checkpoint := e.State()
+	checkpoint.HighestRevision, checkpoint.HighestDigest = s.Revision, s.Digest
+	checkpoint.Rules, checkpoint.Results = nil, nil
+	for _, r := range s.Rules {
+		result := &controlpb.RuleApplyResult{RuleId: r.Id, ApplyError: "配置应用尚未完成"}
+		if current := e.rules[r.Id]; current != nil && proto.Equal(current.config, r) {
+			checkpoint.Rules = append(checkpoint.Rules, r)
+			result.AppliedRevision, result.ApplyError = s.Revision, ""
+		}
+		checkpoint.Results = append(checkpoint.Results, result)
+	}
+	if err := e.persist(checkpoint); err != nil {
+		return err
+	}
+	e.highest, e.highestDigest = s.Revision, s.Digest
 	for id, current := range e.rules {
 		if !proto.Equal(current.config, desired[id]) {
 			current.stop()
@@ -75,25 +91,46 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 		}
 	}
 	var failures []error
+	e.results = nil
 	for _, r := range s.Rules {
-		if e.rules[r.Id] != nil {
-			continue
+		result := &controlpb.RuleApplyResult{RuleId: r.Id}
+		if err := e.startRule(r); err != nil {
+			result.ApplyError = ErrorSummary(err.Error(), 1024)
+			failures = append(failures, errors.New(result.ApplyError))
+		} else {
+			result.AppliedRevision = s.Revision
 		}
-		listener, err := e.deps.Listen("tcp4", net.JoinHostPort("0.0.0.0", strconv.Itoa(int(r.ListenPort))))
-		if err != nil {
-			failures = append(failures, fmt.Errorf("规则 %s 监听失败: %w", r.Id, err))
-			continue
+		e.results = append(e.results, result)
+	}
+	state := e.State()
+	if len(failures) == 0 {
+		state.AppliedRevision, state.AppliedDigest = s.Revision, s.Digest
+	}
+	if err := e.persist(state); err != nil {
+		for _, r := range e.results {
+			if r.ApplyError == "" {
+				r.ApplyError = ErrorSummary(err.Error(), 1024)
+			}
 		}
-		ctx, cancel := context.WithCancel(context.Background())
-		current := &listenerRule{config: proto.Clone(r).(*controlpb.ForwardRule), listener: listener, ctx: ctx, cancel: cancel, connections: map[net.Conn]struct{}{}, engine: e}
-		e.rules[r.Id] = current
-		current.wg.Add(1)
-		go current.accept()
+		return errors.Join(append(failures, err)...)
 	}
-	if len(failures) > 0 {
-		return errors.Join(failures...)
+	e.revision, e.digest = state.AppliedRevision, state.AppliedDigest
+	return errors.Join(failures...)
+}
+
+func (e *Engine) startRule(r *controlpb.ForwardRule) error {
+	if e.rules[r.Id] != nil {
+		return nil
 	}
-	e.revision, e.digest = s.Revision, s.Digest
+	listener, err := e.deps.Listen("tcp4", net.JoinHostPort("0.0.0.0", strconv.Itoa(int(r.ListenPort))))
+	if err != nil {
+		return fmt.Errorf("规则 %s 端口 %d 监听失败: %w", r.Id, r.ListenPort, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	current := &listenerRule{config: proto.Clone(r).(*controlpb.ForwardRule), listener: listener, ctx: ctx, cancel: cancel, connections: map[net.Conn]struct{}{}, engine: e}
+	e.rules[r.Id] = current
+	current.wg.Add(1)
+	go current.accept()
 	return nil
 }
 func (e *Engine) Close() {
