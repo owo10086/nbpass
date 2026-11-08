@@ -1,0 +1,11 @@
+.probe-status { margin-bottom: 16px; }
+.probe-card { margin-bottom: 20px; }
+.probe-chart { display: block; width: 100%; min-width: 280px; margin-top: 12px; }
+.probe-chart text { fill: #778398; font-size: 10px; }
+.probe-chart-legend { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
+.probe-average { color: #185adb; }
+.probe-maximum { color: #d97706; }
+.probe-minute-slider { width: 100%; accent-color: #185adb; }
+.probe-point { min-height: 48px; margin: 12px 0; font-size: 13px; }
+.probe-metric-select { width: 180px; }
+@media (max-width: 600px) { .probe-card .ant-card-head { flex-wrap: wrap; padding: 12px; gap: 8px; } .probe-card .ant-card-body { padding: 12px; } .probe-metric-select { width: 145px; } }

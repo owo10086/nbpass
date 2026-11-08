@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
+import { ProbeDetails } from './ProbeDetails';
 
 type NodeRow = {
   id: string; name: string; status: string; status_label: string; connected: boolean;
@@ -16,6 +17,7 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [installation, setInstallation] = useState<Installation>();
+  const [probeNode, setProbeNode] = useState<string>();
   const [form] = Form.useForm();
   const expired = useRef(onSessionExpired);
   expired.current = onSessionExpired;
@@ -75,12 +77,14 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
         { title: '最近活性', dataIndex: 'last_seen_at', render: (value: string | null) => value ? new Date(value).toLocaleString() : '—' },
         { title: '配置版本', key: 'revision', render: (_, row) => <Space orientation="vertical" size={0}><span>期望 {row.desired_revision} / 已应用 {row.applied_revision}</span><Typography.Text type={row.config_status === '正常' ? 'success' : 'secondary'}>{row.config_status}</Typography.Text></Space> },
         { title: '操作', key: 'actions', render: (_, row) => <Space wrap>
+          <Button size="small" onClick={() => setProbeNode(row.id)}>查看探针</Button>
           <Button size="small" onClick={() => void maintenance(row)}>{row.status === 'maintenance' ? '结束维护' : '维护 10 分钟'}</Button>
           <Popconfirm title="重置节点 token？" description="当前控制连接将断开，需要重新执行安装命令。" onConfirm={() => credential(row, 'reset')}><Button size="small">重置 token</Button></Popconfirm>
           <Popconfirm title="吊销节点 token？" description="当前控制连接将断开，原凭据将失效。" onConfirm={() => credential(row, 'revoke')}><Button danger size="small">吊销</Button></Popconfirm>
         </Space> },
       ]} />
     </Card>
+    {rows.find(row => row.id === probeNode) && <ProbeDetails node={rows.find(row => row.id === probeNode)!} onClose={() => setProbeNode(undefined)} onSessionExpired={onSessionExpired} />}
     <Modal title="添加节点" open={adding} onCancel={() => { setAdding(false); form.resetFields(); }} footer={null} destroyOnHidden>
       <Form form={form} layout="vertical" onFinish={add} clearOnDestroy>
         <Form.Item name="name" label="节点名称" rules={[{ required: true, whitespace: true, message: '请输入节点名称' }]}><Input autoFocus maxLength={200} placeholder="例如：入口 A" /></Form.Item>
