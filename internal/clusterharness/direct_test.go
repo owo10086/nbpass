@@ -1,9 +1,11 @@
 package clusterharness_test
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"nbpass/internal/node"
 	"net"
 	"strconv"
@@ -24,13 +26,23 @@ func directBody(group string, port int, target string, targetPort int) map[strin
 }
 func freePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	// 避开 macOS 49152–65535 的拨号临时端口，减少并行测试的 bind 竞争。
+	// 这仅是测试环境选址；真实节点的 bind 失败上报仍按原用例验证。
+	for range 100 {
+		index, err := rand.Int(rand.Reader, big.NewInt(29000))
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := 20000 + int(index.Int64())
+		l, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		if err != nil {
+			continue
+		}
+		l.Close()
+		return port
 	}
-	p := l.Addr().(*net.TCPAddr).Port
-	l.Close()
-	return p
+	t.Fatal("无法为测试找到空闲监听端口")
+	return 0
 }
 func echoTarget(t *testing.T, prefix string) int {
 	t.Helper()
@@ -194,7 +206,7 @@ func TestDirectListenFailureIsVisibleAndCanRetry(t *testing.T) {
 	h.StartNode(n["installation_ticket"].(string))
 	awaitNode(t, c, id, connected)
 	gid := entryGroup(c, id)["id"].(string)
-	occupied, err := net.Listen("tcp4", "0.0.0.0:0")
+	occupied, err := net.Listen("tcp4", net.JoinHostPort("0.0.0.0", strconv.Itoa(freePort(t))))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +217,14 @@ func TestDirectListenFailureIsVisibleAndCanRetry(t *testing.T) {
 		return row["config_status"] == "同步失败" && row["apply_error"] != "" && row["applied_revision"] == float64(0)
 	})
 	occupied.Close()
-	h.Clock.Advance(60 * time.Second)
+	// 分步推进全量同步周期，让在途控制/事件确认先被处理，避免同时触发超时。
+	for range 60 {
+		if nodeRow(t, c, id)["config_status"] == "正常" {
+			break
+		}
+		h.Clock.Advance(time.Second)
+		time.Sleep(10 * time.Millisecond)
+	}
 	awaitRevision(t, c, id, 0)
 	tcpExchange(t, body["listen_port"].(int), "A:")
 }

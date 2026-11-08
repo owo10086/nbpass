@@ -22,10 +22,22 @@ func eventRows(c *clusterharness.Client, query string) []any {
 
 type retryEventStore struct {
 	node.FileStore
-	fail atomic.Bool
+	fail         atomic.Bool
+	pauseBatches atomic.Bool
 }
 
 func (s *retryEventStore) SaveEvents(ctx context.Context, data []byte) error {
+	if s.pauseBatches.Load() {
+		var next struct{ Sending []struct{ Type string } }
+		if err := json.Unmarshal(data, &next); err != nil {
+			return err
+		}
+		for _, event := range next.Sending {
+			if event.Type == "sync_failed" {
+				return errors.New("测试录入期间暂停冻结事件批次")
+			}
+		}
+	}
 	if s.fail.Load() {
 		// 只拒绝 ACK 引起的删除，允许先持久化新在途批次再发送。
 		type state struct{ Events, Sending, Frozen []json.RawMessage }
@@ -99,8 +111,10 @@ func TestEventReplayAfterAckFailureAndPanelRestart(t *testing.T) {
 func TestEventOverflowProducesVisibleGap(t *testing.T) {
 	h, c := nodeBrowser(t)
 	a := addNode(c, "有界队列")
-	n, _ := eventNode(t, h, a["installation_ticket"].(string), node.EventLimits{Count: 3})
+	n, store := eventNode(t, h, a["installation_ticket"].(string), node.EventLimits{Count: 3})
 	awaitNode(t, c, a["id"].(string), connected)
+	// 控制断开不意味着发送协程已退出；录入期间禁止新批次冻结，准确测试待发区容量。
+	store.pauseBatches.Store(true)
 	n.Disconnect()
 	awaitNode(t, c, a["id"].(string), func(row map[string]any) bool { return row["connected"] == false })
 	for i := 0; i < 5; i++ {
@@ -108,6 +122,7 @@ func TestEventOverflowProducesVisibleGap(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	store.pauseBatches.Store(false)
 	n.Restore()
 	query := "?node_id=" + a["id"].(string)
 	rows := awaitEvents(t, h, c, query+"&type=sync_failed", 3)
@@ -146,11 +161,20 @@ func TestEventBackfillWindowIncludesExactly24Hours(t *testing.T) {
 	n.Restart()
 	query := "?node_id=" + a["id"].(string)
 	awaitNode(t, c, a["id"].(string), connected)
-	rows := eventRows(c, query+"&type=sync_failed")
+	// 此处固定在恰好 24 小时的边界，仅等真实传输，不能继续推进注入时钟。
+	var rows, gaps []any
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		rows = eventRows(c, query+"&type=sync_failed")
+		gaps = eventRows(c, query+"&type=event_gap")
+		if len(rows) == 1 && len(gaps) == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	if len(rows) != 1 || rows[0].(map[string]any)["message"] != "窗口边界" {
 		t.Fatalf("24 小时窗口错误: %v", rows)
 	}
-	gaps := eventRows(c, query+"&type=event_gap")
 	if len(gaps) != 1 || gaps[0].(map[string]any)["gap"].(map[string]any)["reason"] != "expired" {
 		t.Fatalf("过期缺口未显示: %v", gaps)
 	}
