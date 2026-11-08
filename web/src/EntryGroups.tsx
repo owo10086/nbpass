@@ -31,12 +31,12 @@ export function EntryGroups({ onSessionExpired }: { onSessionExpired: () => void
   }
   useEffect(() => { void load(); const timer = window.setInterval(() => void load(), 10_000); return () => window.clearInterval(timer); }, []);
   function edit(row: EntryGroup | null) {
-    setError(''); form.resetFields(); form.setFieldsValue(row ? { name: row.name, member: row.members[0] } : {}); setEditing(row);
+    setError(''); form.resetFields(); form.setFieldsValue(row ? { name: row.name, members: row.members } : {}); setEditing(row);
   }
-  async function save(values: { name: string; member: string }) {
+  async function save(values: { name: string; members: string[] }) {
     setSaving(true);
     try {
-      await api(editing ? `/entry-groups/${editing.id}` : '/entry-groups', editing ? 'PUT' : 'POST', { name: values.name, members: [values.member] });
+      await api(editing ? `/entry-groups/${editing.id}` : '/entry-groups', editing ? 'PUT' : 'POST', values);
       setEditing(undefined); form.resetFields(); await load();
     } catch (e) { failed(e); }
     finally { setSaving(false); }
@@ -59,7 +59,7 @@ export function EntryGroups({ onSessionExpired }: { onSessionExpired: () => void
       <Form form={form} layout="vertical" onFinish={save} clearOnDestroy>
         {error && <Alert title={error} type="error" showIcon className="message" />}
         <Form.Item name="name" label="入口组名称" rules={[{ required: true, whitespace: true, message: '请输入入口组名称' }]}><Input maxLength={200} autoFocus /></Form.Item>
-        <Form.Item name="member" label="入口节点" rules={[{ required: true, message: '请选择一个入口节点' }]}><Select showSearch optionFilterProp="label" options={nodes.map(n => ({ value: n.id, label: n.name }))} placeholder="选择一个节点" /></Form.Item>
+        <Form.Item name="members" label="入口节点（按顺序，最多 64 个）" rules={[{ required: true, message: '请至少选择一个入口节点' }]}><Select mode="multiple" maxCount={64} showSearch optionFilterProp="label" options={nodes.map(n => ({ value: n.id, label: n.name }))} placeholder="选择入口节点" /></Form.Item>
         <Typography.Paragraph type="secondary">受管记录为“未发布”，可直接通过节点 IPv4 和监听端口访问。</Typography.Paragraph>
         <Button type="primary" htmlType="submit" block loading={saving}>保存入口组</Button>
       </Form>
