@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
+import { NodeRegion, type NodeRegionFields } from './NodeRegion';
 
-type NodeRow = {
+type NodeRow = NodeRegionFields & {
   id: string; name: string; status: string; status_label: string; connected: boolean;
   last_seen_at: string | null; maintenance_until: string | null;
   desired_revision: number; applied_revision: number; config_status: string; software_version: string;
@@ -16,6 +17,7 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [installation, setInstallation] = useState<Installation>();
+  const [regionNode, setRegionNode] = useState<NodeRow>();
   const [form] = Form.useForm();
   const expired = useRef(onSessionExpired);
   expired.current = onSessionExpired;
@@ -69,18 +71,22 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
     </div>
     {error && <Alert title={error} type="error" showIcon className="message" />}
     <Card styles={{ body: { padding: 0 } }}>
-      <Table<NodeRow> rowKey="id" dataSource={rows} loading={loading} scroll={{ x: 1000 }} locale={{ emptyText: '暂无节点，添加后复制安装命令到服务器执行。' }} columns={[
+      <Table<NodeRow> rowKey="id" dataSource={rows} loading={loading} scroll={{ x: 1300 }} locale={{ emptyText: '暂无节点，添加后复制安装命令到服务器执行。' }} columns={[
         { title: '节点', key: 'name', render: (_, row) => <Space orientation="vertical" size={0}><Typography.Text strong>{row.name}</Typography.Text><Typography.Text type="secondary">{row.software_version || '尚未接入'}</Typography.Text></Space> },
+        { title: '地区', key: 'region', render: (_, row) => <Space orientation="vertical" size={2}><span>{row.region.name} <Tag>{row.region_source === 'manual' ? '人工覆盖' : '自动识别'}</Tag></span><Typography.Text type="secondary">{row.public_ipv4 || '尚未查询到 IP'}</Typography.Text></Space> },
+        { title: '国内检测点角色', key: 'checker', render: (_, row) => <Tag color={row.domestic_checker ? 'green' : 'default'}>{row.checker_label}</Tag> },
         { title: '状态', key: 'status', render: (_, row) => <Space orientation="vertical" size={2}><Tag color={{ online: 'green', offline: 'default', maintenance: 'blue', pending: 'orange' }[row.status]}>{row.status_label}</Tag>{row.status === 'online' && !row.connected && <Typography.Text type="secondary">控制连接已中断</Typography.Text>}{row.status === 'maintenance' && row.maintenance_until && <Typography.Text type="secondary">至 {new Date(row.maintenance_until).toLocaleTimeString()}</Typography.Text>}</Space> },
         { title: '最近活性', dataIndex: 'last_seen_at', render: (value: string | null) => value ? new Date(value).toLocaleString() : '—' },
         { title: '配置版本', key: 'revision', render: (_, row) => <Space orientation="vertical" size={0}><span>期望 {row.desired_revision} / 已应用 {row.applied_revision}</span><Typography.Text type={row.config_status === '正常' ? 'success' : 'secondary'}>{row.config_status}</Typography.Text></Space> },
         { title: '操作', key: 'actions', render: (_, row) => <Space wrap>
+          <Button size="small" onClick={() => setRegionNode(row)}>地区与检测点</Button>
           <Button size="small" onClick={() => void maintenance(row)}>{row.status === 'maintenance' ? '结束维护' : '维护 10 分钟'}</Button>
           <Popconfirm title="重置节点 token？" description="当前控制连接将断开，需要重新执行安装命令。" onConfirm={() => credential(row, 'reset')}><Button size="small">重置 token</Button></Popconfirm>
           <Popconfirm title="吊销节点 token？" description="当前控制连接将断开，原凭据将失效。" onConfirm={() => credential(row, 'revoke')}><Button danger size="small">吊销</Button></Popconfirm>
         </Space> },
       ]} />
     </Card>
+    <NodeRegion node={regionNode} onClose={() => setRegionNode(undefined)} onSaved={load} onError={failed} />
     <Modal title="添加节点" open={adding} onCancel={() => { setAdding(false); form.resetFields(); }} footer={null} destroyOnHidden>
       <Form form={form} layout="vertical" onFinish={add} clearOnDestroy>
         <Form.Item name="name" label="节点名称" rules={[{ required: true, whitespace: true, message: '请输入节点名称' }]}><Input autoFocus maxLength={200} placeholder="例如：入口 A" /></Form.Item>

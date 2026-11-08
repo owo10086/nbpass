@@ -3,6 +3,7 @@ module nbpass
 go 1.26.3
 
 require (
+	github.com/lionsoul2014/ip2region/binding/golang v0.0.0-20261028042204-6a276cc7c4f9
 	golang.org/x/crypto v0.58.0
 	google.golang.org/grpc v1.81.0
 	google.golang.org/protobuf v1.36.11

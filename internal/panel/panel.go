@@ -32,13 +32,14 @@ type PasswordHasher interface {
 }
 
 type Dependencies struct {
-	Clock       Clock
-	Persistence Persistence
-	KeyFile     KeyFile
-	Random      io.Reader
-	Passwords   PasswordHasher
-	Assets      fs.FS
-	NodeBinary  func() (io.ReadCloser, error)
+	Clock        Clock
+	Persistence  Persistence
+	KeyFile      KeyFile
+	Random       io.Reader
+	Passwords    PasswordHasher
+	Assets       fs.FS
+	NodeBinary   func() (io.ReadCloser, error)
+	RegionLookup func(context.Context, string) (Region, error)
 }
 
 type Config struct {
