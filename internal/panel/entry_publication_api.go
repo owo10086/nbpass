@@ -34,12 +34,15 @@ func (p *Panel) publishEntryGroup(w http.ResponseWriter, r *http.Request) {
 }
 func (p *Panel) getEntryPublication(w http.ResponseWriter, r *http.Request) {
 	var pub struct {
-		GroupID        string       `json:"group_id"`
-		DesiredVersion int64        `json:"desired_version"`
-		ActiveNodeID   string       `json:"active_node_id"`
-		ExpectedValue  string       `json:"expected_value"`
-		WrittenAt      *time.Time   `json:"written_at"`
-		Action         *EntryAction `json:"action"`
+		GroupID            string       `json:"group_id"`
+		DesiredVersion     int64        `json:"desired_version"`
+		ActiveNodeID       string       `json:"active_node_id"`
+		PreferredNodeID    string       `json:"preferred_node_id"`
+		AutoFailbackPaused bool         `json:"auto_failback_paused"`
+		AutoFailbackStatus string       `json:"auto_failback_status"`
+		ExpectedValue      string       `json:"expected_value"`
+		WrittenAt          *time.Time   `json:"written_at"`
+		Action             *EntryAction `json:"action"`
 	}
 	pub.GroupID = r.PathValue("id")
 	var actionID string
@@ -59,6 +62,14 @@ func (p *Panel) getEntryPublication(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		problem(w, 503, "无法读取发布状态")
 		return
+	}
+	if err = tx.QueryRowContext(r.Context(), `SELECT m.node_id,g.auto_failback_paused FROM entry_group_members m JOIN entry_groups g ON g.id=m.group_id WHERE m.group_id=? ORDER BY m.position LIMIT 1`, pub.GroupID).Scan(&pub.PreferredNodeID, &pub.AutoFailbackPaused); err != nil {
+		problem(w, 503, "无法读取首选入口")
+		return
+	}
+	pub.AutoFailbackStatus = "自动回切已启用"
+	if pub.AutoFailbackPaused {
+		pub.AutoFailbackStatus = "自动回切已暂停"
 	}
 	if written.Valid {
 		t := time.Unix(0, written.Int64).UTC()

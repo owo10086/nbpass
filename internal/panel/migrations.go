@@ -90,6 +90,7 @@ var migrations = []string{
 	offlineMigration + telegramMigration,
 	rotationMigration,
 	configResultsMigration,
+	entryManualSwitchMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {
