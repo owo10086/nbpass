@@ -111,6 +111,7 @@ var migrations = []string{
 	versionCompatibilityMigration,
 	entryBlockedMigration,
 	entryBlockedRotationMigration,
+	crossGroupRotationMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

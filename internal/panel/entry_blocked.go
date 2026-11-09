@@ -10,6 +10,7 @@ import (
 type blockedEntry struct {
 	group, node, ip, incident, policy string
 	version                           int64
+	crossRotation                     bool
 }
 
 // 原始自测和检测点补判共同产出的被墙状态只在此消费，不推进其他上报状态。
@@ -136,7 +137,8 @@ func (p *Panel) submitBlockedSwitch(ctx context.Context, e blockedEntry, states 
 	}
 	sum := sha256.Sum256([]byte(identity))
 	id := fmt.Sprintf("entry-blocked:%x", sum)
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO entry_blocked_decisions(id,group_id,node_id,incident_id,desired_version,outcome,created_at,policy) VALUES(?,?,?,?,?,'no_candidate',?,?)`, id, e.group, e.node, e.incident, e.version, p.deps.Clock.Now().UnixNano(), e.policy)
+	_, err = tx.ExecContext(ctx, `INSERT INTO entry_blocked_decisions(id,group_id,node_id,incident_id,desired_version,outcome,created_at,policy,cross_rotation) VALUES(?,?,?,?,?,'no_candidate',?,?,?)
+ ON CONFLICT(id) DO UPDATE SET cross_rotation=MAX(cross_rotation,excluded.cross_rotation)`, id, e.group, e.node, e.incident, e.version, p.deps.Clock.Now().UnixNano(), e.policy, e.crossRotation)
 	if err != nil {
 		return err
 	}
@@ -170,7 +172,8 @@ func (p *Panel) submitBlockedSwitch(ctx context.Context, e blockedEntry, states 
 		return err
 	}
 	if e.policy == "switch_then_rotate" {
-		if _, err = tx.ExecContext(ctx, "INSERT INTO entry_blocked_rotations(decision_id,expected_version) VALUES(?,?)", id, a.Version); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO entry_blocked_rotations(decision_id,expected_version) VALUES(?,?)
+ ON CONFLICT(decision_id) DO UPDATE SET expected_version=excluded.expected_version`, id, a.Version); err != nil {
 			return err
 		}
 	}
@@ -182,6 +185,13 @@ func (p *Panel) submitBlockedSwitch(ctx context.Context, e blockedEntry, states 
 
 func (p *Panel) blockedEntryCurrent(ctx context.Context, tx *sql.Tx, e blockedEntry) (bool, error) {
 	var count int
+	if e.crossRotation {
+		err := tx.QueryRowContext(ctx, `SELECT count(*) FROM entry_publications s JOIN entry_groups g ON g.id=s.group_id
+ JOIN nodes n ON n.id=s.active_node_id JOIN node_regions r ON r.node_id=n.id
+ WHERE s.group_id=? AND s.active_node_id=? AND s.expected_value=? AND s.desired_version=? AND g.blocked_policy=?
+ AND r.public_ipv4=s.expected_value AND (n.maintenance_until IS NULL OR n.maintenance_until<=?)`, e.group, e.node, e.ip, e.version, e.policy, p.deps.Clock.Now().UnixNano()).Scan(&count)
+		return count == 1, err
+	}
 	err := tx.QueryRowContext(ctx, "SELECT count(*)"+blockedEntryFrom+" AND s.group_id=? AND s.active_node_id=? AND s.expected_value=? AND s.desired_version=? AND i.incident_id=? AND g.blocked_policy=?", p.deps.Clock.Now().UnixNano(), e.group, e.node, e.ip, e.version, e.incident, e.policy).Scan(&count)
 	return count == 1, err
 }
