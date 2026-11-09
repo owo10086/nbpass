@@ -207,10 +207,10 @@ func TestDirectIdleTimeoutRenewsOnDownstreamAndReclaimsHalfClosedConnection(t *t
 	}
 	readReply()
 	sampleBusiness(t, h, c, id, 1)
-	h.Clock.Advance(119 * time.Minute)
+	h.Clock.Advance(90 * time.Minute) // 留足余量:sampleBusiness 每轮快进,负载下轮数不定
 	readReply()
 	sampleBusiness(t, h, c, id, 1)
-	h.Clock.Advance(119 * time.Minute)
+	h.Clock.Advance(90 * time.Minute) // 留足余量:sampleBusiness 每轮快进,负载下轮数不定
 	readReply()
 	sampleBusiness(t, h, c, id, 1)
 	h.Clock.Advance(2 * time.Hour)

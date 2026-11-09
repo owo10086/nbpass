@@ -340,7 +340,7 @@ func TestTunnelIdleTimeoutRenewsOnDownstreamAndReclaimsHalfClosedFlow(t *testing
 	}
 	readReply()
 	for i := 0; i < 2; i++ {
-		f.h.Clock.Advance(119 * time.Minute)
+		f.h.Clock.Advance(90 * time.Minute) // 留足余量:sampleTunnelBusiness 每轮快进 5 秒,负载下轮数不定
 		readReply()
 		sampleTunnelBusiness(t, f, f.entry, 1)
 		sampleTunnelBusiness(t, f, f.exit, 1)
