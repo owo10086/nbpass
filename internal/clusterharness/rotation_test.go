@@ -230,11 +230,10 @@ func TestRotationExpiredOrDisconnectedDuringPreflightDoesNotCallVendor(t *testin
 				h.Clock.Advance(time.Second)
 			}
 			n.Restore()
-			for i := 0; i < 5; i++ {
-				h.Clock.Advance(time.Second)
-				time.Sleep(20 * time.Millisecond)
+			cancelled := awaitRotationAfterReconnect(t, h, c, path, "cancelled")
+			if offline && cancelled["reason"] != rotation.Reasons["offline"] {
+				t.Fatalf("断连必须因离线取消，不能由许可过期替代: %v", cancelled)
 			}
-			awaitRotation(t, c, path, "cancelled")
 			if calls.Load() != 0 {
 				t.Fatal("过期或离线许可执行了接口")
 			}
