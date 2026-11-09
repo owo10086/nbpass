@@ -69,6 +69,7 @@ func (p *Panel) startEntryCandidates(ctx context.Context) {
 	go func() {
 		defer p.background.Done()
 		defer func() { timer.Stop() }()
+		var windows map[string]entryFailbackWindow
 		for {
 			select {
 			case <-ctx.Done():
@@ -76,14 +77,18 @@ func (p *Panel) startEntryCandidates(ctx context.Context) {
 			case <-timer.C():
 			}
 			timer = p.deps.Clock.NewTimer(entryCandidateInterval)
+			p.entryMu.Lock()
 			p.controlMu.Lock()
 			states, err := p.checkEntryCandidates(ctx)
 			if err != nil {
 				p.entryChecks = nil
+				windows = nil
 			} else {
 				p.entryChecks = states
+				windows, _ = p.checkEntryFailbacks(ctx, states, windows)
 			}
 			p.controlMu.Unlock()
+			p.entryMu.Unlock()
 		}
 	}()
 }
