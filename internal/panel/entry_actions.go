@@ -68,7 +68,7 @@ func (p *Panel) SubmitEntryAction(ctx context.Context, req EntryActionRequest) (
 		return EntryAction{}, &forwardingError{400, "请选择活动入口并确认单个可入站公网 IPv4"}
 	}
 	switch req.Kind {
-	case "first_publish", "switch", "failback", "address_update", "writeback":
+	case "first_publish", "manual_switch", "switch", "failback", "address_update", "writeback":
 	default:
 		return EntryAction{}, &forwardingError{400, "入口动作类型无效"}
 	}
@@ -108,6 +108,9 @@ func (p *Panel) SubmitEntryAction(ctx context.Context, req EntryActionRequest) (
 	}
 	if version != req.ExpectedVersion || (req.Kind == "first_publish" && version != 0) {
 		return a, &forwardingError{409, "期望版本已变化，请刷新后重新操作"}
+	}
+	if err := entryActionPolicy(ctx, tx, req); err != nil {
+		return a, err
 	}
 	a.Version = version + 1
 	a.ID, _, err = p.randomCredential()

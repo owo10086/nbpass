@@ -194,6 +194,8 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 			return err
 		}
 		sent := make(chan error, 1)
+		timer := p.deps.Clock.NewTimer(15 * time.Second)
+		defer timer.Stop()
 		go func() {
 			// 命令独立发送：不占快照空间，也不能阻塞后续完整配置/撤权同步。
 			dnsTasks := response.DnsWatchTasks
@@ -214,8 +216,6 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 			}
 			sent <- err
 		}()
-		timer := p.deps.Clock.NewTimer(15 * time.Second)
-		defer timer.Stop()
 		select {
 		case <-session.done:
 			return status.Error(codes.Unauthenticated, "控制会话已撤销")
@@ -480,7 +480,7 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		}
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
-
+	// 确认与入口快照一并提交后立即通知，不依赖心跳重试。
 	p.notifyConfiguration(authorizationChanges)
 	return response, nil
 }

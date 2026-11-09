@@ -52,7 +52,7 @@ func TestConfigCheckpointFailureDoesNotConfirmRevocation(t *testing.T) {
 	})
 	awaitNode(t, c, id, connected)
 	gid := entryGroup(c, id)["id"].(string)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	body := directBody(gid, port, "127.0.0.1", echoTarget(t, "A:"))
 	rule := c.Do("POST", "/api/rules", body, 201)
 	previous := awaitRevision(t, c, id, 0)
@@ -79,13 +79,13 @@ func TestConfigFinalWriteFailureKeepsRevocationsAcrossRestart(t *testing.T) {
 	created := addNode(c, "最终写盘失败")
 	id := created["id"].(string)
 	store := &faultyConfigStore{}
-	oldPort, newPort, keepPort := freePort(t), freePort(t), freePort(t)
+	oldPort, newPort, keepPort := h.ReserveTCPPort(), h.ReserveTCPPort(), h.ReserveTCPPort()
 	var trigger atomic.Bool
 	real := h.StartNode(created["installation_ticket"].(string), func(_ *node.Config, deps *node.Dependencies) {
 		store.ConfigStore = deps.Store.(node.ConfigStore)
 		deps.ConfigStore = store
 		deps.Forwarding.Listen = func(network, address string) (net.Listener, error) {
-			listener, err := net.Listen(network, address)
+			listener, err := h.ListenTCP(network, address)
 			if err == nil && address == fmt.Sprintf("0.0.0.0:%d", newPort) && trigger.Load() {
 				store.fail.Store(true)
 			}
@@ -144,7 +144,7 @@ func TestCachedListenFailureCannotReusePreviousAppliedRevision(t *testing.T) {
 	real := h.StartNode(created["installation_ticket"].(string))
 	awaitNode(t, c, id, connected)
 	gid := entryGroup(c, id)["id"].(string)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	rule := c.Do("POST", "/api/rules", directBody(gid, port, "127.0.0.1", echoTarget(t, "A:")), 201)
 	awaitRevision(t, c, id, 0)
 	instance := nodeRow(t, c, id)["process_instance"]
@@ -180,7 +180,7 @@ func TestDeletedRuleKeepsGroupFailedUntilRevocationIsConfirmed(t *testing.T) {
 	})
 	awaitNode(t, c, id, connected)
 	gid := entryGroup(c, id)["id"].(string)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	rule := c.Do("POST", "/api/rules", directBody(gid, port, "127.0.0.1", echoTarget(t, "A:")), 201)
 	previous := awaitRevision(t, c, id, 0)
 	conn := tcpExchange(t, port, "A:")
@@ -217,7 +217,7 @@ func TestMovedRuleKeepsPreviousGroupFailedUntilRevocationIsConfirmed(t *testing.
 	})
 	awaitNode(t, c, id, connected)
 	oldGroup, newGroup := entryGroup(c, id)["id"].(string), entryGroup(c, id)["id"].(string)
-	oldPort, newPort := freePort(t), freePort(t)
+	oldPort, newPort := h.ReserveTCPPort(), h.ReserveTCPPort()
 	body := directBody(oldGroup, oldPort, "127.0.0.1", echoTarget(t, "A:"))
 	rule := c.Do("POST", "/api/rules", body, 201)
 	previous := awaitRevision(t, c, id, 0)
@@ -256,7 +256,7 @@ func TestDeletedRuleRevocationDetailsSurviveNewProcess(t *testing.T) {
 	})
 	awaitNode(t, c, id, connected)
 	gid := entryGroup(c, id)["id"].(string)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	rule := c.Do("POST", "/api/rules", directBody(gid, port, "127.0.0.1", echoTarget(t, "A:")), 201)
 	previous := awaitRevision(t, c, id, 0)
 	instance := nodeRow(t, c, id)["process_instance"]

@@ -57,6 +57,7 @@ func (h *Harness) StartNode(ticket string, options ...func(*node.Config, *node.D
 	n := &Node{store: node.FileStore{Dir: filepath.Join(h.t.TempDir(), "node"), Random: rand.Reader}, connections: make(map[net.Conn]bool)}
 	n.config = node.Config{ControlURL: h.Control.URL, InstallationTicket: ticket}
 	n.deps = node.Dependencies{Clock: h.Clock, Store: n.store, Random: rand.Reader, RootCAs: roots, DialContext: n.dial}
+	n.deps.Forwarding.Listen = h.ListenTCP
 	// 测试台始终替换外部公网 IP 查询，不访问公网；地区用例按需注入地址。
 	n.deps.PublicIPv4 = func(context.Context) (string, error) { return "", errors.New("测试台未配置公网 IP") }
 	n.deps.Probe = emptyProbe{}

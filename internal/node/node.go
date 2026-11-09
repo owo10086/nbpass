@@ -480,9 +480,9 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		}
 		// 发送串行，传输只持有本轮不可变副本；接收持续独立运行。
 		result := make(chan error, 1)
-		go func() { result <- stream.Send(outgoing) }()
 		timer := clock.NewTimer(15 * time.Second)
 		defer timer.Stop()
+		go func() { result <- stream.Send(outgoing) }()
 		select {
 		case err := <-result:
 			if err != nil {
@@ -734,7 +734,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				err = deps.selfChecks.apply(ctx, snapshot.SelfCheckConfig, snapshot.Revision)
 			}
 			if err == nil {
-				err = engine.Apply(snapshot)
+				err = engine.ApplyContext(onlineCtx, snapshot)
 			}
 			report.AppliedRevision, report.AppliedDigest = engine.Applied()
 			state := engine.State()

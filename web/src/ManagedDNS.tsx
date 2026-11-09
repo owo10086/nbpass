@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Descriptions, Form, Input, Modal, Select, Space, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
+import { EntryMembers } from './EntryMembers';
+import { EntrySwitch, type EntrySwitchState } from './EntrySwitch';
 
 type Account = { id: string; name: string; configured: boolean };
 type Binding = { account_id: string; domain: string; record_id: string; line_id: string; line: string; hostname: string; current_value: string; current_ttl: number; warnings: string[] };
 type Action = { id: string; stage: string; old_value: string; new_value: string; old_ttl: number; last_error: string };
-type Publication = { desired_version: number; active_node_id: string; expected_value: string; written_at: string | null; action: Action | null };
+type Publication = EntrySwitchState & { active_node_id: string; expected_value: string; written_at: string | null; action: Action | null };
 
 export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
   group: { id: string; name: string; members: string[] };
@@ -16,6 +18,8 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [binding, setBinding] = useState<Binding | null>(null);
   const [publication, setPublication] = useState<Publication | null>(null);
+  const [members, setMembers] = useState(group.members);
+  const [groupName, setGroupName] = useState(group.name);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [addingAccount, setAddingAccount] = useState(false);
@@ -23,6 +27,8 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
   const [accountForm] = Form.useForm();
   const [bindingForm] = Form.useForm();
   const [publishForm] = Form.useForm();
+  const [membersForm] = Form.useForm();
+  const membersDirty = useRef(false);
   const active = useRef(true);
   const expired = useRef(onSessionExpired); expired.current = onSessionExpired;
   const path = `/entry-groups/${group.id}`;
@@ -33,13 +39,19 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
   }
   async function load() {
     try {
-      const [list, record, state] = await Promise.all([
+      const [list, record, state, groups] = await Promise.all([
         api<{ accounts: Account[] }>('/dns-accounts'),
         api<Binding>(`${path}/managed-record`).catch(e => { if (e instanceof APIError && e.status === 404) return null; throw e; }),
         api<Publication>(`${path}/publication`),
+        api<{ entry_groups: { id: string; name: string; members: string[] }[] }>('/entry-groups'),
       ]);
       if (!active.current) return;
       setAccounts(list.accounts); setBinding(record); setPublication(state);
+      const current = groups.entry_groups.find(g => g.id === group.id);
+      if (current) {
+        setMembers(current.members); setGroupName(current.name);
+        if (!membersDirty.current) membersForm.setFieldsValue({ members: current.members });
+      }
       if (record) bindingForm.setFieldsValue(record);
     } catch (e) { failed(e); }
     finally { if (active.current) setLoading(false); }
@@ -56,7 +68,7 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
     }
     const timer = window.setInterval(() => { void load(); }, 2000);
     return () => window.clearInterval(timer);
-  }, [publication?.action?.stage]);
+  }, [publication?.action?.id, publication?.action?.stage]);
   async function addAccount(values: { name: string; token_id: string; token: string }) {
     setSaving(true); setError('');
     try {
@@ -78,10 +90,26 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
     catch (e) { failed(e); }
     finally { setSaving(false); }
   }
+  async function saveMembers(values: { members: string[] }) {
+    setSaving(true); setError('');
+    try {
+      const saved = await api<{ members: string[] }>(path, 'PUT', { name: groupName, members: values.members });
+      setMembers(saved.members); membersDirty.current = false;
+      membersForm.resetFields(); membersForm.setFieldsValue({ members: saved.members }); await load();
+    } catch (e) { failed(e); }
+    finally { setSaving(false); }
+  }
   const started = (publication?.desired_version ?? 0) > 0;
-  return <Modal title={`${group.name} · 受管记录与首次发布`} open onCancel={onClose} footer={null} width={720}>
+  return <Modal title={`${groupName} · 入口组详情`} open onCancel={onClose} footer={null} width={720}>
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
       {error && <Alert title={error} type="error" showIcon />}
+      <Card title="成员与排序">
+        <Form form={membersForm} initialValues={{ members: group.members }} layout="vertical" onValuesChange={() => { membersDirty.current = true; }} onFinish={saveMembers} disabled={saving}>
+          <EntryMembers nodes={nodes} />
+          <Button htmlType="submit" loading={saving} style={{ marginTop: 16 }}>保存成员排序</Button>
+        </Form>
+        <Typography.Paragraph style={{ marginTop: 12 }}>首选入口：{nodes.find(n => n.id === publication?.preferred_node_id)?.name ?? publication?.preferred_node_id ?? '加载中'}</Typography.Paragraph>
+      </Card>
       <Alert type="info" showIcon title="绑定后先核对当前记录，再由你明确选择活动入口并首次发布。" description="只管理这一条单线路 A 记录，发布 TTL 为 60 秒。" />
       <Card title="DNSPod 受管记录" loading={loading} extra={!started && <Button onClick={() => setAddingAccount(true)}>添加 DNSPod 账号</Button>}>
         {!started && <Form form={bindingForm} layout="vertical" onFinish={bind} initialValues={{ line_id: '0' }}>
@@ -103,12 +131,13 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
       </Card>
       {binding && !started && <Card title="首次发布">
         <Form form={publishForm} layout="vertical" onFinish={publish}>
-          <Form.Item name="active_node_id" label="活动入口" rules={[{ required: true, message: '请明确选择活动入口' }]}><Select placeholder="选择要发布的成员" options={group.members.map(id => ({ value: id, label: nodes.find(n => n.id === id)?.name ?? id }))} /></Form.Item>
+          <Form.Item name="active_node_id" label="活动入口" rules={[{ required: true, message: '请明确选择活动入口' }]}><Select placeholder="选择要发布的成员" options={members.map(id => ({ value: id, label: nodes.find(n => n.id === id)?.name ?? id }))} /></Form.Item>
           <Form.Item name="ipv4" label="发布 IPv4" rules={[{ required: true, message: '请输入该入口可入站的公网 IPv4' }]}><Input placeholder="例如 8.8.8.8" maxLength={15} /></Form.Item>
           <Form.Item name="confirm_inbound" valuePropName="checked" rules={[{ validator: (_, value) => value ? Promise.resolve() : Promise.reject(new Error('请确认活动入口与入站地址')) }]}><Checkbox>我确认该 IPv4 属于所选活动入口，可直接接收业务连接，并确认替换受管记录当前值。</Checkbox></Form.Item>
           <Button type="primary" htmlType="submit" loading={saving}>确认并首次发布</Button>
         </Form>
       </Card>}
+      {started && publication && <EntrySwitch path={path} members={members} nodes={nodes} publication={publication} saving={saving} setSaving={setSaving} onStart={() => setError('')} onChanged={load} onError={failed} />}
       {started && <Card title="发布进度" extra={<Button onClick={() => void load()}>刷新</Button>}>
         <Descriptions column={1} size="small" items={[
           { key: 'version', label: '期望版本', children: publication?.desired_version },

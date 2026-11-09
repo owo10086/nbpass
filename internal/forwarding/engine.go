@@ -91,6 +91,11 @@ func (e *Engine) Applied() (uint64, string) { return e.revision, e.digest }
 // Apply 保留未变化的监听，先撤销缺失/变化的规则，再启动新规则。
 // 调用方串行使用引擎；任何运行时撤销之前必须先提交不含旧规则的缓存。
 func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
+	return e.ApplyContext(context.Background(), s)
+}
+
+// ApplyContext 使授权探测随控制会话取消，整份快照共享探测预算。
+func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) error {
 	if err := ValidateSnapshot(s); err != nil {
 		return err
 	}
@@ -153,10 +158,15 @@ func (e *Engine) Apply(s *controlpb.ConfigSnapshot) error {
 		failures = append(failures, errors.New(e.tunnelError))
 	}
 	e.applyTunnelClients(endpoints)
+	readiness := e.checkNewTunnelRules(ctx, s.Rules, groups)
 	e.results = nil
 	for _, r := range s.Rules {
 		result := &controlpb.RuleApplyResult{RuleId: r.Id}
-		if err := e.startRule(r, groups[r.ExitGroupId]); err != nil {
+		err := readiness[r.Id]
+		if err == nil {
+			err = e.startRule(r, groups[r.ExitGroupId])
+		}
+		if err != nil {
 			result.ApplyError = ErrorSummary(err.Error(), 1024)
 			failures = append(failures, errors.New(result.ApplyError))
 		} else {
@@ -226,6 +236,7 @@ func (e *Engine) startRule(r *controlpb.ForwardRule, ep *controlpb.TunnelEndpoin
 	go current.accept()
 	return nil
 }
+
 func (e *Engine) Close() {
 	if e.checkListener != nil {
 		e.checkListener.Close()
