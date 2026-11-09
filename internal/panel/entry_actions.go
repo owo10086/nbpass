@@ -96,6 +96,13 @@ func (p *Panel) SubmitEntryAction(ctx context.Context, req EntryActionRequest) (
 // 同一数据库事务串行维护期望版本；普通提交持 entryMu，地址确认持 controlMu。
 // 地址确认不再获取 entryMu，避免与入口组配置的 entryMu → controlMu 次序反转。
 func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryActionRequest) (EntryAction, error) {
+	allowed, e := recoveryGroupAllowed(ctx, tx, req.GroupID)
+	if e != nil {
+		return EntryAction{}, e
+	}
+	if !allowed {
+		return EntryAction{}, &forwardingError{409, "从旧备份恢复，入口组尚未核对，自动写暂停"}
+	}
 	ip, err := publicip.Parse(req.IPv4)
 	if err != nil {
 		return EntryAction{}, err

@@ -21,6 +21,8 @@ type RotationStore interface {
 }
 
 type rotationJournal struct {
+	HistorySince    int64                                  `json:"history_since"`
+	AttemptedAt     map[string]int64                       `json:"attempted_at"`
 	RecheckConfig   []byte                                 `json:"recheck_config"`
 	RecheckRevision uint64                                 `json:"recheck_revision"`
 	Current         string                                 `json:"current"`
@@ -51,6 +53,20 @@ func openRotations(ctx context.Context, deps Dependencies) (*rotationRunner, err
 		if err := json.Unmarshal(data, &r.state); err != nil || len(r.state.Results) > 4096 || r.state.Results == nil {
 			return nil, errors.New("换 IP 动作缓存损坏")
 		}
+	}
+	// 新日志从创建时刻开始证明覆盖范围；旧日志缺少时间证据时从本次升级起保护。
+	if r.state.HistorySince == 0 {
+		r.state.HistorySince = deps.Clock.Now().UnixNano()
+	}
+	if r.state.AttemptedAt == nil {
+		r.state.AttemptedAt = map[string]int64{}
+	}
+	encoded, err := json.Marshal(r.state)
+	if err != nil {
+		return nil, err
+	}
+	if err = deps.RotationStore.SaveRotation(ctx, encoded); err != nil {
+		return nil, err
 	}
 	// 票28的缓存不含完成标记；离线完成的终态也要以新序号补报，才能开放核对。
 	if current := r.state.Results[r.state.Current]; current != nil && current.State == "unconfirmed" && current.Attempts == 5 && !current.ObservationComplete {
@@ -104,7 +120,23 @@ func (r *rotationRunner) save(p *controlpb.RotationProgress, next int64) error {
 		results = map[string]*controlpb.RotationProgress{}
 	}
 	results[p.ActionId] = copy
-	state := rotationJournal{RecheckConfig: r.state.RecheckConfig, RecheckRevision: r.state.RecheckRevision, Current: p.ActionId, Results: results, NextCheck: next, RetiredBefore: cutoff}
+	attempts := make(map[string]int64, len(r.state.AttemptedAt)+1)
+	for id, at := range r.state.AttemptedAt {
+		if results[id] != nil {
+			attempts[id] = at
+		}
+	}
+	since := r.state.HistorySince
+	if cutoff > r.state.RetiredBefore {
+		since = r.deps.Clock.Now().UnixNano()
+	}
+	if p.State == "started" && attempts[p.ActionId] == 0 {
+		attempts[p.ActionId] = r.deps.Clock.Now().UnixNano()
+	}
+	if p.State == "cancelled" && attempts[p.ActionId] == 0 {
+		attempts[p.ActionId] = r.deps.Clock.Now().UnixNano()
+	}
+	state := rotationJournal{HistorySince: since, AttemptedAt: attempts, RecheckConfig: r.state.RecheckConfig, RecheckRevision: r.state.RecheckRevision, Current: p.ActionId, Results: results, NextCheck: next, RetiredBefore: cutoff}
 	data, err := json.Marshal(state)
 	if err == nil {
 		err = r.deps.RotationStore.SaveRotation(r.ctx, data)

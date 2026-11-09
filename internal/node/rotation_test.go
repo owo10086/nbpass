@@ -33,7 +33,7 @@ func (s *oneShotRotationDisk) SaveRotation(ctx context.Context, data []byte) err
 	if err := json.Unmarshal(data, &state); err != nil {
 		return err
 	}
-	if !s.failed && state.Results[state.Current].State == s.failState {
+	if current := state.Results[state.Current]; current != nil && !s.failed && current.State == s.failState {
 		s.failed = true
 		return errors.New("temporary disk failure")
 	}

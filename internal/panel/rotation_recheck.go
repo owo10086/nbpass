@@ -18,6 +18,9 @@ func rotationRecheckStatus(a *rotationAction) string {
 }
 
 func (p *Panel) validateRotationRecheck(ctx context.Context, a *rotationAction, result *controlpb.RotationProgress) (string, []byte, error) {
+	return p.validateRotationRecheckWith(ctx, p.db, a, result)
+}
+func (p *Panel) validateRotationRecheckWith(ctx context.Context, q recoveryQuerier, a *rotationAction, result *controlpb.RotationProgress) (string, []byte, error) {
 	if result.State != "changed" {
 		if len(result.RecheckRounds) > 0 || result.RecheckComplete {
 			return "", nil, errors.New("地址未变不能提交复检")
@@ -25,7 +28,7 @@ func (p *Panel) validateRotationRecheck(ctx context.Context, a *rotationAction, 
 		return "", []byte("[]"), nil
 	}
 	var configBytes []byte
-	if err := p.db.QueryRowContext(ctx, "SELECT recheck_config FROM rotation_actions WHERE id=?", a.ID).Scan(&configBytes); err != nil {
+	if err := q.QueryRowContext(ctx, "SELECT recheck_config FROM rotation_actions WHERE id=?", a.ID).Scan(&configBytes); err != nil {
 		return "", nil, err
 	}
 	if len(configBytes) == 0 {
@@ -150,6 +153,13 @@ func (p *Panel) rotationDNSActions(ctx context.Context, tx *sql.Tx, a *rotationA
 	}
 	var groups []string
 	for _, r := range requests {
+		allowed, e := recoveryGroupAllowed(ctx, tx, r.GroupID)
+		if e != nil {
+			return nil, e
+		}
+		if !allowed {
+			continue
+		}
 		if _, err = p.submitEntryActionTx(ctx, tx, r); err != nil {
 			return nil, err
 		}

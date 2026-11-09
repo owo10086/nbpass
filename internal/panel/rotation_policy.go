@@ -37,7 +37,7 @@ type rotationQuota struct {
 func (p *Panel) rotationQuota(ctx context.Context, id string) (rotationQuota, error) {
 	var q rotationQuota
 	now := p.deps.Clock.Now()
-	rows, err := p.db.QueryContext(ctx, `SELECT attempted_at FROM rotation_quota WHERE node_id=? AND attempted_at>? ORDER BY attempted_at`, id, now.Add(-24*time.Hour).UnixNano())
+	rows, err := p.db.QueryContext(ctx, `SELECT MAX(attempted_at) AS at FROM (SELECT action_id,node_id,attempted_at FROM rotation_quota UNION ALL SELECT action_id,node_id,attempted_at FROM recovery_rotation_attempts WHERE state!='cancelled') WHERE node_id=? AND attempted_at>? GROUP BY action_id ORDER BY at`, id, now.Add(-24*time.Hour).UnixNano())
 	if err != nil {
 		return q, err
 	}
