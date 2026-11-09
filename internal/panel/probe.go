@@ -79,6 +79,9 @@ func (p *Panel) storeProbe(ctx context.Context, id, instance string, sample *con
 	if err != nil {
 		return err
 	}
+	if err := p.storeExitHealth(ctx, tx, id, sample.ExitHealth); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

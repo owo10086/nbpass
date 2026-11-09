@@ -27,6 +27,7 @@ const tunnelPath = "/nbpass/tunnel/v1"
 const tunnelSubprotocol = "nbpass.tunnel.v1"
 
 type tunnelAuth struct {
+	Probe      bool   `json:"probe,omitempty"`
 	Version    int    `json:"version"`
 	EntryID    string `json:"entry_id"`
 	Credential string `json:"credential"`
@@ -42,8 +43,9 @@ type tunnelRequest struct {
 	Check *controlpb.ForwardRule `json:"check,omitempty"`
 }
 type tunnelResult struct {
-	OK    bool `json:"ok"`
-	Ready bool `json:"ready,omitempty"`
+	Failure failureClass `json:"failure,omitempty"`
+	OK      bool         `json:"ok"`
+	Ready   bool         `json:"ready,omitempty"`
 	// 仅认证响应声明预检能力；旧节点缺省不支持。
 	CheckSupported bool `json:"check_supported,omitempty"`
 }
@@ -89,15 +91,29 @@ type tunnelSession struct {
 
 // 每个入口—出口复用一个 WSS/yamux 会话。变更只淘汰对应出口会话。
 type tunnelClient struct {
-	mu       tunnelMutex
-	openMu   tunnelMutex
-	endpoint *controlpb.TunnelEndpoint
-	session  *tunnelSession
-	engine   *Engine
-	closed   bool
+	healthMu      sync.Mutex
+	unhealthy     bool
+	failures      uint32
+	recoverySince time.Time
+	lastSuccess   time.Time
+	checkedAt     time.Time
+	lastProbe     string
+	failure       failureClass
+	probeCancel   context.CancelFunc
+	probeDone     chan struct{}
+	failureEpoch  uint64
+	mu            tunnelMutex
+	openMu        tunnelMutex
+	endpoint      *controlpb.TunnelEndpoint
+	session       *tunnelSession
+	engine        *Engine
+	closed        bool
 }
 
 func (c *tunnelClient) close() {
+	if c.probeCancel != nil {
+		c.probeCancel()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
@@ -107,45 +123,68 @@ func (c *tunnelClient) close() {
 }
 func (c *tunnelClient) getSession(ctx context.Context) (*tunnelSession, error) {
 	if err := c.mu.LockContext(ctx); err != nil {
-		return nil, err
+		return nil, failTunnel(failureLocal, err)
 	}
 	defer c.mu.Unlock()
 	if c.closed {
-		return nil, net.ErrClosed
+		return nil, failTunnel(failureLocal, net.ErrClosed)
 	}
 	if c.session != nil && !c.session.IsClosed() {
 		return c.session, nil
 	}
-	ep := c.endpoint
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(ep.CertificatePem) {
-		return nil, errors.New("出口证书无效")
-	}
-	pinned, err := tunnelCertificate(ep.CertificatePem, ep.ServerName)
+	session, err := c.openSession(ctx)
 	if err != nil {
 		return nil, err
 	}
+	c.session = session
+	c.engine.tunnelConnections.Add(1)
+	go func() { <-session.CloseChan(); c.engine.tunnelConnections.Add(^uint64(0)) }()
+	return session, nil
+}
+
+// 探测独立建立 TLS/WSS、节点对认证及 yamux 往返，不借用业务会话。
+func (c *tunnelClient) openSession(ctx context.Context, probe ...bool) (*tunnelSession, error) {
+	handshakeCtx := ctx
+	ep := c.endpoint
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(ep.CertificatePem) {
+		return nil, failTunnel(failureConfig, errors.New("出口证书无效"))
+	}
+	pinned, err := tunnelCertificate(ep.CertificatePem, ep.ServerName)
+	if err != nil {
+		return nil, failTunnel(failureConfig, err)
+	}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: ep.ServerName, MinVersion: tls.VersionTLS12, Time: c.engine.deps.Now, VerifyConnection: func(state tls.ConnectionState) error {
 		if len(state.PeerCertificates) == 0 || !bytes.Equal(state.PeerCertificates[0].Raw, pinned.Raw) {
-			return errors.New("出口证书与固定信任不匹配")
+			return failTunnel(failureConfig, errors.New("出口证书与固定信任不匹配"))
 		}
 		return nil
 	}}, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-		return c.engine.deps.DialTunnel(ctx, address)
+		dialCtx, cancel := context.WithCancel(ctx)
+		stop := context.AfterFunc(handshakeCtx, cancel)
+		defer stop()
+		defer cancel()
+		return c.engine.deps.DialTunnel(dialCtx, address)
 	}}
 	// 不继承环境代理，不允许重定向或 WSS 降级。
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("隧道不允许重定向") }}
 	defer transport.CloseIdleConnections()
 	ws, response, err := websocket.Dial(ctx, "wss://"+net.JoinHostPort(ep.Address, strconv.Itoa(int(ep.Port)))+tunnelPath, &websocket.DialOptions{HTTPClient: client, Subprotocols: []string{tunnelSubprotocol}})
 	if err != nil {
-		if response != nil && response.Body != nil {
-			response.Body.Close()
+		class := failureLink
+		if response != nil {
+			if response.StatusCode < 500 {
+				class = failureConfig
+			}
+			if response.Body != nil {
+				response.Body.Close()
+			}
 		}
-		return nil, errors.New("出口 WSS 握手失败")
+		return nil, failTunnel(class, err)
 	}
 	if ws.Subprotocol() != tunnelSubprotocol {
 		ws.CloseNow()
-		return nil, errors.New("隧道协议不兼容")
+		return nil, failTunnel(failureConfig, errors.New("隧道协议不兼容"))
 	}
 	conn := newTunnelCarrier(context.Background(), ws)
 	ok := false
@@ -159,29 +198,36 @@ func (c *tunnelClient) getSession(ctx context.Context) (*tunnelSession, error) {
 	stopAuth := context.AfterFunc(ctx, func() { ws.CloseNow() })
 	defer stopAuth()
 	// websocket.Dial 已完成完整 TLS 身份验证；凭据此时才进入加密通道。
-	if err := writeTunnelMessage(conn, tunnelAuth{Version: 1, EntryID: ep.EntryId, Credential: ep.Credential}); err != nil {
+	if err := writeTunnelMessage(conn, tunnelAuth{Probe: len(probe) > 0 && probe[0], Version: 1, EntryID: ep.EntryId, Credential: ep.Credential}); err != nil {
 		return nil, err
 	}
 	var result tunnelResult
-	if err := readTunnelMessage(conn, &result); err != nil || !result.OK {
-		return nil, errors.New("入口—出口凭据被拒绝")
+	if err := readTunnelMessage(conn, &result); err != nil {
+		return nil, failTunnel(failureLink, err)
 	}
-	if !stopAuth() || ctx.Err() != nil {
-		return nil, ctx.Err()
+	if !result.OK {
+		return nil, failTunnel(failureConfig, errors.New("入口—出口凭据被拒绝"))
 	}
-	conn.SetDeadline(time.Time{})
 	session, err := yamux.Client(conn, c.engine.yamuxClientConfig(), nil)
 	if err != nil {
 		return nil, err
 	}
-	c.session = &tunnelSession{Session: session, checkSupported: result.CheckSupported}
+	if len(probe) > 0 && probe[0] {
+		if _, err := session.Ping(); err != nil {
+			session.Close()
+			return nil, failTunnel(failureLink, err)
+		}
+	}
+	if !stopAuth() || ctx.Err() != nil {
+		session.Close()
+		return nil, failTunnel(failureLink, ctx.Err())
+	}
+	conn.SetDeadline(time.Time{})
 	ok = true
-	c.engine.tunnelConnections.Add(1)
-	go func() { <-session.CloseChan(); c.engine.tunnelConnections.Add(^uint64(0)) }()
-	return c.session, nil
+	return &tunnelSession{Session: session, checkSupported: result.CheckSupported}, nil
 }
-func (c *tunnelClient) dial(ctx context.Context, rule *controlpb.ForwardRule) (net.Conn, error) {
-	return c.open(ctx, streamAuthorization(c.endpoint.EntryId, rule))
+func (c *tunnelClient) dial(ctx context.Context, rule *controlpb.ForwardRule, cleanup ...*tunnelAttemptCleanup) (net.Conn, error) {
+	return c.open(ctx, streamAuthorization(c.endpoint.EntryId, rule), cleanup...)
 }
 
 func (c *tunnelClient) ready(ctx context.Context, rule *controlpb.ForwardRule) error {
@@ -192,17 +238,24 @@ func (c *tunnelClient) ready(ctx context.Context, rule *controlpb.ForwardRule) e
 	if lease == nil {
 		return errTunnelCapacity
 	}
-	defer lease.release()
+	cleanup := &tunnelAttemptCleanup{}
+	defer cleanup.after(lease.release)
 	request := streamAuthorization(c.endpoint.EntryId, rule)
 	request.Check = rule
-	stream, err := c.open(ctx, request)
+	stream, err := c.open(ctx, request, cleanup)
 	if stream != nil {
-		stream.Close()
+		if closeErr := cleanup.close(ctx, stream); err == nil {
+			err = closeErr
+		}
 	}
 	return err
 }
 
-func (c *tunnelClient) open(ctx context.Context, request tunnelRequest) (net.Conn, error) {
+func (c *tunnelClient) open(ctx context.Context, request tunnelRequest, cleanups ...*tunnelAttemptCleanup) (net.Conn, error) {
+	cleanup := &tunnelAttemptCleanup{}
+	if len(cleanups) > 0 {
+		cleanup = cleanups[0]
+	}
 	ctx, cancel := c.engine.tunnelTimeout(ctx, c.engine.resources.limits.DialTimeout)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
@@ -212,36 +265,40 @@ func (c *tunnelClient) open(ctx context.Context, request tunnelRequest) (net.Con
 	session, err := c.getSession(handshake)
 	stop()
 	if err != nil {
-		return nil, err
+		return nil, streamFailure(nil, err)
 	}
 	if request.Check != nil && !session.checkSupported {
 		// 旧出口不识别 Check，发送它会误创建业务流。旧端沿用票09的
 		// 面板授权确认门禁/既有零代次兼容；新业务流仍由出口逐流授权。
 		return nil, ctx.Err()
 	}
-	stream, err := c.openStream(ctx, session.Session)
+	stream, err := c.openStream(ctx, session.Session, cleanup)
 	if err != nil {
-		return nil, err
+		return nil, streamFailure(session.Session, err)
 	}
 	ok := false
 	defer func() {
 		if !ok {
-			(&tunnelStream{Stream: stream, engine: c.engine}).Close()
+			cleanup.close(ctx, &tunnelStream{Stream: stream, engine: c.engine})
 		}
 	}()
 	deadline, _ := ctx.Deadline()
 	stream.SetDeadline(deadline)
 	stopCancel := context.AfterFunc(ctx, func() { stream.SetDeadline(time.Now()) })
 	defer stopCancel()
-	if err := writeTunnelMessage(stream, request); err != nil {
-		return nil, err
+	result, err := exchangeTunnelRequest(ctx, stream, request)
+	if err != nil {
+		return nil, streamFailure(session.Session, err)
 	}
-	var result tunnelResult
-	if err := readTunnelMessage(stream, &result); err != nil || !result.OK {
-		return nil, errors.New("出口拒绝规则或无法连接目标")
+	if !result.OK {
+		class := result.Failure
+		if class != failureTarget && class != failureLocal && class != failureConfig {
+			class = failureConfig
+		}
+		return nil, failTunnel(class, errors.New("出口拒绝业务流"))
 	}
 	if request.Check != nil && !result.Ready {
-		return nil, errors.New("出口未确认规则授权")
+		return nil, failTunnel(failureConfig, errors.New("出口未确认规则授权"))
 	}
 	if !stopCancel() || ctx.Err() != nil {
 		return nil, ctx.Err()
@@ -249,6 +306,39 @@ func (c *tunnelClient) open(ctx context.Context, request tunnelRequest) (net.Con
 	stream.SetDeadline(time.Time{})
 	ok = true
 	return &tunnelStream{Stream: stream, engine: c.engine}, nil
+}
+
+// 授权帧写入也受剩余连接预算约束；取消后由统一流生命周期 Reset 回收。
+func exchangeTunnelRequest(ctx context.Context, stream *yamux.Stream, request tunnelRequest) (tunnelResult, error) {
+	type response struct {
+		result tunnelResult
+		err    error
+	}
+	done := make(chan response, 1)
+	go func() {
+		var result tunnelResult
+		if err := writeTunnelMessage(stream, request); err != nil {
+			done <- response{result, err}
+			return
+		}
+		err := readTunnelMessage(stream, &result)
+		done <- response{result, err}
+	}()
+	select {
+	case <-ctx.Done():
+		stream.SetDeadline(time.Now())
+		return tunnelResult{}, failTunnel(failureLocal, ctx.Err())
+	case r := <-done:
+		return r.result, r.err
+	}
+}
+
+func streamFailure(session *yamux.Session, err error) error {
+	class := failureConfig
+	if session == nil || session.IsClosed() {
+		class = failureLink
+	}
+	return failTunnel(class, err)
 }
 
 // CloseWrite 保留反向数据，Close 用 RST 立即回收本地与远端流。
@@ -385,8 +475,10 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer session.Close()
-	s.engine.tunnelConnections.Add(1)
-	defer s.engine.tunnelConnections.Add(^uint64(0))
+	if !auth.Probe {
+		s.engine.tunnelConnections.Add(1)
+		defer s.engine.tunnelConnections.Add(^uint64(0))
+	}
 	ctx, cancel := context.WithCancel(s.ctx)
 	defer cancel()
 	go func() {
@@ -401,6 +493,10 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	for {
 		stream, err := session.AcceptStream()
 		if err != nil {
+			return
+		}
+		if auth.Probe {
+			(&tunnelStream{Stream: stream, engine: s.engine}).Close()
 			return
 		}
 		var lease *resourceLease

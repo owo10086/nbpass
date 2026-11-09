@@ -49,9 +49,9 @@ func (e *Engine) State() State {
 	}
 	groups := map[string]*controlpb.ExitGroup{}
 	for _, r := range e.rules {
-		s.Rules = append(s.Rules, proto.Clone(r.config).(*controlpb.ForwardRule))
+		s.Rules = append(s.Rules, proto.Clone(r.selection.Load().rule).(*controlpb.ForwardRule))
 		if r.exit != nil {
-			groups[r.config.ExitGroupId] = &controlpb.ExitGroup{Id: r.config.ExitGroupId, Strategy: controlpb.ExitStrategy_EXIT_STRATEGY_PRIMARY_BACKUP, Exits: []*controlpb.TunnelEndpoint{proto.Clone(r.exit).(*controlpb.TunnelEndpoint)}}
+			groups[r.config.ExitGroupId] = proto.Clone(r.exit).(*controlpb.ExitGroup)
 		}
 	}
 	for _, g := range groups {

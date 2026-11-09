@@ -35,7 +35,11 @@ func sampleProbe(ctx context.Context, deps Dependencies, started time.Time, upda
 		}
 		values["business_connections"], values["tunnel_connections"] = float64(business), float64(tunnel)
 		sequence++
-		update := probeUpdate{at: now, sample: &controlpb.ProbeSample{Sequence: sequence, Values: values}}
+		sample := &controlpb.ProbeSample{Sequence: sequence, Values: values}
+		if deps.exitHealth != nil {
+			sample.ExitHealth = deps.exitHealth()
+		}
+		update := probeUpdate{at: now, sample: sample}
 		select {
 		case <-updates:
 		default:
