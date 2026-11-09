@@ -32,6 +32,7 @@ type nodeUpgradeView struct {
 }
 
 func (p *Panel) upgradeRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/nodes/{id}/compatibility", p.getNodeCompatibility)
 	mux.HandleFunc("POST /api/nodes/{id}/upgrade", p.startNodeUpgrade)
 	mux.HandleFunc("GET /api/nodes/{id}/upgrade", p.getNodeUpgrade)
 	mux.HandleFunc("GET /node-upgrades/{task}/{resource}", p.nodeUpgradeResource)

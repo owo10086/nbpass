@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"nbpass/internal/compatibility"
 	"nbpass/internal/forwarding"
 )
 
@@ -36,7 +37,7 @@ func openConfigCache(ctx context.Context, credential Credentials, deps *Dependen
 		return errors.New("无法读取节点配置缓存")
 	}
 	var cache configCache
-	if err := json.Unmarshal(data, &cache); err != nil || cache.Version != 1 || cache.NodeID != credential.NodeID || cache.ControlURL != credential.ControlURL {
+	if err := json.Unmarshal(data, &cache); err != nil || cache.Version != int(compatibility.StateCurrent) || cache.NodeID != credential.NodeID || cache.ControlURL != credential.ControlURL {
 		return errors.New("节点配置缓存格式或身份不匹配")
 	}
 	return engine.Restore(cache.State)

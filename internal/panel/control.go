@@ -14,11 +14,13 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
+	"nbpass/internal/compatibility"
 	"nbpass/internal/controlpb"
 	"nbpass/internal/publicip"
 )
 
 type controlSession struct {
+	compatibility          *nodeCompatibility
 	upgradeCapable         bool
 	rotationRecheckCapable bool
 	done                   chan struct{}
@@ -188,6 +190,12 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 				response.AcknowledgedCheckerIds = ack.AcknowledgedCheckerIds
 			}
 		}
+		if response != nil && session.compatibility != nil {
+			response.ProtocolVersion = session.compatibility.ControlProtocol
+			if !session.compatibility.Legacy {
+				response.Compatibility = compatibility.Current()
+			}
+		}
 		p.controlMu.Unlock()
 		if err != nil {
 			return err
@@ -207,16 +215,16 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 			response.RotationCommand = nil
 			err := stream.Send(response)
 			if err == nil && len(upgrade) > 0 {
-				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, UpgradeOnly: true, UpgradeManifest: upgrade})
+				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: response.ProtocolVersion, UpgradeOnly: true, UpgradeManifest: upgrade})
 			}
 			if err == nil && command != nil {
-				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: response.DesiredRevision, RotationCommand: command})
+				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: response.ProtocolVersion, DesiredRevision: response.DesiredRevision, RotationCommand: command})
 			}
 			if err == nil && len(dnsTasks) > 0 {
-				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, DnsWatchTasks: dnsTasks})
+				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: response.ProtocolVersion, DnsWatchTasks: dnsTasks})
 			}
 			if err == nil && len(checkerTasks) > 0 {
-				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, CheckerTasks: checkerTasks})
+				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: response.ProtocolVersion, CheckerTasks: checkerTasks})
 			}
 			sent <- err
 		}()
@@ -285,7 +293,7 @@ func independentNodeReport(report *controlpb.NodeReport) bool {
 }
 
 func validateReport(report *controlpb.NodeReport) error {
-	if report.ProtocolVersion != 1 {
+	if !compatibility.Contains(compatibility.ControlPrevious, compatibility.ControlCurrent, report.ProtocolVersion) {
 		return status.Error(codes.FailedPrecondition, "控制协议不兼容")
 	}
 	if len(report.ProcessInstance) == 0 || len(report.ProcessInstance) > 128 || len(report.SoftwareVersion) > 128 {
@@ -304,6 +312,11 @@ func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, sess
 	if err := validateReport(first); err != nil {
 		return err
 	}
+	negotiated, err := resolveCompatibility(first)
+	if err != nil {
+		return status.Error(codes.FailedPrecondition, "控制协议兼容范围无效")
+	}
+	first = negotiated.constrain(first)
 	p.controlMu.Lock()
 	defer p.controlMu.Unlock()
 	tx, err := p.db.BeginTx(ctx, nil)
@@ -363,12 +376,16 @@ func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, sess
 		authorizationChanges, err = p.admitTunnelAuthorization(ctx, tx, id, previous != first.ProcessInstance, first.TunnelAuthorizationVersion, failoverChanged)
 	}
 	if err == nil {
+		err = p.saveNodeCompatibility(ctx, tx, id, negotiated)
+	}
+	if err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {
 		return status.Error(codes.Unavailable, "存储暂不可用")
 	}
 	session.dnsWatchCapable = first.DnsWatchCapable
+	session.compatibility = &negotiated
 	session.instance = first.ProcessInstance
 	delete(p.pendingControls[id], session)
 	if len(p.pendingControls[id]) == 0 {
@@ -408,6 +425,14 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 	}
 	if session.instance != "" && session.instance != report.ProcessInstance {
 		return nil, status.Error(codes.FailedPrecondition, "旧进程实例报告无效")
+	}
+	if session.compatibility != nil {
+		if report.ProtocolVersion != session.compatibility.ControlProtocol {
+			return nil, status.Error(codes.FailedPrecondition, "会话控制协议不可变更")
+		}
+		if !independentNodeReport(report) {
+			report = session.compatibility.constrain(report)
+		}
 	}
 	session.instance = report.ProcessInstance
 	if !independentNodeReport(report) && report.AttemptedRevision == 0 {

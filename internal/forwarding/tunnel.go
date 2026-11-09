@@ -19,6 +19,7 @@ import (
 	"github.com/coder/websocket"
 	yamux "github.com/libp2p/go-yamux/v5"
 	"google.golang.org/protobuf/proto"
+	"nbpass/internal/compatibility"
 	"nbpass/internal/controlpb"
 )
 
@@ -223,7 +224,7 @@ func (c *tunnelClient) openSessionEndpoint(ctx context.Context, ep *controlpb.Tu
 	stopAuth := context.AfterFunc(ctx, func() { ws.CloseNow() })
 	defer stopAuth()
 	// websocket.Dial 已完成完整 TLS 身份验证；凭据此时才进入加密通道。
-	if err := writeTunnelMessage(conn, tunnelAuth{Probe: len(probe) > 0 && probe[0], Version: 1, EntryID: ep.EntryId, Credential: ep.Credential}); err != nil {
+	if err := writeTunnelMessage(conn, tunnelAuth{Probe: len(probe) > 0 && probe[0], Version: int(compatibility.TunnelCurrent), EntryID: ep.EntryId, Credential: ep.Credential}); err != nil {
 		return nil, err
 	}
 	var result tunnelResult
@@ -508,7 +509,7 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	defer stopAuth()
 	conn.SetDeadline(time.Now().Add(s.engine.resources.limits.TunnelHandshakeTimeout))
 	var auth tunnelAuth
-	if err := readTunnelMessage(conn, &auth); err != nil || auth.Version != 1 || !s.authenticate(&auth) {
+	if err := readTunnelMessage(conn, &auth); err != nil || auth.Version != int(compatibility.TunnelCurrent) || !s.authenticate(&auth) {
 		writeTunnelMessage(conn, tunnelResult{})
 		return
 	}

@@ -107,6 +107,7 @@ var migrations = []string{
 	entryOfflineMigration,
 	entryDomainWatchMigration,
 	nodeUpgradeMigration,
+	versionCompatibilityMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"nbpass/internal/checker"
+	"nbpass/internal/compatibility"
 	"nbpass/internal/controlpb"
 	"nbpass/internal/dnswatch"
 	"nbpass/internal/forwarding"
@@ -33,7 +34,7 @@ import (
 	"nbpass/internal/timing"
 )
 
-const ProtocolVersion = 1
+const ProtocolVersion = compatibility.ControlCurrent
 const SoftwareVersion = "0.1.0"
 
 type Credentials struct {
@@ -203,7 +204,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 	}
 	if deps.ConfigStore != nil {
 		deps.Forwarding.Persist = func(state forwarding.State) error {
-			data, err := json.Marshal(configCache{Version: 1, NodeID: credential.NodeID, ControlURL: credential.ControlURL, State: state})
+			data, err := json.Marshal(configCache{Version: int(compatibility.StateCurrent), NodeID: credential.NodeID, ControlURL: credential.ControlURL, State: state})
 			if err != nil {
 				return err
 			}
@@ -223,6 +224,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 		deps.ArtifactSHA256, deps.ArtifactSize, _ = nodeupdate.ExecutableDigest()
 	}
 	report := &controlpb.NodeReport{UpgradeCapable: deps.Updater != nil, TunnelRotationVersion: 1, ExitFailoverVersion: 1, RotationRecheckCapable: true, DnsWatchCapable: true, TunnelAuthorizationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: deps.SoftwareVersion}
+	report.Compatibility = compatibility.Current()
 	defer func() {
 		engine.Close()
 		if deps.Traffic != nil {
@@ -708,7 +710,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				return received.err
 			}
 			m := received.message
-			if m.ProtocolVersion != ProtocolVersion {
+			if !compatibility.Contains(compatibility.ControlPrevious, compatibility.ControlCurrent, m.ProtocolVersion) {
 				return errors.New("控制协议不兼容")
 			}
 			if m.UpgradeOnly {

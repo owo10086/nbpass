@@ -7,11 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"nbpass/internal/compatibility"
+	"nbpass/internal/controlpb"
 )
 
 type Identity struct {
-	Version  string `json:"version"`
-	Platform string `json:"platform"`
+	Compatibility *controlpb.Compatibility `json:"compatibility,omitempty"`
+	Version       string                   `json:"version"`
+	Platform      string                   `json:"platform"`
 }
 
 // FixedInstaller owns its directory and never restores the mutable node data directory.
@@ -218,6 +222,9 @@ func (f *FixedInstaller) Apply(ctx context.Context, m Manifest, data []byte, emi
 	identity, err := f.Check(ctx, candidate)
 	if err != nil || identity.Version != m.Version || identity.Platform != m.Platform {
 		return errors.New("候选程序版本、平台或自检不符")
+	}
+	if identity.Compatibility != nil && !compatibility.CompatibleState(identity.Compatibility) {
+		return errors.New("候选程序的本地状态读写格式与当前及回滚程序不兼容")
 	}
 	// Verify the same private candidate after executing its self-check. No untrusted directory
 	// or caller-provided pathname participates between this check and rename.
