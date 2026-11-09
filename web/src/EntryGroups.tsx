@@ -4,8 +4,9 @@ import { api, APIError } from './api';
 import { ManagedDNS } from './ManagedDNS';
 import { GroupSyncDetails, SyncTag, type GroupSyncMember } from './ConfigSync';
 import { EntryMembers } from './EntryMembers';
+import { EntryReadiness, type EntryMemberState } from './EntryReadiness';
 
-type EntryGroup = { id: string; name: string; members: string[]; publication_status: string; sync_status: string; sync_members: GroupSyncMember[] };
+type EntryGroup = { id: string; name: string; members: string[]; publication_status: string; sync_status: string; sync_members: GroupSyncMember[]; member_states: EntryMemberState[] };
 type Member = { id: string; name: string };
 
 export function EntryGroups({ onSessionExpired }: { onSessionExpired: () => void }) {
@@ -48,7 +49,7 @@ export function EntryGroups({ onSessionExpired }: { onSessionExpired: () => void
   return <>
     <div className="nodes-heading"><div><Typography.Title level={2}>入口组</Typography.Title><Typography.Paragraph type="secondary">将转发规则应用到入口节点。单成员入口组无需绑定 DNS 即可使用。</Typography.Paragraph></div><Space><Button onClick={() => void load()}>刷新</Button><Button type="primary" onClick={() => edit(null)}>创建入口组</Button></Space></div>
     {error && <Alert title={error} type="error" showIcon className="message" />}
-    <Card styles={{ body: { padding: 0 } }}><Table<EntryGroup> rowKey="id" dataSource={rows} loading={loading} scroll={{ x: 800 }} locale={{ emptyText: '暂无入口组，请先添加节点，再创建入口组。' }} expandable={{ expandedRowRender: row => <GroupSyncDetails members={row.sync_members} /> }} columns={[
+    <Card styles={{ body: { padding: 0 } }}><Table<EntryGroup> rowKey="id" dataSource={rows} loading={loading} scroll={{ x: 800 }} locale={{ emptyText: '暂无入口组，请先添加节点，再创建入口组。' }} expandable={{ expandedRowRender: row => <Space orientation="vertical" size="middle" style={{ width: '100%' }}><EntryReadiness members={row.member_states} /><GroupSyncDetails members={row.sync_members} /></Space> }} columns={[
       { title: '入口组', dataIndex: 'name' },
       { title: '成员（按优先级）', render: (_, row) => row.members.map((id, i) => `${nodes.find(n => n.id === id)?.name ?? id}${i === 0 ? '（首选入口）' : ''}`).join('、') },
       { title: '受管记录', render: (_, row) => <Tag>{row.publication_status}</Tag> },

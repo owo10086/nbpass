@@ -99,6 +99,9 @@ func (p *Panel) acceptSelfChecks(ctx context.Context, nodeID string, batch [][]b
 			}
 		}
 		if round.Result == "normal" {
+			if err = p.recordNormalSelfCheckEvidence(ctx, tx, nodeID, round.ConfigRevision, round.StartedAt); err != nil {
+				return nil, err
+			}
 			if err = p.rotationNormalEvidence(ctx, tx, nodeID, round.ID, round.StartedAt); err != nil {
 				return nil, err
 			}

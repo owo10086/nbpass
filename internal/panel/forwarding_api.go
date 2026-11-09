@@ -11,12 +11,13 @@ import (
 )
 
 type entryGroupView struct {
-	ID                string            `json:"id"`
-	Name              string            `json:"name"`
-	Members           []string          `json:"members"`
-	PublicationStatus string            `json:"publication_status"`
-	SyncStatus        string            `json:"sync_status"`
-	SyncMembers       []groupSyncMember `json:"sync_members"`
+	MemberStates      []entryMemberState `json:"member_states"`
+	ID                string             `json:"id"`
+	Name              string             `json:"name"`
+	Members           []string           `json:"members"`
+	PublicationStatus string             `json:"publication_status"`
+	SyncStatus        string             `json:"sync_status"`
+	SyncMembers       []groupSyncMember  `json:"sync_members"`
 }
 
 func (p *Panel) forwardingRoutes(mux *http.ServeMux) {
@@ -74,6 +75,7 @@ func (p *Panel) entryGroupViews(ctx context.Context) ([]entryGroupView, error) {
 		return nil, err
 	}
 	attachGroupSync(groups, buildRuleViews(rules, nodes, members), nodes)
+	p.attachEntryStates(groups, nodes)
 	return groups, nil
 }
 
