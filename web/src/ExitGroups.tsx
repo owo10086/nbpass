@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
+import { TunnelRotation } from './TunnelRotation';
 
 type Group = { id: string; name: string; strategy: 'primary_backup'; members: string[] };
 type ExitHealth = { exit_id: string; state: string; consecutive_failures?: number; last_probe?: string; failure_class?: string; recovery_since_unix?: number; checked_at_unix?: number };
@@ -87,7 +88,7 @@ export function ExitGroups({ onSessionExpired }: { onSessionExpired: () => void 
       { title: '出口节点', render: (_, row) => nodeName(row.node_id) },
       { title: 'WSS 端点', render: (_, row) => `${row.address}:${row.listen_port}` },
       { title: '证书身份', dataIndex: 'server_name', render: value => <Typography.Text copyable style={{ wordBreak: 'break-all' }}>{value}</Typography.Text> },
-      { title: '操作', render: (_, row) => <Button size="small" onClick={() => configure(row)}>编辑地址与端口</Button> },
+      { title: '操作', render: (_, row) => <Space wrap><Button size="small" onClick={() => configure(row)}>编辑地址与端口</Button><TunnelRotation nodeID={row.node_id} onSessionExpired={onSessionExpired} onChanged={() => void load()} /></Space> },
     ]} /></Card>
     <Typography.Title level={3}>出口链路健康</Typography.Title>
     <Typography.Paragraph type="secondary">选择入口查看它到各出口的观测。目标不可达不影响出口健康；控制失联后节点仍自行探测和切换。</Typography.Paragraph>

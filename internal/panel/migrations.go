@@ -99,6 +99,7 @@ var migrations = []string{
 	entryManualSwitchMigration,
 	exitHealthMigration,
 	rotationPolicyMigration,
+	tunnelRotationMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

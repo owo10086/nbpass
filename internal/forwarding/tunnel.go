@@ -3,7 +3,6 @@ package forwarding
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
@@ -27,10 +26,11 @@ const tunnelPath = "/nbpass/tunnel/v1"
 const tunnelSubprotocol = "nbpass.tunnel.v1"
 
 type tunnelAuth struct {
-	Probe      bool   `json:"probe,omitempty"`
-	Version    int    `json:"version"`
-	EntryID    string `json:"entry_id"`
-	Credential string `json:"credential"`
+	credentialEpoch uint64 // 仅运行时使用，绑定该认证会话的普通凭据撤销代次。
+	Probe           bool   `json:"probe,omitempty"`
+	Version         int    `json:"version"`
+	EntryID         string `json:"entry_id"`
+	Credential      string `json:"credential"`
 }
 type tunnelRequest struct {
 	RuleID        string                  `json:"rule_id"`
@@ -105,7 +105,10 @@ type tunnelClient struct {
 	mu            tunnelMutex
 	openMu        tunnelMutex
 	endpoint      *controlpb.TunnelEndpoint
+	endpointMu    sync.RWMutex
 	session       *tunnelSession
+	users         map[*tunnelSession]int
+	usersMu       sync.Mutex
 	engine        *Engine
 	closed        bool
 }
@@ -117,8 +120,17 @@ func (c *tunnelClient) close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
+	c.usersMu.Lock()
+	sessions := make([]*tunnelSession, 0, len(c.users)+1)
 	if c.session != nil {
-		c.session.Close()
+		sessions = append(sessions, c.session)
+	}
+	for session := range c.users {
+		sessions = append(sessions, session)
+	}
+	c.usersMu.Unlock()
+	for _, session := range sessions {
+		session.Close()
 	}
 }
 func (c *tunnelClient) getSession(ctx context.Context) (*tunnelSession, error) {
@@ -126,17 +138,23 @@ func (c *tunnelClient) getSession(ctx context.Context) (*tunnelSession, error) {
 		return nil, failTunnel(failureLocal, err)
 	}
 	defer c.mu.Unlock()
+	return c.getSessionLocked(ctx)
+}
+
+func (c *tunnelClient) getSessionLocked(ctx context.Context) (*tunnelSession, error) {
 	if c.closed {
 		return nil, failTunnel(failureLocal, net.ErrClosed)
 	}
 	if c.session != nil && !c.session.IsClosed() {
 		return c.session, nil
 	}
-	session, err := c.openSession(ctx)
+	session, err := c.openSessionEndpoint(ctx, c.endpoint)
 	if err != nil {
 		return nil, err
 	}
+	c.usersMu.Lock()
 	c.session = session
+	c.usersMu.Unlock()
 	c.engine.tunnelConnections.Add(1)
 	go func() { <-session.CloseChan(); c.engine.tunnelConnections.Add(^uint64(0)) }()
 	return session, nil
@@ -144,21 +162,28 @@ func (c *tunnelClient) getSession(ctx context.Context) (*tunnelSession, error) {
 
 // 探测独立建立 TLS/WSS、节点对认证及 yamux 往返，不借用业务会话。
 func (c *tunnelClient) openSession(ctx context.Context, probe ...bool) (*tunnelSession, error) {
+	return c.openSessionEndpoint(ctx, c.currentEndpoint(), probe...)
+}
+
+func (c *tunnelClient) openSessionEndpoint(ctx context.Context, ep *controlpb.TunnelEndpoint, probe ...bool) (*tunnelSession, error) {
 	handshakeCtx := ctx
-	ep := c.endpoint
 	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(ep.CertificatePem) {
-		return nil, failTunnel(failureConfig, errors.New("出口证书无效"))
-	}
-	pinned, err := tunnelCertificate(ep.CertificatePem, ep.ServerName)
-	if err != nil {
-		return nil, failTunnel(failureConfig, err)
+	var pins []*x509.Certificate
+	for _, data := range append([][]byte{ep.CertificatePem}, ep.TrustedCertificatesPem...) {
+		cert, err := tunnelCertificate(data, ep.ServerName)
+		if err != nil {
+			return nil, failTunnel(failureConfig, err)
+		}
+		pins = append(pins, cert)
+		roots.AppendCertsFromPEM(data)
 	}
 	transport := &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, ServerName: ep.ServerName, MinVersion: tls.VersionTLS12, Time: c.engine.deps.Now, VerifyConnection: func(state tls.ConnectionState) error {
-		if len(state.PeerCertificates) == 0 || !bytes.Equal(state.PeerCertificates[0].Raw, pinned.Raw) {
-			return failTunnel(failureConfig, errors.New("出口证书与固定信任不匹配"))
+		for _, pin := range pins {
+			if len(state.PeerCertificates) > 0 && bytes.Equal(state.PeerCertificates[0].Raw, pin.Raw) {
+				return nil
+			}
 		}
-		return nil
+		return failTunnel(failureConfig, errors.New("出口证书与固定信任不匹配"))
 	}}, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 		dialCtx, cancel := context.WithCancel(ctx)
 		stop := context.AfterFunc(handshakeCtx, cancel)
@@ -227,7 +252,7 @@ func (c *tunnelClient) openSession(ctx context.Context, probe ...bool) (*tunnelS
 	return &tunnelSession{Session: session, checkSupported: result.CheckSupported}, nil
 }
 func (c *tunnelClient) dial(ctx context.Context, rule *controlpb.ForwardRule, cleanup ...*tunnelAttemptCleanup) (net.Conn, error) {
-	return c.open(ctx, streamAuthorization(c.endpoint.EntryId, rule), cleanup...)
+	return c.open(ctx, streamAuthorization(c.currentEndpoint().EntryId, rule), cleanup...)
 }
 
 func (c *tunnelClient) ready(ctx context.Context, rule *controlpb.ForwardRule) error {
@@ -240,7 +265,7 @@ func (c *tunnelClient) ready(ctx context.Context, rule *controlpb.ForwardRule) e
 	}
 	cleanup := &tunnelAttemptCleanup{}
 	defer cleanup.after(lease.release)
-	request := streamAuthorization(c.endpoint.EntryId, rule)
+	request := streamAuthorization(c.currentEndpoint().EntryId, rule)
 	request.Check = rule
 	stream, err := c.open(ctx, request, cleanup)
 	if stream != nil {
@@ -258,15 +283,35 @@ func (c *tunnelClient) open(ctx context.Context, request tunnelRequest, cleanups
 	}
 	ctx, cancel := c.engine.tunnelTimeout(ctx, c.engine.resources.limits.DialTimeout)
 	defer cancel()
+	for attempt := 0; ; attempt++ {
+		before := c.currentEndpoint()
+		conn, err := c.openOnce(ctx, request, cleanup)
+		if err == nil {
+			return conn, nil
+		}
+		// 未交付业务数据且材料确有更新时，在同一次总预算内重试一次。
+		if attempt > 0 || ctx.Err() != nil || c.currentEndpoint() == before {
+			return nil, err
+		}
+	}
+}
+
+func (c *tunnelClient) openOnce(ctx context.Context, request tunnelRequest, cleanup *tunnelAttemptCleanup) (net.Conn, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	handshake, stop := c.engine.tunnelTimeout(ctx, c.engine.resources.limits.TunnelHandshakeTimeout)
-	session, err := c.getSession(handshake)
+	session, err := c.acquireSession(handshake)
 	stop()
 	if err != nil {
 		return nil, streamFailure(nil, err)
 	}
+	released := false
+	defer func() {
+		if !released {
+			c.releaseSession(session)
+		}
+	}()
 	if request.Check != nil && !session.checkSupported {
 		// 旧出口不识别 Check，发送它会误创建业务流。旧端沿用票09的
 		// 面板授权确认门禁/既有零代次兼容；新业务流仍由出口逐流授权。
@@ -276,10 +321,12 @@ func (c *tunnelClient) open(ctx context.Context, request tunnelRequest, cleanups
 	if err != nil {
 		return nil, streamFailure(session.Session, err)
 	}
+	rotating := &rotatingTunnelStream{tunnelStream: &tunnelStream{Stream: stream, engine: c.engine}, release: func() { c.releaseSession(session) }}
+	released = true // 流的完整 RST 清理结束后才释放载体引用。
 	ok := false
 	defer func() {
 		if !ok {
-			cleanup.close(ctx, &tunnelStream{Stream: stream, engine: c.engine})
+			cleanup.close(ctx, rotating)
 		}
 	}()
 	deadline, _ := ctx.Deadline()
@@ -305,7 +352,7 @@ func (c *tunnelClient) open(ctx context.Context, request tunnelRequest, cleanups
 	}
 	stream.SetDeadline(time.Time{})
 	ok = true
-	return &tunnelStream{Stream: stream, engine: c.engine}, nil
+	return rotating, nil
 }
 
 // 授权帧写入也受剩余连接预算约束；取消后由统一流生命周期 Reset 回收。
@@ -357,20 +404,22 @@ func (s *tunnelStream) Close() error {
 }
 
 type tunnelServer struct {
-	engine      *Engine
-	mu          sync.Mutex
-	config      *controlpb.TunnelServer
-	http        *http.Server
-	listener    net.Listener
-	ctx         context.Context
-	cancel      context.CancelFunc
-	connections map[net.Conn]struct{}
-	closed      bool
-	wg          sync.WaitGroup
+	credentialEpochs    map[string]uint64
+	nextCredentialEpoch uint64
+	engine              *Engine
+	mu                  sync.Mutex
+	config              *controlpb.TunnelServer
+	http                *http.Server
+	listener            net.Listener
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	connections         map[net.Conn]struct{}
+	closed              bool
+	wg                  sync.WaitGroup
 }
 
 func (e *Engine) startTunnelServer(config *controlpb.TunnelServer) (*tunnelServer, error) {
-	cert, err := tls.X509KeyPair(config.CertificatePem, config.PrivateKeyPem)
+	_, err := tls.X509KeyPair(config.CertificatePem, config.PrivateKeyPem)
 	if err != nil {
 		return nil, errors.New("出口证书或私钥无效")
 	}
@@ -380,13 +429,14 @@ func (e *Engine) startTunnelServer(config *controlpb.TunnelServer) (*tunnelServe
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &tunnelServer{engine: e, config: proto.Clone(config).(*controlpb.TunnelServer), listener: listener, ctx: ctx, cancel: cancel, connections: map[net.Conn]struct{}{}}
-	s.http = &http.Server{Handler: http.HandlerFunc(s.serveHTTP), ReadHeaderTimeout: e.resources.limits.TunnelHandshakeTimeout, ErrorLog: log.New(io.Discard, "", 0), TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12, Time: e.deps.Now}}
+	s.http = &http.Server{Handler: http.HandlerFunc(s.serveHTTP), ReadHeaderTimeout: e.resources.limits.TunnelHandshakeTimeout, ErrorLog: log.New(io.Discard, "", 0), TLSConfig: &tls.Config{GetCertificate: s.currentCertificate, MinVersion: tls.VersionTLS12, Time: e.deps.Now}}
 	go s.http.Serve(tls.NewListener(listener, s.http.TLSConfig))
 	return s, nil
 }
 func (s *tunnelServer) update(config *controlpb.TunnelServer) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.updateCredentialEpochs(config)
 	s.config = proto.Clone(config).(*controlpb.TunnelServer)
 }
 func (s *tunnelServer) close() {
@@ -410,7 +460,7 @@ func (s *tunnelServer) authorized(entry, credential, ruleID string) *controlpb.F
 	}
 	peerOK := false
 	for _, peer := range s.config.Peers {
-		if peer.EntryId == entry && subtle.ConstantTimeCompare([]byte(peer.Credential), []byte(credential)) == 1 {
+		if peer.EntryId == entry && validPeerCredential(peer, credential) {
 			peerOK = true
 			break
 		}
@@ -458,7 +508,7 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	defer stopAuth()
 	conn.SetDeadline(time.Now().Add(s.engine.resources.limits.TunnelHandshakeTimeout))
 	var auth tunnelAuth
-	if err := readTunnelMessage(conn, &auth); err != nil || auth.Version != 1 || s.authorized(auth.EntryID, auth.Credential, "") == nil {
+	if err := readTunnelMessage(conn, &auth); err != nil || auth.Version != 1 || !s.authenticate(&auth) {
 		writeTunnelMessage(conn, tunnelResult{})
 		return
 	}

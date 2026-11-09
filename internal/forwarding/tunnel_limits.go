@@ -146,7 +146,7 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 	}
 	if err != nil {
 		class := classifyTunnel(failTunnel(failureTarget, err))
-		if ctx.Err() != nil || s.authorizeStream(auth, request) == nil {
+		if ctx.Err() != nil || s.authorizeExistingStream(auth, request) == nil {
 			class = failureConfig
 		}
 		s.finishStream(stream, tunnelResult{Failure: class})
@@ -157,7 +157,7 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 	defer stopTarget()
 	stream.SetWriteDeadline(time.Now().Add(s.engine.resources.limits.TunnelHandshakeTimeout))
 	// 拨号期间授权可能已变更；交付成功前再核验一次，不等待下一秒复查。
-	if ctx.Err() != nil || s.authorizeStream(auth, request) == nil {
+	if ctx.Err() != nil || s.authorizeExistingStream(auth, request) == nil {
 		s.rejectStream(stream)
 		return
 	}
