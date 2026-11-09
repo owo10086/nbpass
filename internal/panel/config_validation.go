@@ -15,28 +15,49 @@ import (
 const listenerPortsMigration = `ALTER TABLE nodes ADD COLUMN tunnel_listen_port INTEGER NOT NULL DEFAULT 18443 CHECK(tunnel_listen_port BETWEEN 1 AND 65535);
 ALTER TABLE nodes ADD COLUMN check_port INTEGER NOT NULL DEFAULT 18080 CHECK(check_port BETWEEN 1 AND 65535);`
 
-func (p *Panel) validateConfiguration(ctx context.Context, tx *sql.Tx, rules []forwarding.Rule, members map[string][]string) error {
+func loadValidationNodes(ctx context.Context, tx *sql.Tx) ([]forwarding.ValidationNode, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT n.id,n.name,n.tunnel_listen_port,n.check_port,COALESCE(r.public_ipv4,''),COALESCE(t.listen_port,0) FROM nodes n LEFT JOIN node_regions r ON r.node_id=n.id LEFT JOIN tunnel_exits t ON t.node_id=n.id ORDER BY n.id`)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	nodes := []forwarding.ValidationNode{}
 	for rows.Next() {
 		var n forwarding.ValidationNode
 		if err := rows.Scan(&n.ID, &n.Name, &n.TunnelListenPort, &n.CheckPort, &n.ObservedIPv4, &n.ActiveTunnelListenPort); err != nil {
 			rows.Close()
-			return err
+			return nil, err
 		}
 		nodes = append(nodes, n)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
+		return nil, err
+	}
+	return nodes, nil
+}
+
+func (p *Panel) validateConfiguration(ctx context.Context, tx *sql.Tx, rules []forwarding.Rule, members map[string][]string) error {
+	failures, err := p.configurationErrors(ctx, tx, rules, members, false)
+	if err != nil {
 		return err
 	}
+	if len(failures) > 0 {
+		return failures[0]
+	}
+	return nil
+}
+
+func (p *Panel) configurationErrors(ctx context.Context, tx *sql.Tx, rules []forwarding.Rule, members map[string][]string, all bool) ([]*forwarding.ValidationError, error) {
+	nodes, err := loadValidationNodes(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	// 先做无需 DNS 的检查；冲突时不依赖外部解析服务。
-	if err := forwarding.ValidateConfiguration(nodes, rules, members, nil); err != nil {
-		return err
+	if !all {
+		if failures := forwarding.ConfigurationErrors(nodes, rules, members, nil); len(failures) > 0 {
+			return failures, nil
+		}
 	}
 	ports := map[int]bool{}
 	for _, r := range rules {
@@ -72,7 +93,7 @@ func (p *Panel) validateConfiguration(ctx context.Context, tx *sql.Tx, rules []f
 			}
 		}
 	}
-	return forwarding.ValidateConfiguration(nodes, rules, members, targets)
+	return forwarding.ConfigurationErrors(nodes, rules, members, targets), nil
 }
 
 func writeConfigurationError(w http.ResponseWriter, err error) bool {

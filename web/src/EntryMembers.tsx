@@ -16,7 +16,7 @@ export function EntryMembers({ nodes }: { nodes: { id: string; name: string }[] 
           <Button size="small" danger disabled={fields.length === 1} onClick={() => remove(index)}>移除</Button>
         </Space>
       </div>)}
-      <Button onClick={() => add()}>添加成员</Button>
+      <Button disabled={fields.length >= 64} onClick={() => add()}>添加成员（最多 64 个）</Button>
       <Form.ErrorList errors={errors} />
     </>}
   </Form.List>;
