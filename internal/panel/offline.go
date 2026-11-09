@@ -177,8 +177,10 @@ func (p *Panel) startOffline(ctx context.Context) {
 			}
 			_ = p.observeAllOffline(ctx)
 			_ = p.checkOfflineEntries(ctx)
+			_ = p.checkBlockedEntries(ctx)
 			_ = p.flushOfflineEntryNotifications(ctx)
 			_ = p.flushEntryFailbackNotifications(ctx)
+			_ = p.flushBlockedEntryNotifications(ctx)
 			_ = p.queueOfflineNotifications(ctx)
 		}
 	}()
