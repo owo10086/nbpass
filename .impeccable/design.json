@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-10T00:00:00+08:00",
+  "title": "Design System: nbpass 管理面板",
+  "extensions": {
+    "colorMeta": {
+      "accent": { "role": "primary", "displayName": "Accent Blue", "canonical": "#2563eb", "tonalRamp": ["#0c1d4d", "#122c74", "#1a3f9e", "#2252c4", "#2563eb", "#5a86ef", "#93adf5", "#cfdcfb"] },
+      "accent-soft": { "role": "primary-soft", "displayName": "Accent Soft", "canonical": "#eef3fe" },
+      "bg": { "role": "neutral", "displayName": "White", "canonical": "#ffffff" },
+      "bg-subtle": { "role": "neutral", "displayName": "Subtle Gray", "canonical": "#fafafa" },
+      "bg-sidebar": { "role": "neutral", "displayName": "Sidebar Gray", "canonical": "#f7f7f8" },
+      "bg-hover": { "role": "neutral", "displayName": "Hover Gray", "canonical": "#f0f0f2" },
+      "line": { "role": "neutral-border", "displayName": "Hairline", "canonical": "#e8e8eb" },
+      "text": { "role": "neutral-text", "displayName": "Ink Text", "canonical": "#18181b" },
+      "text-2": { "role": "neutral-text", "displayName": "Secondary Text", "canonical": "#5f5f67" },
+      "text-3": { "role": "neutral-text", "displayName": "Tertiary Text", "canonical": "#75757d" },
+      "muted": { "role": "neutral", "displayName": "Muted", "canonical": "#a1a1aa" },
+      "ok": { "role": "success", "displayName": "Ok Green", "canonical": "#16a34a" },
+      "warn": { "role": "warning", "displayName": "Warn Amber", "canonical": "#d97706" },
+      "danger": { "role": "danger", "displayName": "Danger Red", "canonical": "#dc2626" }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Headline", "purpose": "页面标题（PageHeader h1）与设置页 h2，面板内唯一的大字号。" },
+      "title": { "displayName": "Title", "purpose": "面板/分节小标题；14px 与 15px 两档并存，未归并（见漂移记录）。" },
+      "body": { "displayName": "Body", "purpose": "AntD 全局基准正文字号，覆盖表单与表格默认文字。" },
+      "label": { "displayName": "Label / Mono", "purpose": "IP、端口、版本号等标识符与脚注、次级小字，常配 tabular-nums。" }
+    },
+    "shadows": [
+      { "name": "auth-card", "value": "0 1px 2px rgb(0 0 0 / 4%), 0 8px 24px -12px rgb(0 0 0 / 8%)", "purpose": "登录卡片的环境阴影，面板内唯一在静态卡片上使用阴影的地方。" },
+      { "name": "overlay-secondary", "value": "0 1px 2px rgb(0 0 0 / 4%), 0 8px 24px -8px rgb(0 0 0 / 14%)", "purpose": "AntD token.boxShadowSecondary，供 Modal / Drawer 浮层使用；与 auth-card 阴影参数相近但不完全一致。" },
+      { "name": "nav-item-active", "value": "0 0 0 1px var(--line), 0 1px 2px rgb(0 0 0 / 4%)", "purpose": "当前页侧栏项的描边 + 轻阴影，用于和未选中项区分。" },
+      { "name": "dot-danger-glow", "value": "0 0 0 3px rgb(220 38 38 / 14%)", "purpose": "离线/需人工介入状态点的光晕，是唯一带光晕的状态点。" }
+    ],
+    "motion": [
+      { "name": "row-focus-fade", "value": "150ms ease (cell background-color transition)", "purpose": "概览跳转后目标行先立即着色并保持约 2.4 秒，移除类名后随表格单元格默认过渡在 150ms 内淡出；prefers-reduced-motion 时跳过过渡。" },
+      { "name": "hover-transition", "value": "background-color .15s ease, color .15s ease", "purpose": "导航项、统计格、关注列表项等交互元素的 hover 过渡。" }
+    ],
+    "breakpoints": [
+      { "name": "overview-stack", "value": "1100px", "purpose": "概览左右两栏收为单栏。" },
+      { "name": "shell-collapse", "value": "860px", "purpose": "侧栏由竖直固定栏变为顶部横向导航条。" },
+      { "name": "table-unfix", "value": "640px", "purpose": "表格右侧固定操作列改为非固定，横向滚动让位给数据列。" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "主操作按钮：强调蓝背景、白字、零阴影、32px 高。",
+      "html": "<button class=\"ds-btn-primary\">添加节点</button>",
+      "css": ".ds-btn-primary { background: #2563eb; color: #fff; font-weight: 500; font-size: 14px; height: 32px; padding: 0 16px; border: none; border-radius: 6px; box-shadow: none; cursor: pointer; transition: background-color .15s ease; } .ds-btn-primary:hover { background: #1d4fd1; } .ds-btn-primary:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }"
+    },
+    {
+      "name": "Text Action Button",
+      "kind": "button",
+      "refersTo": "button-text",
+      "description": "表格行内的次级操作按钮（编辑/探针/删除等），默认弱化为纯文字，危险操作变红。",
+      "html": "<div class=\"ds-row-actions\"><button class=\"ds-btn-text\">编辑</button><button class=\"ds-btn-text ds-btn-text--danger\">删除</button></div>",
+      "css": ".ds-row-actions { display: flex; gap: 2px; justify-content: flex-end; } .ds-btn-text { background: transparent; border: none; color: #5f5f67; font-size: 13px; font-weight: 400; padding: 4px 8px; border-radius: 6px; cursor: pointer; transition: color .15s ease; } .ds-btn-text:hover { color: #18181b; } .ds-btn-text--danger { color: #dc2626; }"
+    },
+    {
+      "name": "Status Dot",
+      "kind": "custom",
+      "refersTo": "status-dot",
+      "description": "系统里最高频的信号单元：小圆点 + 文字表达状态，从不单独依赖颜色。",
+      "html": "<span class=\"ds-status\"><span class=\"ds-dot ds-dot--danger\"></span>离线</span>",
+      "css": ".ds-status { display: inline-flex; align-items: center; gap: 7px; font-size: 13.5px; color: #18181b; white-space: nowrap; } .ds-dot { width: 7px; height: 7px; border-radius: 50%; background: #a1a1aa; flex: none; } .ds-dot--ok { background: #16a34a; } .ds-dot--warn { background: #d97706; } .ds-dot--danger { background: #dc2626; box-shadow: 0 0 0 3px rgb(220 38 38 / 14%); }"
+    },
+    {
+      "name": "Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "表格/列表的标准外壳：1px 细线、8px 圆角、零阴影，panel-head 三段式结构。",
+      "html": "<section class=\"ds-panel\"><div class=\"ds-panel-head\"><h2>需要关注</h2><span class=\"ds-panel-meta\">3 项</span></div><div class=\"ds-panel-body\">内容</div></section>",
+      "css": ".ds-panel { background: #fff; border: 1px solid #e8e8eb; border-radius: 8px; overflow: hidden; } .ds-panel-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid #e8e8eb; } .ds-panel-head h2 { font-size: 14px; font-weight: 600; margin: 0; color: #18181b; } .ds-panel-meta { font-size: 13px; color: #75757d; } .ds-panel-body { padding: 16px; }"
+    },
+    {
+      "name": "Overview Stat Tile",
+      "kind": "custom",
+      "refersTo": "stat-tile",
+      "description": "概览页顶部四格可点击统计条，状态点 + 标签在上，大号 tabular-nums 数值在下。",
+      "html": "<div class=\"ds-stats\"><button class=\"ds-stat\"><div class=\"ds-stat-label\"><span class=\"ds-dot ds-dot--ok\"></span>节点在线</div><div class=\"ds-stat-value\">7<small>/ 7</small></div></button></div>",
+      "css": ".ds-stats { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); border: 1px solid #e8e8eb; border-radius: 8px; overflow: hidden; } .ds-stat { display: block; padding: 14px 18px; border: 0; border-right: 1px solid #e8e8eb; background: #fff; text-align: left; font: inherit; color: inherit; cursor: pointer; transition: background-color .15s ease; } .ds-stat:hover { background: #fafafa; } .ds-stat-label { font-size: 12.5px; color: #5f5f67; display: flex; align-items: center; gap: 7px; } .ds-stat-value { margin-top: 6px; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; } .ds-stat-value small { font-size: 14px; font-weight: 500; color: #75757d; margin-left: 2px; }"
+    },
+    {
+      "name": "Sidebar Nav Item",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "侧栏导航项：默认透明背景/次级灰字，当前页用白底 + 细描边阴影区分；窄屏退化为横向滚动条。",
+      "html": "<a class=\"ds-nav-item\" aria-current=\"page\" href=\"#\">节点<span class=\"ds-nav-count\">7</span></a>",
+      "css": ".ds-nav-item { display: flex; align-items: center; gap: 10px; height: 32px; padding: 0 8px; border-radius: 6px; color: #5f5f67; font-size: 13.5px; text-decoration: none; transition: background-color .15s ease, color .15s ease; } .ds-nav-item:hover { background: #f0f0f2; color: #18181b; } .ds-nav-item[aria-current='page'] { background: #fff; color: #18181b; font-weight: 550; box-shadow: 0 0 0 1px #e8e8eb, 0 1px 2px rgb(0 0 0 / 4%); } .ds-nav-count { margin-left: auto; font-size: 12px; color: #75757d; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Neutral Tag",
+      "kind": "chip",
+      "refersTo": "tag-neutral",
+      "description": "无语义状态的标签：扁平浅灰标签，不加状态点。有语义色的 AntD Tag 则被改写为透明背景 + 圆点前缀（见 Status Dot）。",
+      "html": "<span class=\"ds-tag\">待确认</span>",
+      "css": ".ds-tag { display: inline-block; font-size: 12px; background: #f4f4f5; border: 1px solid transparent; border-radius: 4px; color: #5f5f67; padding: 0 7px; line-height: 20px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "控制台精度（Console Precision）",
+    "overview": "nbpass 是单个管理员用来巡检与配置转发节点的后台，方向合同明确拒绝 AntD 默认的大圆角卡片堆叠、深色侧栏菜单和空欢迎页，转而按 Vercel / Linear 控制台的精度执行：白底工作区、1px 细线分区、克制的字号阶梯、状态先于操作。整个系统只有一种强调色（蓝 #2563eb），其余全部是中性灰阶和四种语义状态色；这种单色克制与方向合同中「唯一强调色」的要求完全一致。\n版式是致密的数据工作台，而不是营销式的留白页面：表格行高约 40px，数字一律 tabular-nums 对齐，IP、端口、版本号等标识符改用等宽字体，是一套面向「天天盯着看」的专业管理员、而非新用户引导的视觉语言。阴影被压缩到几乎为零——卡片、面板在静止状态下完全扁平，仅登录卡片和浮层（Modal/Drawer）两处使用同一量级的环境阴影，层级关系主要靠 1px 线和背景色深浅表达，而不是靠投影堆叠。",
+    "keyCharacteristics": [
+      "单一强调色（#2563eb）只用于主按钮、链接、选中态和聚焦环，其余界面全部中性灰阶",
+      "状态一律用「圆点 + 文字」表达，从不单独依赖颜色",
+      "圆角只有两档（6px / 8px），表格与侧栏导航几乎零阴影",
+      "数字等宽对齐（tabular-nums），IP/端口/版本号等标识符用等宽字体",
+      "窄屏（≤860px）侧栏导航折叠为页面顶部的横向导航条"
+    ],
+    "rules": [
+      { "name": "The One Accent Rule", "body": "整个面板只有一种强调色（#2563eb），且只出现在主操作、链接与选中/聚焦态上；其余一切都是中性灰阶或四种语义状态色之一，不存在第二种品牌色。", "section": "colors" },
+      { "name": "The Dot-Plus-Text Rule", "body": "任何状态都渲染为「小圆点 + 文字」，颜色永远是辅助而非唯一载体；连 AntD 彩色 Tag 也被全局样式改写为「透明背景 + 圆点前缀」，不再使用色块标签。", "section": "colors" },
+      { "name": "The Tabular Numerals Rule", "body": "所有数字通过 .num/.ant-table/.ant-statistic 统一应用 tabular-nums 保证列对齐；IP、端口、版本号等标识符额外切换到等宽字体。", "section": "typography" },
+      { "name": "The Near-Flat Rule", "body": "阴影不是默认状态的一部分；只有登录卡片、浮层和两个状态强调点四处使用阴影，其余所有卡片、面板、按钮在静止状态下都是零阴影，靠边框和背景色分层。", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 状态永远用圆点 + 文字表达，不单独依赖颜色或仅靠色块标签。",
+      "Do 数字用 tabular-nums 对齐；IP、端口、版本号等标识符用等宽字体。",
+      "Do 保持零阴影的默认状态，层级靠 1px 线和背景深浅表达。",
+      "Do 圆角只用 6px（控件）或 8px（面板/卡片）两档。",
+      "Do 强调色只用于主操作、链接、选中态和聚焦环。"
+    ],
+    "donts": [
+      "Don't 引入 AntD 默认的大圆角卡片堆叠、深色侧栏菜单，或空的营销式欢迎页——方向合同已明确拒绝。",
+      "Don't 给静态卡片或按钮加投影；阴影仅保留给登录卡片、Modal/Drawer 浮层和离线状态点光晕这几个既有场景。",
+      "Don't 为语义状态新增颜色；四种语义色（ok/warn/danger + 强调蓝兼 info）已覆盖所有场景。",
+      "Don't 把行高亮当动效做：当前实现是「立即着色、保持、再随单元格过渡淡出」，不是渐入渐出的动画。"
+    ]
+  }
+}

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
+import { PageHeader } from './PageHeader';
 import { api, APIError } from './api';
 import { TunnelRotation } from './TunnelRotation';
 import { ExitBlocked } from './ExitBlocked';
@@ -76,27 +78,30 @@ export function ExitGroups({ onSessionExpired }: { onSessionExpired: () => void 
   }
   const nodeName = (id: string) => nodes.find(n => n.id === id)?.name ?? id;
   return <>
-    <div className="nodes-heading"><div><Typography.Title level={2}>出口组</Typography.Title><Typography.Paragraph type="secondary">先配置出口的 WSS 地址和监听端口，再将节点加入出口组供隧道规则使用。</Typography.Paragraph></div><Space wrap><Button onClick={() => void load()}>刷新</Button><Button onClick={() => configure()}>配置出口</Button><Button type="primary" onClick={() => edit(null)}>创建出口组</Button></Space></div>
+    <PageHeader title="出口组" description="先配置出口的 WSS 地址和监听端口，再将节点加入出口组供隧道规则使用。">
+      <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
+      <Button onClick={() => configure()}>配置出口</Button>
+      <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建出口组</Button>
+    </PageHeader>
     {error && <Alert title={error} type="error" showIcon className="message" />}
-    <Card styles={{ body: { padding: 0 } }}><Table<Group> rowKey="id" dataSource={rows} loading={loading} scroll={{ x: 680 }} locale={{ emptyText: '暂无出口组，请先配置一个出口节点。' }} columns={[
-      { title: '出口组', dataIndex: 'name' },
+    <div className="panel"><Table<Group> rowKey="id" dataSource={rows} loading={loading} pagination={false} scroll={{ x: 680 }} locale={{ emptyText: '暂无出口组，请先配置一个出口节点。' }} columns={[
+      { title: '出口组', dataIndex: 'name', render: value => <span className="node-name">{value}</span> },
       { title: '出口节点', render: (_, row) => row.members.map((id, i) => `${i + 1}. ${nodeName(id)}`).join(' → ') },
       { title: '出口策略', render: () => <Tag>主备 · 按顺序</Tag> },
-      { title: '操作', render: (_, row) => <Space><Button size="small" onClick={() => edit(row)}>编辑</Button><Popconfirm title="删除出口组？" description="须先删除引用该组的转发规则。" onConfirm={() => remove(row.id)}><Button danger size="small">删除</Button></Popconfirm></Space> },
-    ]} /></Card>
-    <Typography.Title level={3}>出口配置</Typography.Title>
-    <Card styles={{ body: { padding: 0 } }}><Table<Exit> rowKey="node_id" dataSource={exits} loading={loading} scroll={{ x: 800 }} locale={{ emptyText: '暂无已配置出口' }} columns={[
+      { title: '', key: 'actions', align: 'right', render: (_, row) => <div className="row-actions"><Button size="small" type="text" onClick={() => edit(row)}>编辑</Button><Popconfirm title="删除出口组？" description="须先删除引用该组的转发规则。" onConfirm={() => remove(row.id)}><Button danger size="small" type="text">删除</Button></Popconfirm></div> },
+    ]} /></div>
+    <div className="section-title"><h2>出口配置</h2><p>WSS 端点与证书身份。</p></div>
+    <div className="panel"><Table<Exit> rowKey="node_id" dataSource={exits} loading={loading} pagination={false} scroll={{ x: 800 }} locale={{ emptyText: '暂无已配置出口' }} columns={[
       { title: '出口节点', render: (_, row) => nodeName(row.node_id) },
-      { title: 'WSS 端点', render: (_, row) => `${row.address}:${row.listen_port}` },
-      { title: '证书身份', dataIndex: 'server_name', render: value => <Typography.Text copyable style={{ wordBreak: 'break-all' }}>{value}</Typography.Text> },
-      { title: '操作', render: (_, row) => <Space wrap><Button size="small" onClick={() => configure(row)}>编辑地址与端口</Button><TunnelRotation nodeID={row.node_id} onSessionExpired={onSessionExpired} onChanged={() => void load()} /><ExitBlocked nodeID={row.node_id} onSessionExpired={onSessionExpired} onChanged={() => void load()} /></Space> },
-    ]} /></Card>
-    <Typography.Title level={3}>出口链路健康</Typography.Title>
-    <Typography.Paragraph type="secondary">选择入口查看它到各出口的观测。目标不可达不影响出口健康；控制失联后节点仍自行探测和切换。</Typography.Paragraph>
-    <Select allowClear placeholder="选择观测入口" value={healthNode} onChange={setHealthNode} style={{ minWidth: 240, marginBottom: 16 }} options={nodes.map(n => ({ value: n.id, label: n.name }))} />
-    {healthError && <Alert type="error" title={healthError} showIcon />}
-    {health && !health.fresh && <Alert type="warning" title="当前无实时证据，以下为最近观测，不代表当前健康状态。" showIcon style={{ marginBottom: 12 }} />}
-    {healthNode && <Card styles={{ body: { padding: 0 } }}><Table<ExitHealth> rowKey="exit_id" dataSource={health?.exits ?? []} scroll={{ x: 760 }} locale={{ emptyText: '尚无出口探测结果' }} columns={[
+      { title: 'WSS 端点', render: (_, row) => <span className="mono">{row.address}:{row.listen_port}</span> },
+      { title: '证书身份', dataIndex: 'server_name', render: value => <Typography.Text className="mono" copyable style={{ wordBreak: 'break-all' }}>{value}</Typography.Text> },
+      { title: '', key: 'actions', align: 'right', render: (_, row) => <Space wrap size={4} style={{ justifyContent: 'flex-end' }}><Button size="small" onClick={() => configure(row)}>编辑地址与端口</Button><TunnelRotation nodeID={row.node_id} onSessionExpired={onSessionExpired} onChanged={() => void load()} /><ExitBlocked nodeID={row.node_id} onSessionExpired={onSessionExpired} onChanged={() => void load()} /></Space> },
+    ]} /></div>
+    <div className="section-title"><h2>出口链路健康</h2><p>选择入口查看它到各出口的观测。目标不可达不影响出口健康；控制失联后节点仍自行探测和切换。</p></div>
+    <div className="toolbar"><Select allowClear placeholder="选择观测入口" value={healthNode} onChange={setHealthNode} style={{ minWidth: 240 }} options={nodes.map(n => ({ value: n.id, label: n.name }))} /></div>
+    {healthError && <Alert type="error" title={healthError} showIcon className="message" />}
+    {health && !health.fresh && <Alert type="warning" title="当前无实时证据，以下为最近观测，不代表当前健康状态。" showIcon className="message" />}
+    {healthNode && <div className="panel"><Table<ExitHealth> rowKey="exit_id" dataSource={health?.exits ?? []} pagination={false} scroll={{ x: 760 }} locale={{ emptyText: '尚无出口探测结果' }} columns={[
       { title: '出口', render: (_, row) => nodeName(row.exit_id) },
       { title: '链路状态', render: (_, row) => <Tag color={!health?.fresh ? 'default' : row.state === 'healthy' ? 'green' : row.state === 'unhealthy' ? 'red' : 'orange'}>{!health?.fresh && '历史 · '}{({ healthy: '健康', unhealthy: '故障', recovering: '恢复观察中', unknown: '待探测' } as Record<string, string>)[row.state] ?? '未知'}</Tag> },
       { title: '连续失败', render: (_, row) => row.consecutive_failures ?? 0 },
@@ -104,8 +109,8 @@ export function ExitGroups({ onSessionExpired }: { onSessionExpired: () => void 
       { title: '故障归属', render: (_, row) => ({ entry_exit: '入口→出口', exit_target: '出口→目标', local_resource: '本地资源', configuration_authorization: '配置/授权' } as Record<string, string>)[row.failure_class ?? ''] ?? '—' },
       { title: '恢复观察起点', render: (_, row) => row.recovery_since_unix ? new Date(row.recovery_since_unix * 1000).toLocaleTimeString() : '—' },
       { title: '探测时间', render: (_, row) => row.checked_at_unix ? new Date(row.checked_at_unix * 1000).toLocaleTimeString() : '—' },
-    ]} /></Card>}
-    <Typography.Paragraph type="secondary" style={{ marginTop: 16 }}>面板自动生成有效期 5 年的出口证书，更换地址会保留证书身份。保存后请在节点页面核对配置同步结果，并放行出口监听端口。</Typography.Paragraph>
+    ]} /></div>}
+    <p className="footnote">面板自动生成有效期 5 年的出口证书，更换地址会保留证书身份。保存后请在节点页面核对配置同步结果，并放行出口监听端口。</p>
     <Modal title={editing ? '编辑出口组' : '创建出口组'} open={editing !== undefined} onCancel={() => { setEditing(undefined); form.resetFields(); }} footer={null} forceRender>
       <Form form={form} layout="vertical" onFinish={save} clearOnDestroy>
         {error && <Alert title={error} type="error" showIcon className="message" />}

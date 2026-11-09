@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Alert, Button, Form, InputNumber, Modal, Space, Table, Typography } from 'antd';
 import { api, APIError } from './api';
 
@@ -8,8 +8,11 @@ type Node = { id: string; name: string };
 
 const kindLabels = { rule: '转发规则', entry_group: '入口组', exit_group: '出口组' };
 
-export function NodeValidationActions({ node, onSaved, onError }: { node: Node; onSaved: () => Promise<void>; onError: (e: unknown) => void }) {
-  const [view, setView] = useState<'ports' | 'delete'>();
+export type NodeValidationMode = 'ports' | 'delete';
+
+// 由节点列表的「更多」菜单打开；mode 为空时不显示任何对话框。
+export function NodeValidationActions({ node, mode, onClose, onSaved, onError }: { node: Node; mode?: NodeValidationMode; onClose: () => void; onSaved: () => Promise<void>; onError: (e: unknown) => void }) {
+  const [view, setView] = useState<NodeValidationMode>();
   const [references, setReferences] = useState<Reference[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -20,7 +23,9 @@ export function NodeValidationActions({ node, onSaved, onError }: { node: Node; 
     else setError((e as Error).message);
   }
 
-  async function open(mode: 'ports' | 'delete') {
+  useEffect(() => { if (mode) void open(mode); else setView(undefined); }, [mode, node.id]);
+
+  async function open(mode: NodeValidationMode) {
     setError(''); setLoading(true); setView(mode); setReferences([]); form.resetFields();
     try {
       if (mode === 'ports') form.setFieldsValue(await api<ListenerPorts>(`/nodes/${node.id}/listener-ports`));
@@ -31,14 +36,14 @@ export function NodeValidationActions({ node, onSaved, onError }: { node: Node; 
 
   async function save(ports: ListenerPorts) {
     setLoading(true); setError('');
-    try { await api(`/nodes/${node.id}/listener-ports`, 'PUT', ports); setView(undefined); await onSaved(); }
+    try { await api(`/nodes/${node.id}/listener-ports`, 'PUT', ports); setView(undefined); onClose(); await onSaved(); }
     catch (e) { failed(e); }
     finally { setLoading(false); }
   }
 
   async function remove() {
     setLoading(true); setError('');
-    try { await api(`/nodes/${node.id}`, 'DELETE'); setView(undefined); await onSaved(); }
+    try { await api(`/nodes/${node.id}`, 'DELETE'); setView(undefined); onClose(); await onSaved(); }
     catch (e) {
       if (e instanceof APIError && Array.isArray(e.details.references)) setReferences(e.details.references as Reference[]);
       failed(e);
@@ -46,9 +51,7 @@ export function NodeValidationActions({ node, onSaved, onError }: { node: Node; 
   }
 
   return <>
-    <Button size="small" onClick={() => void open('ports')}>监听端口</Button>
-    <Button danger size="small" onClick={() => void open('delete')}>删除</Button>
-    <Modal title={`节点「${node.name}」的监听端口`} open={view === 'ports'} onCancel={() => setView(undefined)} footer={null} forceRender>
+    <Modal title={`节点「${node.name}」的监听端口`} open={view === 'ports'} onCancel={onClose} footer={null} forceRender>
       <Form form={form} layout="vertical" onFinish={save}>
         {error && <Alert title={error} type="error" showIcon className="message" />}
         <Typography.Paragraph type="secondary">固定检测服务监听下方检测端口，用于国内检测点补判，请放行相应 TCP 入站连接。转发规则不能占用检测端口或隧道预留端口。</Typography.Paragraph>
@@ -57,7 +60,7 @@ export function NodeValidationActions({ node, onSaved, onError }: { node: Node; 
         <Button type="primary" htmlType="submit" block loading={loading}>保存端口</Button>
       </Form>
     </Modal>
-    <Modal title={`删除节点「${node.name}」`} open={view === 'delete'} onCancel={() => setView(undefined)} width={680} footer={<Space><Button onClick={() => setView(undefined)}>取消</Button><Button danger type="primary" loading={loading} disabled={!!error || references.length > 0} onClick={() => void remove()}>确认删除节点</Button></Space>}>
+    <Modal title={`删除节点「${node.name}」`} open={view === 'delete'} onCancel={onClose} width={680} footer={<Space><Button onClick={onClose}>取消</Button><Button danger type="primary" loading={loading} disabled={!!error || references.length > 0} onClick={() => void remove()}>确认删除节点</Button></Space>}>
       {error && <Alert title={error} type="error" showIcon className="message" />}
       {references.length > 0 ? <>
         <Alert title="节点仍被引用，请先移除以下配置中的关联。" type="warning" showIcon className="message" />

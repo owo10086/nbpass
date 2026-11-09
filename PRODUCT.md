@@ -41,6 +41,8 @@ web
 
 产品名为 nbpass。没有确立的 logo、品牌色或语气规范；现有界面里的视觉做法不构成约束。
 
+界面走同类管理后台的常规做法（2026-11-10 管理员在设计方向选择中明确选定），以 Vercel、Linear 的控制台为工艺标杆：沿用大家熟悉的布局与控件，不追求另类视觉。
+
 ## Evidence on Hand
 
 - 业务与行为依据：`.scratch/nbpass-v1/spec.md`、`GLOSSARY.md`、`docs/adr/0001`–`0006`。

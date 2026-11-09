@@ -1,12 +1,21 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Switch, Table, Tag } from 'antd';
+import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
 import { RuleSyncDetails, SyncHelp, SyncTag, type SyncMember } from './ConfigSync';
 import { RulesTransfer } from './RulesTransfer';
+import { PageHeader } from './PageHeader';
 
 type RuleInput = { name: string; entry_group_id: string; kind: 'direct' | 'tunnel'; exit_group_id?: string; listen_port: number; target_address: string; target_family: 'ipv4'; target_port: number; allow_private: boolean; enabled: boolean };
 type Rule = RuleInput & { id: string; sync_status: string; sync_members: SyncMember[]; traffic?: { upload_bytes: number; download_bytes: number; active_connections: number | null } };
 type Group = { id: string; name: string };
+
+function bytes(value: number) {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = value, unit = 0;
+  while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit++; }
+  return `${unit ? size.toFixed(size < 10 ? 1 : 0) : size} ${units[unit]}`;
+}
 
 function ruleInput(row: RuleInput): RuleInput {
   const { name, entry_group_id, kind, exit_group_id, listen_port, target_address, target_family, target_port, allow_private, enabled } = row;
@@ -20,6 +29,7 @@ export function Rules({ onSessionExpired }: { onSessionExpired: () => void }) {
   const [editing, setEditing] = useState<Rule | null>();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedIDs, setSelectedIDs] = useState<string[]>([]);
   const [form] = Form.useForm();
@@ -34,7 +44,7 @@ export function Rules({ onSessionExpired }: { onSessionExpired: () => void }) {
     setLoading(true);
     try {
       const [rules, entryGroups, exits] = await Promise.all([api<{ rules: Rule[] }>('/rules'), api<{ entry_groups: Group[] }>('/entry-groups'), api<{ exit_groups: Group[] }>('/exit-groups')]);
-      setRows(rules.rules); setSelectedIDs(ids => ids.filter(id => rules.rules.some(row => row.id === id))); setGroups(entryGroups.entry_groups); setExitGroups(exits.exit_groups); setError('');
+      setRows(rules.rules); setSelectedIDs(ids => ids.filter(id => rules.rules.some(row => row.id === id))); setGroups(entryGroups.entry_groups); setExitGroups(exits.exit_groups); setError(''); setLoaded(true);
     } catch (e) { failed(e); }
     finally { setLoading(false); }
   }
@@ -57,23 +67,27 @@ export function Rules({ onSessionExpired }: { onSessionExpired: () => void }) {
     try { await api(`/rules/${id}`, 'DELETE'); await load(); } catch (e) { failed(e); }
   }
   return <>
-    <div className="nodes-heading"><div><Typography.Title level={2}>转发规则</Typography.Title><Typography.Paragraph type="secondary">将入口组的 TCP 监听端口通过直连或出口组转发到一个 IPv4 或域名目标。</Typography.Paragraph></div><Space wrap><RulesTransfer selectedIDs={selectedIDs} onChanged={load} onSessionExpired={onSessionExpired} /><Button onClick={() => void load()}>刷新</Button><Button type="primary" onClick={() => edit(null)}>创建转发规则</Button></Space></div>
+    <PageHeader title="转发规则" description="将入口组的 TCP 监听端口通过直连或出口组转发到一个 IPv4 或域名目标。每 5 秒刷新。">
+      <RulesTransfer selectedIDs={selectedIDs} onChanged={load} onSessionExpired={onSessionExpired} />
+      <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
+      <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建转发规则</Button>
+    </PageHeader>
     {error && <Alert title={error} type="error" showIcon className="message" />}
-    <Card styles={{ body: { padding: 0 } }}><Table<Rule> rowKey="id" dataSource={rows} rowSelection={{ selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} loading={loading} scroll={{ x: 1500 }} locale={{ emptyText: '暂无转发规则，请先创建入口组。' }} expandable={{ expandedRowRender: row => <RuleSyncDetails members={row.sync_members} /> }} columns={[
-      { title: '规则', dataIndex: 'name' },
-      { title: '入口组', render: (_, row) => groups.find(g => g.id === row.entry_group_id)?.name ?? row.entry_group_id },
-      { title: '链路', render: (_, row) => row.kind === 'tunnel' ? <Space orientation="vertical" size={0}><Tag color="blue">隧道</Tag><span>{exitGroups.find(g => g.id === row.exit_group_id)?.name ?? row.exit_group_id}</span></Space> : <Tag>直连</Tag> },
-      { title: '监听端口', dataIndex: 'listen_port' },
-      { title: '目标', render: (_, row) => <Space orientation="vertical" size={0}><span>{row.target_address}:{row.target_port}</span><Typography.Text type="secondary">IPv4 · {row.allow_private ? '允许私网目标' : '仅公网目标'}</Typography.Text></Space> },
-      { title: '状态', render: (_, row) => <Tag color={row.enabled ? 'green' : 'default'}>{row.enabled ? '启用' : '停用'}</Tag> },
-      { title: '同步状态', render: (_, row) => <SyncTag status={row.sync_status} /> },
-      { title: '累计上行 / 下行', render: (_, row) => <Space orientation="vertical" size={0}><span>↑ {(row.traffic?.upload_bytes ?? 0).toLocaleString()} B</span><span>↓ {(row.traffic?.download_bytes ?? 0).toLocaleString()} B</span></Space> },
-      { title: '当前连接数', render: (_, row) => row.traffic?.active_connections == null ? <Typography.Text type="secondary">—（缺测）</Typography.Text> : row.traffic.active_connections.toLocaleString() },
-      { title: '操作', render: (_, row) => <Space><Button size="small" onClick={() => edit(row)}>编辑</Button><Popconfirm title={row.enabled ? '停用并断开该规则的所有连接？' : '启用该规则？'} onConfirm={() => toggle(row)}><Button size="small">{row.enabled ? '停用' : '启用'}</Button></Popconfirm><Popconfirm title="删除规则并断开所有连接？" onConfirm={() => remove(row.id)}><Button danger size="small">删除</Button></Popconfirm></Space> },
-    ]} /></Card>
-    <Typography.Paragraph type="secondary" style={{ marginTop: 16 }}>保存后在节点页面核对期望与已应用配置版本。离线节点须恢复控制连接后才能应用改动。</Typography.Paragraph>
+    <div className="panel"><Table<Rule> rowKey="id" dataSource={rows} rowSelection={{ selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} loading={!loaded && !error} pagination={rows.length > 100 ? { pageSize: 100, showSizeChanger: false } : false} scroll={{ x: 1130 }} locale={{ emptyText: '暂无转发规则，请先创建入口组。' }} expandable={{ expandedRowRender: row => <RuleSyncDetails members={row.sync_members} /> }} columns={[
+      { title: '规则', dataIndex: 'name', width: 130, render: value => <span className="node-name">{value}</span> },
+      { title: '入口组', width: 110, render: (_, row) => groups.find(g => g.id === row.entry_group_id)?.name ?? row.entry_group_id },
+      { title: '链路', width: 90, render: (_, row) => row.kind === 'tunnel' ? <>隧道<span className="cell-sub">经 {exitGroups.find(g => g.id === row.exit_group_id)?.name ?? row.exit_group_id}</span></> : <>直连</> },
+      { title: '监听端口', dataIndex: 'listen_port', width: 80, render: value => <span className="mono">{value}</span> },
+      { title: '目标', width: 170, render: (_, row) => <><span className="mono">{row.target_address}:{row.target_port}</span><span className="cell-sub">IPv4 · {row.allow_private ? '允许私网目标' : '仅公网目标'}</span></> },
+      { title: '状态', width: 70, render: (_, row) => <Tag color={row.enabled ? 'green' : 'default'}>{row.enabled ? '启用' : '停用'}</Tag> },
+      { title: '同步状态', width: 90, render: (_, row) => <SyncTag status={row.sync_status} /> },
+      { title: '累计上行 / 下行', width: 120, render: (_, row) => <span className="num" title={`上行 ${(row.traffic?.upload_bytes ?? 0).toLocaleString()} B，下行 ${(row.traffic?.download_bytes ?? 0).toLocaleString()} B`}>↑ {bytes(row.traffic?.upload_bytes ?? 0)}<span className="cell-sub">↓ {bytes(row.traffic?.download_bytes ?? 0)}</span></span> },
+      { title: '连接数', width: 80, render: (_, row) => row.traffic?.active_connections == null ? <span className="muted">缺测</span> : <span className="num">{row.traffic.active_connections.toLocaleString()}</span> },
+      { title: '', key: 'actions', fixed: 'right', width: 140, align: 'right', render: (_, row) => <div className="row-actions"><Button size="small" type="text" onClick={() => edit(row)}>编辑</Button><Popconfirm title={row.enabled ? '停用并断开该规则的所有连接？' : '启用该规则？'} onConfirm={() => toggle(row)}><Button size="small" type="text">{row.enabled ? '停用' : '启用'}</Button></Popconfirm><Popconfirm title="删除规则并断开所有连接？" onConfirm={() => remove(row.id)}><Button danger size="small" type="text">删除</Button></Popconfirm></div> },
+    ]} /></div>
+    <p className="footnote">保存后在节点页面核对期望与已应用配置版本。离线节点须恢复控制连接后才能应用改动。</p>
     <SyncHelp />
-    <Typography.Paragraph type="secondary">流量仅计入口侧业务字节；上行为用户到目标，下行为目标到用户。每 5 秒刷新，离线或样本过期时连接数显示缺测。</Typography.Paragraph>
+    <p className="footnote">流量仅计入口侧业务字节；上行为用户到目标，下行为目标到用户。离线或样本过期时连接数显示缺测。</p>
     <Modal title={editing ? '编辑转发规则' : '创建转发规则'} open={editing !== undefined} onCancel={() => { setEditing(undefined); form.resetFields(); }} footer={null} forceRender>
       <Form form={form} layout="vertical" onFinish={save} clearOnDestroy>
         {error && <Alert title={error} type="error" showIcon className="message" />}

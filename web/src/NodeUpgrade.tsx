@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, Popconfirm, Space, Tag, Typography } from 'antd';
+import { Button, Popconfirm } from 'antd';
 import { api } from './api';
 
 type Upgrade = { state: string; steps: string[]; error?: string; manifest: { version: string } };
@@ -15,17 +15,23 @@ export function NodeUpgrade({ node, onSaved, onError }: { node: NodeUpgradeField
     catch (e) { onError(e); }
     finally { setSaving(false); }
   }
-  return <Space orientation="vertical" size={2}>
-    {node.version_mismatch && <Tag color="orange">与面板 {node.panel_version} 版本不一致</Tag>}
-    {node.upgrade && <>
-      <Tag color={node.upgrade.state === 'ready' ? 'green' : node.upgrade.state === 'rolled_back' || node.upgrade.state === 'failed' ? 'red' : 'blue'}>升级至 {node.upgrade.manifest.version}：{labels[node.upgrade.state] || node.upgrade.state}</Tag>
-      <Typography.Text type="secondary">{node.upgrade.steps.map(step => labels[step] || step).join(' → ')}</Typography.Text>
-      {node.upgrade.error && <Typography.Text type="danger">{node.upgrade.error}</Typography.Text>}
-      {node.upgrade.state === 'unconfirmed' && <Typography.Text type="secondary">等待节点回连核对，当前程序保留；请勿重复升级。</Typography.Text>}
-    </>}
-    <Popconfirm title={`升级节点至 ${node.panel_version}？`} description="升级会断开此节点上的现有连接；节点将进入最多 10 分钟的维护期。" onConfirm={upgrade}>
-      <Button size="small" loading={saving} disabled={!node.connected || !node.upgrade_capable || (!!node.upgrade && !terminal.has(node.upgrade.state))}>升级至面板版本</Button>
-    </Popconfirm>
-    {!node.upgrade_capable && <Typography.Text type="secondary">安装独立更新服务后可升级</Typography.Text>}
-  </Space>;
+  const state = node.upgrade?.state;
+  const tone = state === 'ready' ? 'ok' : state === 'failed' || state === 'rolled_back' ? 'danger' : 'warn';
+  // 版本一致且没有进行中的升级时，不再在每行重复显示升级按钮。
+  const offer = node.version_mismatch || (!!node.upgrade && state !== 'ready');
+  return <div>
+    {node.upgrade
+      ? <span className="status"><span className={`dot ${tone}`} />升级至 <span className="mono">{node.upgrade.manifest.version}</span>：{labels[state!] || state}</span>
+      : node.version_mismatch ? <span className="status"><span className="dot warn" />与面板 <span className="mono">{node.panel_version}</span> 不一致</span>
+      : <span className="muted">与面板一致</span>}
+    {node.upgrade && node.upgrade.steps.length > 0 && <span className="cell-sub">{node.upgrade.steps.map(step => labels[step] || step).join(' → ')}</span>}
+    {node.upgrade?.error && <span className="cell-danger">{node.upgrade.error}</span>}
+    {state === 'unconfirmed' && <span className="cell-sub">等待节点回连核对，当前程序保留；请勿重复升级。</span>}
+    {offer && <div style={{ marginTop: 4 }}>
+      <Popconfirm title={`升级节点至 ${node.panel_version}？`} description="升级会断开此节点上的现有连接；节点将进入最多 10 分钟的维护期。" onConfirm={upgrade}>
+        <Button size="small" loading={saving} disabled={!node.connected || !node.upgrade_capable || (!!node.upgrade && !terminal.has(node.upgrade.state))}>升级至面板版本</Button>
+      </Popconfirm>
+      {!node.upgrade_capable && <span className="cell-sub">安装独立更新服务后可升级</span>}
+    </div>}
+  </div>;
 }
