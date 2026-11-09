@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd';
+import { Alert, App, Button, Dropdown, Form, Input, Modal, Segmented, Table, Typography } from 'antd';
+import { MoreOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, SettingOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
 import { NodeUpgrade, type NodeUpgradeFields } from './NodeUpgrade';
 import { NodeRegion, type NodeRegionFields } from './NodeRegion';
 import { ProbeDetails } from './ProbeDetails';
-import { NodeValidationActions } from './NodeValidationActions';
+import { NodeValidationActions, type NodeValidationMode } from './NodeValidationActions';
 import { NodeRotation } from './NodeRotation';
 import { NodeSelfCheck, SelfCheckSettings } from './NodeSelfCheck';
+import { useFocusRow } from './route';
+import { PageHeader } from './PageHeader';
 
 type NodeRow = NodeRegionFields & NodeUpgradeFields & {
   id: string; name: string; status: string; status_label: string; connected: boolean;
@@ -14,22 +17,49 @@ type NodeRow = NodeRegionFields & NodeUpgradeFields & {
   desired_revision: number; applied_revision: number; config_status: string; software_version: string; apply_error: string;
 };
 type Installation = { id: string; installation_command: string; ticket_expires_at: string };
+type Filter = 'all' | 'online' | 'offline' | 'maintenance' | 'pending';
 
-export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
+const filters: { value: Filter; label: string }[] = [
+  { value: 'all', label: '全部' }, { value: 'online', label: '在线' }, { value: 'offline', label: '离线' },
+  { value: 'maintenance', label: '维护' }, { value: 'pending', label: '待接入' },
+];
+
+function tone(row: NodeRow) {
+  if (row.status === 'online') return row.connected ? 'ok' : 'danger';
+  if (row.status === 'offline') return 'danger';
+  if (row.status === 'maintenance') return 'warn';
+  return '';
+}
+
+function ago(value: string) {
+  const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
+  if (seconds < 60) return '刚刚';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
+  return new Date(value).toLocaleDateString();
+}
+
+export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionExpired: () => void }) {
+  const { modal } = App.useApp();
   const [rows, setRows] = useState<NodeRow[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState('');
+  const [filter, setFilter] = useState<Filter>('all');
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [installation, setInstallation] = useState<Installation>();
   const [regionNode, setRegionNode] = useState<NodeRow>();
   const [rotationNode, setRotationNode] = useState<string>();
   const [selfCheckNode, setSelfCheckNode] = useState<string>();
- const [selfCheckSettings, setSelfCheckSettings] = useState(false);
- const [probeNode, setProbeNode] = useState<string>();
+  const [selfCheckSettings, setSelfCheckSettings] = useState(false);
+  const [probeNode, setProbeNode] = useState<string>();
+  const [validation, setValidation] = useState<{ id: string; mode: NodeValidationMode }>();
   const [form] = Form.useForm();
   const expired = useRef(onSessionExpired);
   expired.current = onSessionExpired;
+  const rowClassName = useFocusRow(focus, loaded);
 
   function failed(e: unknown) {
     if (e instanceof APIError && (e.status === 401 || e.status === 428)) expired.current();
@@ -38,7 +68,7 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
 
   async function load() {
     setLoading(true);
-    try { setRows((await api<{ nodes: NodeRow[] }>('/nodes')).nodes); setError(''); }
+    try { setRows((await api<{ nodes: NodeRow[] }>('/nodes')).nodes); setError(''); setLoaded(true); }
     catch (e) { failed(e); }
     finally { setLoading(false); }
   }
@@ -73,41 +103,83 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
     } catch (e) { failed(e); }
   }
 
+  function more(row: NodeRow, key: string) {
+    if (key === 'region') setRegionNode(row);
+    else if (key === 'rotation') setRotationNode(row.id);
+    else if (key === 'maintenance') void maintenance(row);
+    else if (key === 'ports' || key === 'delete') setValidation({ id: row.id, mode: key });
+    else if (key === 'reset') modal.confirm({ title: `重置「${row.name}」的 token？`, content: '当前控制连接将断开，需要重新执行安装命令。', okText: '重置', onOk: () => credential(row, 'reset') });
+    else if (key === 'revoke') modal.confirm({ title: `吊销「${row.name}」的 token？`, content: '当前控制连接将断开，原凭据将失效。', okText: '吊销', okButtonProps: { danger: true }, onOk: () => credential(row, 'revoke') });
+  }
+
+  const counts = Object.fromEntries(filters.map(f => [f.value, f.value === 'all' ? rows.length : rows.filter(row => row.status === f.value).length]));
+  const needle = query.trim().toLowerCase();
+  const visible = rows.filter(row => (filter === 'all' || row.status === filter) && (!needle || row.name.toLowerCase().includes(needle) || row.public_ipv4.includes(needle)));
+  const validationNode = rows.find(row => row.id === validation?.id);
+
   return <>
-    <div className="nodes-heading">
-      <div><Typography.Title level={2}>节点</Typography.Title><Typography.Paragraph type="secondary">查看控制连接、最近活性与配置版本。</Typography.Paragraph></div>
-      <Space wrap><Button onClick={() => setSelfCheckSettings(true)}>自测设置</Button><Button onClick={() => void load()}>刷新</Button><Button type="primary" onClick={() => setAdding(true)}>添加节点</Button></Space>
-    </div>
+    <PageHeader title="节点" description="控制连接、最近活性与配置版本。每 10 秒刷新。">
+      <Button icon={<SettingOutlined />} onClick={() => setSelfCheckSettings(true)}>自测设置</Button>
+      <Button type="primary" icon={<PlusOutlined />} onClick={() => setAdding(true)}>添加节点</Button>
+    </PageHeader>
     {error && <Alert title={error} type="error" showIcon className="message" />}
-    <Card styles={{ body: { padding: 0 } }}>
-      <Table<NodeRow> rowKey="id" dataSource={rows} loading={loading} scroll={{ x: 1300 }} locale={{ emptyText: '暂无节点，添加后复制安装命令到服务器执行。' }} columns={[
-        { title: '节点', key: 'name', render: (_, row) => <Space orientation="vertical" size={0}><Typography.Text strong>{row.name}</Typography.Text><Typography.Text type="secondary">{row.software_version || '尚未接入'}</Typography.Text></Space> },
-        { title: '升级', key: 'upgrade', render: (_, row) => <NodeUpgrade node={row} onSaved={load} onError={failed} /> },
-        { title: '地区', key: 'region', render: (_, row) => <Space orientation="vertical" size={2}><span>{row.region.name} <Tag>{row.region_source === 'manual' ? '人工覆盖' : '自动识别'}</Tag></span><Typography.Text type="secondary">{row.public_ipv4 || '尚未查询到 IP'}</Typography.Text></Space> },
-        { title: '国内检测点角色', key: 'checker', render: (_, row) => <Tag color={row.domestic_checker ? 'green' : 'default'}>{row.checker_label}</Tag> },
-        { title: '状态', key: 'status', render: (_, row) => <Space orientation="vertical" size={2}><Tag color={{ online: 'green', offline: 'default', maintenance: 'blue', pending: 'orange' }[row.status]}>{row.status_label}</Tag>{row.status === 'online' && !row.connected && <Typography.Text type="secondary">控制连接已中断</Typography.Text>}{row.status === 'maintenance' && row.maintenance_until && <Typography.Text type="secondary">至 {new Date(row.maintenance_until).toLocaleTimeString()}</Typography.Text>}</Space> },
-        { title: '最近活性', dataIndex: 'last_seen_at', render: (value: string | null) => value ? new Date(value).toLocaleString() : '—' },
-        { title: '配置版本', key: 'revision', render: (_, row) => <Space orientation="vertical" size={0}><span>期望 {row.desired_revision} / 已应用 {row.applied_revision}</span><Typography.Text type={row.config_status === '正常' ? 'success' : 'secondary'}>{row.config_status}</Typography.Text>{row.apply_error && <Typography.Text type="danger">{row.apply_error}</Typography.Text>}</Space> },
-        { title: '操作', key: 'actions', render: (_, row) => <Space wrap>
-          <Button size="small" onClick={() => setRegionNode(row)}>地区与检测点</Button>
-          <Button size="small" onClick={() => setProbeNode(row.id)}>查看探针</Button>
- <Button size="small" onClick={() => setSelfCheckNode(row.id)}>自测与被墙认定</Button>
-          <Button size="small" onClick={() => setRotationNode(row.id)}>换 IP</Button>
-          <Button size="small" onClick={() => void maintenance(row)}>{row.status === 'maintenance' ? '结束维护' : '维护 10 分钟'}</Button>
-          <Popconfirm title="重置节点 token？" description="当前控制连接将断开，需要重新执行安装命令。" onConfirm={() => credential(row, 'reset')}><Button size="small">重置 token</Button></Popconfirm>
-          <Popconfirm title="吊销节点 token？" description="当前控制连接将断开，原凭据将失效。" onConfirm={() => credential(row, 'revoke')}><Button danger size="small">吊销</Button></Popconfirm>
-          <NodeValidationActions node={row} onSaved={load} onError={failed} />
-        </Space> },
-      ]} />
-    </Card>
+    <div className="toolbar">
+      <Input allowClear prefix={<SearchOutlined style={{ color: 'var(--text-3)' }} />} placeholder="搜索名称或 IP" value={query} onChange={e => setQuery(e.target.value)} style={{ width: 240 }} />
+      <Segmented<Filter> value={filter} onChange={setFilter} options={filters.map(f => ({ value: f.value, label: <>{f.label} <span className="num muted">{counts[f.value]}</span></> }))} />
+      <span className="spacer" />
+      <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
+    </div>
+    <div className="panel">
+      <Table<NodeRow> rowKey="id" dataSource={visible} loading={!loaded && !error} rowClassName={row => rowClassName(row.id)} pagination={visible.length > 50 ? { pageSize: 50, showSizeChanger: false } : false} scroll={{ x: 1120 }}
+        locale={{ emptyText: rows.length ? '没有符合条件的节点' : '暂无节点。添加节点后，把安装命令复制到服务器执行。' }} columns={[
+          { title: '节点', key: 'name', fixed: 'left', width: 190, render: (_, row) => <>
+            <span className="status"><span className={`dot ${tone(row)}`} /><span className="node-name">{row.name}</span></span>
+            <span className="cell-sub mono">{row.software_version || '尚未接入'}</span>
+          </> },
+          { title: '状态', key: 'status', width: 120, render: (_, row) => <>
+            {row.status_label}
+            {row.status === 'online' && !row.connected && <span className="cell-danger">控制连接已中断</span>}
+            {row.status === 'maintenance' && row.maintenance_until && <span className="cell-sub">至 <span className="num">{new Date(row.maintenance_until).toLocaleTimeString()}</span></span>}
+          </> },
+          { title: '地区 / IP', key: 'region', width: 170, render: (_, row) => <>
+            {row.region.name}{row.region_source === 'manual' && <span className="muted">（人工）</span>}
+            <span className="cell-sub mono">{row.public_ipv4 || '尚未查询到 IP'}</span>
+          </> },
+          { title: '检测点', key: 'checker', width: 100, render: (_, row) => row.domestic_checker ? <span className="status"><span className="dot ok" />{row.checker_label}</span> : <span className="muted">{row.checker_label}</span> },
+          { title: '最近活性', dataIndex: 'last_seen_at', width: 100, render: (value: string | null) => value ? <span className="num" title={new Date(value).toLocaleString()}>{ago(value)}</span> : <span className="muted">—</span> },
+          { title: '配置', key: 'revision', width: 160, render: (_, row) => <>
+            <span className={row.config_status === '正常' ? undefined : 'muted'}>{row.config_status}</span>
+            <span className="cell-sub mono">已应用 {row.applied_revision} / 期望 {row.desired_revision}</span>
+            {row.apply_error && <span className="cell-danger">{row.apply_error}</span>}
+          </> },
+          { title: '版本', key: 'upgrade', width: 170, render: (_, row) => <NodeUpgrade node={row} onSaved={load} onError={failed} /> },
+          { title: '', key: 'actions', fixed: 'right', width: 130, render: (_, row) => <div className="row-actions">
+            <Button size="small" type="text" onClick={() => setProbeNode(row.id)}>探针</Button>
+            <Button size="small" type="text" onClick={() => setSelfCheckNode(row.id)}>自测</Button>
+            <Dropdown trigger={['click']} placement="bottomRight" menu={{ onClick: ({ key }) => more(row, key), items: [
+              { key: 'region', label: '地区与检测点' },
+              { key: 'rotation', label: '换 IP' },
+              { key: 'maintenance', label: row.status === 'maintenance' ? '结束维护' : '维护 10 分钟' },
+              { key: 'ports', label: '监听端口' },
+              { type: 'divider' },
+              { key: 'reset', label: '重置 token' },
+              { key: 'revoke', label: '吊销 token', danger: true },
+              { key: 'delete', label: '删除节点', danger: true },
+            ] }}>
+              <Button size="small" type="text" icon={<MoreOutlined />} aria-label={`${row.name} 的更多操作`} />
+            </Dropdown>
+          </div> },
+        ]} />
+    </div>
     {selfCheckSettings && <SelfCheckSettings onClose={() => setSelfCheckSettings(false)} onError={failed} />}
- {rows.find(row => row.id === selfCheckNode) && <NodeSelfCheck key={selfCheckNode} node={rows.find(row => row.id === selfCheckNode)!} onClose={() => setSelfCheckNode(undefined)} onError={failed} />}
- <NodeRotation node={rows.find(row => row.id === rotationNode)} onClose={() => setRotationNode(undefined)} onError={failed} />
+    {rows.find(row => row.id === selfCheckNode) && <NodeSelfCheck key={selfCheckNode} node={rows.find(row => row.id === selfCheckNode)!} onClose={() => setSelfCheckNode(undefined)} onError={failed} />}
+    <NodeRotation node={rows.find(row => row.id === rotationNode)} onClose={() => setRotationNode(undefined)} onError={failed} />
     <NodeRegion node={regionNode} onClose={() => setRegionNode(undefined)} onSaved={load} onError={failed} />
     {rows.find(row => row.id === probeNode) && <ProbeDetails node={rows.find(row => row.id === probeNode)!} onClose={() => setProbeNode(undefined)} onSessionExpired={onSessionExpired} />}
+    {validationNode && <NodeValidationActions node={validationNode} mode={validation?.mode} onClose={() => setValidation(undefined)} onSaved={load} onError={failed} />}
     <Modal title="添加节点" open={adding} onCancel={() => { setAdding(false); form.resetFields(); }} footer={null} destroyOnHidden>
       <Form form={form} layout="vertical" onFinish={add} clearOnDestroy>
-        <Form.Item name="name" label="节点名称" rules={[{ required: true, whitespace: true, message: '请输入节点名称' }]}><Input autoFocus maxLength={200} placeholder="例如：入口 A" /></Form.Item>
+        <Form.Item name="name" label="节点名称" rules={[{ required: true, whitespace: true, message: '请输入节点名称' }]}><Input autoFocus maxLength={200} placeholder="例如：HK-CN2-01" /></Form.Item>
         <Button block type="primary" htmlType="submit" loading={saving}>生成安装命令</Button>
       </Form>
     </Modal>

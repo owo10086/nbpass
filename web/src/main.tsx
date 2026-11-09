@@ -1,10 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, Button, Card, ConfigProvider, Empty, Form, Input, Layout, Menu, Space, Spin, Typography } from 'antd';
+import { Alert, App as AntApp, Button, ConfigProvider, Dropdown, Form, Input, Spin } from 'antd';
+import {
+  CloudServerOutlined, DashboardOutlined, GlobalOutlined, HistoryOutlined, LoginOutlined, LogoutOutlined,
+  SafetyOutlined, SendOutlined, SwapOutlined, UnorderedListOutlined, UserOutlined,
+} from '@ant-design/icons';
 import zhCN from 'antd/locale/zh_CN';
 import 'antd/dist/reset.css';
 import './style.css';
-import { api } from './api';
+import { api, APIError } from './api';
 import { EntryGroups } from './EntryGroups';
 import { ExitGroups } from './ExitGroups';
 import { Rules } from './Rules';
@@ -14,8 +18,57 @@ import { Security } from './Security';
 import { Telegram } from './Telegram';
 import { DNSWatch } from './DNSWatch';
 import { Retention } from './Retention';
+import { collectAttention, Overview, type OverviewEntryGroup, type OverviewNode } from './Overview';
+import { useRoute, type Page } from './route';
 
 type AuthStatus = { setup_required: boolean; authenticated: boolean };
+type Counts = { nodes: number; entry: number; exit: number; rules: number; alerts: number };
+
+const navigation: { title?: string; items: { page: Page; label: string; icon: React.ReactNode; count?: keyof Counts }[] }[] = [
+  { items: [{ page: 'overview', label: '概览', icon: <DashboardOutlined />, count: 'alerts' }] },
+  { title: '转发', items: [
+    { page: 'nodes', label: '节点', icon: <CloudServerOutlined />, count: 'nodes' },
+    { page: 'entry-groups', label: '入口组', icon: <LoginOutlined />, count: 'entry' },
+    { page: 'exit-groups', label: '出口组', icon: <LogoutOutlined />, count: 'exit' },
+    { page: 'rules', label: '转发规则', icon: <SwapOutlined />, count: 'rules' },
+  ] },
+  { title: '监控', items: [
+    { page: 'dns-watch', label: '解析监控', icon: <GlobalOutlined /> },
+    { page: 'events', label: '事件日志', icon: <UnorderedListOutlined /> },
+  ] },
+  { title: '设置', items: [
+    { page: 'telegram', label: 'Telegram 通知', icon: <SendOutlined /> },
+    { page: 'security', label: '安全设置', icon: <SafetyOutlined /> },
+    { page: 'retention', label: '保留期设置', icon: <HistoryOutlined /> },
+  ] },
+];
+
+// 侧栏数量与概览告警数，独立于各页面自己的刷新。
+function useCounts(enabled: boolean, onSessionExpired: () => void) {
+  const [counts, setCounts] = useState<Counts>();
+  useEffect(() => {
+    if (!enabled) return;
+    let active = true;
+    async function load() {
+      try {
+        const [n, g, e, r] = await Promise.all([
+          api<{ nodes: OverviewNode[] }>('/nodes'),
+          api<{ entry_groups: OverviewEntryGroup[] }>('/entry-groups'),
+          api<{ exit_groups: unknown[] }>('/exit-groups'),
+          api<{ rules: unknown[] }>('/rules'),
+        ]);
+        const alerts = collectAttention(n.nodes, g.entry_groups).filter(item => item.tone !== 'muted').length;
+        if (active) setCounts({ nodes: n.nodes.length, entry: g.entry_groups.length, exit: e.exit_groups.length, rules: r.rules.length, alerts });
+      } catch (e) {
+        if (active && e instanceof APIError && (e.status === 401 || e.status === 428)) onSessionExpired();
+      }
+    }
+    void load();
+    const timer = window.setInterval(() => void load(), 15_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [enabled]);
+  return counts;
+}
 
 function App() {
   const [status, setStatus] = useState<AuthStatus>();
@@ -23,7 +76,7 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
   const [form] = Form.useForm();
-  const [page, setPage] = useState('nodes');
+  const route = useRoute();
 
   async function refresh() {
     setError('');
@@ -33,6 +86,7 @@ function App() {
 
   useEffect(() => { void refresh(); }, []);
   useEffect(() => { form.resetFields(); }, [status?.setup_required, form]);
+  const counts = useCounts(!!status?.authenticated, () => void refresh());
 
   async function submit(values: { password: string }) {
     setBusy(true);
@@ -65,59 +119,102 @@ function App() {
 
   if (!status) return (
     <main className="loading-screen">
-      {error ? <Space direction="vertical"><Alert title={error} type="error" /><Button onClick={() => void refresh()}>重新连接</Button></Space> : <Spin description="正在连接面板" />}
+      {error ? <div><Alert title={error} type="error" showIcon className="message" /><Button onClick={() => void refresh()}>重新连接</Button></div> : <Spin description="正在连接面板" />}
     </main>
   );
 
-  if (status.authenticated) return (
-    <Layout className="panel-layout">
-      <Layout.Sider breakpoint="lg" collapsedWidth="0" className="sidebar">
-        <div className="brand"><span className="brand-mark">n</span><strong>nbpass</strong></div>
-        <Menu theme="dark" selectedKeys={[page]} onClick={({ key }) => setPage(key)} items={[{ key: 'overview', label: '面板概览' }, { key: 'nodes', label: '节点' }, { key: 'entry-groups', label: '入口组' }, { key: 'exit-groups', label: '出口组' }, { key: 'rules', label: '转发规则' }, { key: 'dns-watch', label: '解析监控' }, { key: 'events', label: '事件日志' }, { key: 'telegram', label: 'Telegram 通知' }, { key: 'security', label: '安全设置' }, { key: 'retention', label: '保留期设置' }]} />
-        <div className="sidebar-caption">流量转发，由你掌控</div>
-      </Layout.Sider>
-      <Layout>
-        <Layout.Header className="panel-header"><span>{{ nodes: '节点', 'entry-groups': '入口组', 'exit-groups': '出口组', rules: '转发规则', security: '安全设置', retention: '保留期设置', events: '事件日志', 'dns-watch': '解析监控', telegram: 'Telegram 通知', overview: '面板概览' }[page]}</span><Space><span className="admin-label">管理员</span><Button loading={busy} onClick={() => void endSession()}>退出登录</Button></Space></Layout.Header>
-        <Layout.Content className="panel-content">
-          {page === 'nodes' ? <Nodes onSessionExpired={() => void refresh()} /> : page === 'entry-groups' ? <EntryGroups onSessionExpired={() => void refresh()} /> : page === 'exit-groups' ? <ExitGroups onSessionExpired={() => void refresh()} /> : page === 'rules' ? <Rules onSessionExpired={() => void refresh()} /> : page === 'dns-watch' ? <DNSWatch onSessionExpired={() => void refresh()} /> : page === 'events' ? <Events onSessionExpired={() => void refresh()} /> : page === 'telegram' ? <Telegram onSessionExpired={() => void refresh()} /> : page === 'retention' ? <Retention onSessionExpired={() => void refresh()} /> : page === 'security' ? <Security onSessionExpired={() => void refresh()} onPasswordChanged={() => { setNotice('密码已修改，全部会话已退出，请使用新密码登录。'); void refresh(); }} /> : <><Typography.Title level={2}>欢迎使用 nbpass</Typography.Title>
-          <Typography.Paragraph type="secondary">在这里管理你的节点与转发规则。</Typography.Paragraph>
-          {error && <Alert title={error} type="error" showIcon className="message" />}
-          <Card className="empty-panel"><Empty description="面板已就绪，暂无配置" image={Empty.PRESENTED_IMAGE_SIMPLE} /></Card></>}
-          <div className="session-note"><Typography.Text type="secondary">会话空闲 24 小时或登录满 7 天后，需要重新登录。</Typography.Text><Button type="link" loading={busy} onClick={() => void endSession(true)}>退出所有会话</Button></div>
-        </Layout.Content>
-      </Layout>
-    </Layout>
-  );
+  if (status.authenticated) {
+    const expired = () => void refresh();
+    const page = route.page;
+    return (
+      <div className="shell">
+        <aside className="sidebar">
+          <div className="brand"><span className="brand-mark">n</span>nbpass</div>
+          <nav className="nav" aria-label="主导航">
+            {navigation.map((group, i) => <div className="nav-group" key={group.title ?? i}>
+              {group.title && <div className="nav-group-title">{group.title}</div>}
+              {group.items.map(item => {
+                const value = item.count && counts?.[item.count];
+                const alert = item.count === 'alerts';
+                return <a key={item.page} href={`#/${item.page}`} className="nav-item" aria-current={page === item.page ? 'page' : undefined}>
+                  {item.icon}{item.label}
+                  {alert ? !!value && <span className="nav-count alert" aria-label={`${value} 项需要处理`}>{value}</span> : value !== undefined && <span className="nav-count">{value}</span>}
+                </a>;
+              })}
+            </div>)}
+          </nav>
+          <div className="account">
+            <Dropdown trigger={['click']} placement="topLeft" menu={{ items: [
+              { key: 'note', type: 'group', label: '会话空闲 24 小时或登录满 7 天后需重新登录' },
+              { key: 'logout', label: '退出登录', onClick: () => void endSession() },
+              { key: 'revoke', label: '退出所有会话', danger: true, onClick: () => void endSession(true) },
+            ] }}>
+              <button type="button" className="nav-item" disabled={busy}><UserOutlined />管理员</button>
+            </Dropdown>
+          </div>
+        </aside>
+        <main className="main">
+          <div className="page" key={page}>
+            {error && <Alert title={error} type="error" showIcon className="message" />}
+            {page === 'overview' ? <Overview onSessionExpired={expired} />
+              : page === 'nodes' ? <Nodes focus={route.focus} onSessionExpired={expired} />
+              : page === 'entry-groups' ? <EntryGroups focus={route.focus} onSessionExpired={expired} />
+              : page === 'exit-groups' ? <ExitGroups onSessionExpired={expired} />
+              : page === 'rules' ? <Rules onSessionExpired={expired} />
+              : page === 'dns-watch' ? <DNSWatch onSessionExpired={expired} />
+              : page === 'events' ? <Events onSessionExpired={expired} />
+              : page === 'telegram' ? <Telegram onSessionExpired={expired} />
+              : page === 'retention' ? <Retention onSessionExpired={expired} />
+              : <Security onSessionExpired={expired} onPasswordChanged={() => { setNotice('密码已修改，全部会话已退出，请使用新密码登录。'); void refresh(); }} />}
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   const setup = status.setup_required;
   return (
     <main className="auth-page">
-      <section className="auth-intro">
-        <div className="intro-brand"><span className="brand-mark">n</span>nbpass</div>
-        <div><div className="eyebrow">你的网络 · 你的掌控</div><h1>让每一次连接<br />都有条不紊。</h1><p>统一管理节点与转发规则，<br />从一个可靠的面板开始。</p></div>
-        <div className="intro-footer">流量转发面板</div>
-      </section>
-      <section className="auth-form-region">
-        <Card className="auth-card" variant="borderless">
-          <Typography.Text className="step-label">{setup ? '首次使用' : '管理员访问'}</Typography.Text>
-          <Typography.Title level={2}>{setup ? '设置管理员密码' : '登录面板'}</Typography.Title>
-          <Typography.Paragraph type="secondary">{setup ? '为面板设置一个只有你知道的密码。' : '输入管理员密码，继续管理你的网络。'}</Typography.Paragraph>
+      <div className="auth-box">
+        <div className="auth-brand"><span className="brand-mark">n</span>nbpass</div>
+        <section className="auth-card">
+          <h1>{setup ? '设置管理员密码' : '登录面板'}</h1>
+          <p className="lead">{setup ? '首次使用，请设置一个 12–72 字节的密码。' : '输入管理员密码。'}</p>
           {error && <Alert title={error} type="error" showIcon className="message" />}
           {notice && <Alert title={notice} type="success" showIcon className="message" />}
           <Form form={form} layout="vertical" onFinish={submit} requiredMark={false} clearOnDestroy>
-            <Form.Item name="password" label="管理员密码" rules={[{ required: true, message: '请输入管理员密码' }, ...(setup ? [{ validator: async (_: unknown, value: string) => { const size = new TextEncoder().encode(value ?? '').length; if (size < 12 || size > 72) throw new Error('密码须为 12–72 字节'); } }] : [])]}>
-              <Input.Password size="large" placeholder={setup ? '设置一个足够长的密码' : '输入管理员密码'} autoComplete={setup ? 'new-password' : 'current-password'} autoFocus />
+            <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入管理员密码' }, ...(setup ? [{ validator: async (_: unknown, value: string) => { const size = new TextEncoder().encode(value ?? '').length; if (size < 12 || size > 72) throw new Error('密码须为 12–72 字节'); } }] : [])]}>
+              <Input.Password autoComplete={setup ? 'new-password' : 'current-password'} autoFocus />
             </Form.Item>
-            {setup && <Form.Item name="confirmation" label="确认密码" dependencies={['password']} rules={[{ required: true, message: '请再次输入密码' }, { validator: async (_, value) => { if (value && value !== form.getFieldValue('password')) throw new Error('两次密码不一致'); } }]}><Input.Password size="large" placeholder="再次输入密码" autoComplete="new-password" /></Form.Item>}
-            <Button type="primary" htmlType="submit" size="large" block loading={busy}>{setup ? '设置密码' : '登录'}</Button>
+            {setup && <Form.Item name="confirmation" label="确认密码" dependencies={['password']} rules={[{ required: true, message: '请再次输入密码' }, { validator: async (_, value) => { if (value && value !== form.getFieldValue('password')) throw new Error('两次密码不一致'); } }]}><Input.Password autoComplete="new-password" /></Form.Item>}
+            <Button type="primary" htmlType="submit" block loading={busy}>{setup ? '设置密码' : '登录'}</Button>
           </Form>
-          <Typography.Paragraph type="secondary" className="auth-hint">{setup ? '请妥善保管密码。设置完成后即可登录。' : '请在自己的设备上登录，使用完毕后安全退出。'}</Typography.Paragraph>
-        </Card>
-      </section>
+        </section>
+        <p className="auth-foot">{setup ? '设置完成后使用新密码登录。' : '使用完毕后请退出登录。'}</p>
+      </div>
     </main>
   );
 }
 
+const theme = {
+  token: {
+    colorPrimary: '#2563eb', colorLink: '#2563eb', colorText: '#18181b', colorTextSecondary: '#5f5f67', colorTextTertiary: '#75757d',
+    colorBorder: '#e8e8eb', colorBorderSecondary: '#e8e8eb', colorSuccess: '#16a34a', colorWarning: '#d97706', colorError: '#dc2626',
+    borderRadius: 6, borderRadiusLG: 8, fontSize: 14, controlHeight: 32,
+    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Segoe UI', 'Microsoft YaHei', sans-serif",
+    fontFamilyCode: "'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace",
+    boxShadowSecondary: '0 1px 2px rgb(0 0 0 / 4%), 0 8px 24px -8px rgb(0 0 0 / 14%)',
+    motionDurationMid: '0.15s', motionDurationSlow: '0.2s',
+  },
+  components: {
+    Button: { primaryShadow: 'none', defaultShadow: 'none', dangerShadow: 'none', fontWeight: 500 },
+    Table: { headerBg: '#fafafa', headerColor: '#5f5f67', headerSplitColor: 'transparent', cellPaddingBlock: 10, cellPaddingInline: 12, rowHoverBg: '#fafafa', headerBorderRadius: 0 },
+    Card: { headerFontSize: 14 },
+    Modal: { titleFontSize: 16 },
+    Tag: { defaultBg: '#f4f4f5' },
+  },
+};
+
 createRoot(document.getElementById('root')!).render(
-  <React.StrictMode><ConfigProvider locale={zhCN} theme={{ token: { colorPrimary: '#185adb', borderRadius: 10, fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif' } }}><App /></ConfigProvider></React.StrictMode>,
+  <React.StrictMode><ConfigProvider locale={zhCN} theme={theme} button={{ autoInsertSpace: false }}><AntApp><App /></AntApp></ConfigProvider></React.StrictMode>,
 );

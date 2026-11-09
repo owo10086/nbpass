@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Form, Input, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Form, Input, Select, Space, Table, Typography } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
+import { PageHeader } from './PageHeader';
 import { api, APIError } from './api';
 
 type EventRow = {
@@ -60,27 +62,31 @@ export function Events({ onSessionExpired }: { onSessionExpired: () => void }) {
   }
 
   return <>
-    <div className="nodes-heading"><div><Typography.Title level={2}>事件日志</Typography.Title><Typography.Paragraph type="secondary">按发生时间追查节点事件；离线补报保留原始发生时间，缺失记录会显示缺口。</Typography.Paragraph></div><Button loading={loading} onClick={() => void load()}>刷新</Button></div>
-    <Card className="message">
-      <Form layout="inline" onFinish={search} style={{ gap: 12 }}>
+    <PageHeader title="事件日志" description="按发生时间追查节点事件；离线补报保留原始发生时间，缺失记录会显示缺口。">
+      <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
+    </PageHeader>
+    <div className="toolbar">
+      <Form layout="inline" colon={false} onFinish={search} style={{ rowGap: 8 }}>
         <Form.Item name="node_id" label="节点"><Select allowClear showSearch optionFilterProp="label" placeholder="全部节点" style={{ minWidth: 170 }} options={nodes.map(node => ({ value: node.id, label: node.name }))} /></Form.Item>
         <Form.Item name="type" label="类型"><Select allowClear showSearch placeholder="全部类型" style={{ minWidth: 160 }} options={Object.entries(labels).map(([value, label]) => ({ value, label }))} /></Form.Item>
         <Form.Item name="from" label="开始"><Input type="datetime-local" step="1" /></Form.Item>
         <Form.Item name="to" label="结束"><Input type="datetime-local" step="1" /></Form.Item>
         <Form.Item><Button type="primary" htmlType="submit" loading={loading}>筛选</Button></Form.Item>
       </Form>
-    </Card>
+    </div>
     {error && <Alert title={error} type="error" showIcon className="message" />}
-    <Card styles={{ body: { padding: 0 } }}>
+    <div className="panel">
       <Table<EventRow> rowKey="sequence" dataSource={rows} loading={loading} pagination={false} scroll={{ x: 1100 }} locale={{ emptyText: '暂无符合条件的事件' }} columns={[
-        { title: '发生时间', dataIndex: 'occurred_at', render: date, width: 185 },
+        { title: '发生时间', dataIndex: 'occurred_at', render: value => <span className="num">{date(value)}</span>, width: 185 },
         { title: '节点', key: 'node', render: (_, row) => row.node_name || row.node_id || '面板' },
-        { title: '类型', dataIndex: 'type', render: (type: string) => <Tag color={type === 'event_gap' ? 'orange' : type === 'sync_failed' ? 'red' : 'blue'}>{labels[type] || type}</Tag> },
+        { title: '类型', dataIndex: 'type', render: (type: string) => <span className="status"><span className={`dot ${type === 'event_gap' ? 'warn' : type === 'sync_failed' ? 'danger' : ''}`} />{labels[type] || type}</span> },
         { title: '详情', key: 'message', render: (_, row) => <Space orientation="vertical" size={2}><span>{row.message}</span>{row.gap && <Typography.Text type="warning">{row.gap.reason === 'overflow' ? '队列容量不足' : '超过补报期限'}，缺失 {row.gap.count} 条（{date(row.gap.from)} 至 {date(row.gap.to)}）</Typography.Text>}</Space> },
-        { title: '配置版本', dataIndex: 'config_revision', width: 100 },
-        { title: '来源 / 收到时间', key: 'received', width: 185, render: (_, row) => <Space orientation="vertical" size={0}><span>{row.source === 'panel' ? '面板' : '节点上报'}</span><Typography.Text type="secondary">{date(row.received_at)}</Typography.Text></Space> },
+        { title: '配置版本', dataIndex: 'config_revision', width: 100, render: value => <span className="mono">{value ?? '—'}</span> },
+        { title: '来源 / 收到时间', key: 'received', width: 185, render: (_, row) => <>{row.source === 'panel' ? '面板' : '节点上报'}<span className="cell-sub num">{date(row.received_at)}</span></> },
       ]} />
-      <div style={{ padding: 16, textAlign: 'center' }}><Button disabled={next === null} loading={loading} onClick={() => next !== null && void load(next)}>{next === null ? '已显示全部事件' : '加载更早的记录'}</Button></div>
-    </Card>
+      <div className="panel-foot"><Button size="small" disabled={next === null} loading={loading} onClick={() => next !== null && void load(next)}>{next === null ? '已显示全部事件' : '加载更早的记录'}</Button></div>
+    </div>
   </>;
 }
+
+export { labels as eventLabels };

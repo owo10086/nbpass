@@ -1,4 +1,4 @@
-import { Alert, Space, Table, Tag, Typography } from 'antd';
+import { Space, Table, Tag, Typography } from 'antd';
 
 export type SyncMember = {
   node_id: string; node_name: string; connected: boolean; listen_port: number;
@@ -36,5 +36,5 @@ export function GroupSyncDetails({ members }: { members: GroupSyncMember[] }) {
 }
 
 export function SyncHelp() {
-  return <Alert type="info" showIcon style={{ marginTop: 16 }} title="展开查看每个成员的实际生效版本与错误。" description="失联成员显示待确认；部分规则成功时，节点的已应用版本仍保留在上一次完整成功的版本。停用规则显示正常，表示节点已确认撤销监听。" />;
+  return <p className="footnote">展开行查看每个成员的实际生效版本与错误。失联成员显示待确认；部分规则成功时，节点的已应用版本仍保留在上一次完整成功的版本。停用规则显示正常，表示节点已确认撤销监听。</p>;
 }

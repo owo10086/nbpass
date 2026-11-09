@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Drawer, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Drawer, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { PlusOutlined, ReloadOutlined, SettingOutlined } from '@ant-design/icons';
+import { PageHeader } from './PageHeader';
 import { api, APIError } from './api';
 
 type Resolver = { kind: 'dns' | 'doh'; address: string };
@@ -81,18 +83,20 @@ export function DNSWatch({ onSessionExpired }: { onSessionExpired: () => void })
   }
   const pathName = (path: { node_id: string; resolver: string }) => `${path.node_id ? nodes[path.node_id] ?? '国内检测点' : '面板本机 DoH'} · ${path.resolver}`;
   return <>
-    <Typography.Title level={2}>解析监控</Typography.Title>
-    <Typography.Paragraph type="secondary">每 5 分钟查询 A 记录，入口切换后每 30 秒观察传播。手工域名期望 IP 可选；入口组域名的期望由活动入口维护。同路径连续 3 次不符才判异常，旧 TTL 内的旧值享受缓存宽限。</Typography.Paragraph>
+    <PageHeader title="解析监控" description="每 5 分钟查询 A 记录，入口切换后每 30 秒观察传播。手工域名期望 IP 可选；入口组域名的期望由活动入口维护。同路径连续 3 次不符才判异常，旧 TTL 内的旧值享受缓存宽限。">
+      <Button icon={<ReloadOutlined />} onClick={() => void load().catch(failed)} aria-label="刷新" />
+      <Button icon={<SettingOutlined />} onClick={() => void openSettings()}>解析器设置</Button>
+      <Button type="primary" icon={<PlusOutlined />} onClick={() => edit()}>添加域名</Button>
+    </PageHeader>
     {error && <Alert className="message" title={error} type="error" showIcon />}
-    <Space wrap style={{ marginBottom: 16 }}><Button type="primary" onClick={() => edit()}>添加域名</Button><Button onClick={() => void openSettings()}>解析器设置</Button><Button onClick={() => void load().catch(failed)}>刷新</Button></Space>
-    <Card styles={{ body: { padding: 0 } }}><Table rowKey="id" dataSource={rows} scroll={{ x: 1000 }} columns={[
-      { title: '域名', dataIndex: 'domain', render: (_, row) => <Button type="link" onClick={() => setSelected(row.id)}>{row.domain}</Button> },
-      { title: '期望 IP', render: (_, row) => row.expected_ips.length ? ips(row.expected_ips) : '仅观察' },
-      { title: '状态', render: (_, row) => <Space orientation="vertical"><Tag color={color(row.status)}>{row.status}</Tag>{row.propagation_status && <Tag>{row.propagation_status}</Tag>}<Typography.Text type="secondary">{row.coverage_label}</Typography.Text></Space> },
-      { title: '变化次数', dataIndex: 'change_count' }, { title: '不同 IP 数', dataIndex: 'different_ip_count' },
-      { title: '下次查询', dataIndex: 'next_sample_at', render: date },
-      { title: '操作', render: (_, row) => row.entry_group_id ? <Typography.Text type="secondary">入口组自动管理</Typography.Text> : <Space><Button onClick={() => edit(row)}>修改期望</Button><Popconfirm title={`删除 ${row.domain} 的解析监控及历史？`} onConfirm={() => remove(row.id)}><Button danger loading={busy}>删除</Button></Popconfirm></Space> },
-    ]} /></Card>
+    <div className="panel"><Table rowKey="id" dataSource={rows} pagination={false} scroll={{ x: 1000 }} locale={{ emptyText: '暂无解析监控。添加域名后每 5 分钟查询一次。' }} columns={[
+      { title: '域名', dataIndex: 'domain', render: (_, row) => <Typography.Link className="node-name" onClick={() => setSelected(row.id)}>{row.domain}</Typography.Link> },
+      { title: '期望 IP', render: (_, row) => row.expected_ips.length ? <span className="mono">{ips(row.expected_ips)}</span> : <span className="muted">仅观察</span> },
+      { title: '状态', render: (_, row) => <><Tag color={color(row.status)}>{row.status}</Tag>{row.propagation_status && <Tag>{row.propagation_status}</Tag>}<span className="cell-sub">{row.coverage_label}</span></> },
+      { title: '变化次数', dataIndex: 'change_count', render: value => <span className="num">{value}</span> }, { title: '不同 IP 数', dataIndex: 'different_ip_count', render: value => <span className="num">{value}</span> },
+      { title: '下次查询', dataIndex: 'next_sample_at', render: value => <span className="num">{date(value)}</span> },
+      { title: '', key: 'actions', align: 'right', render: (_, row) => row.entry_group_id ? <span className="muted">入口组自动管理</span> : <div className="row-actions"><Button size="small" type="text" onClick={() => edit(row)}>修改期望</Button><Popconfirm title={`删除 ${row.domain} 的解析监控及历史？`} onConfirm={() => remove(row.id)}><Button danger size="small" type="text" loading={busy}>删除</Button></Popconfirm></div> },
+    ]} /></div>
     <Modal title={editing === 'new' ? '添加解析监控' : '修改期望 IP'} open={!!editing} onCancel={() => setEditing(undefined)} onOk={() => form.submit()} confirmLoading={busy} destroyOnHidden>
       {error && <Alert title={error} type="error" showIcon />}
       <Form form={form} layout="vertical" onFinish={save}><Form.Item name="domain" label="域名" rules={[{ required: true, message: '请输入纯域名' }]}><Input disabled={editing !== 'new'} placeholder="example.com" /></Form.Item><Form.Item name="expected" label="期望 IPv4（可选，每行一个）"><Input.TextArea rows={3} placeholder="留空只记录变化" /></Form.Item></Form>
@@ -102,7 +106,7 @@ export function DNSWatch({ onSessionExpired }: { onSessionExpired: () => void })
       {error && <Alert title={error} type="error" showIcon />}
       <Form form={resolverForm} onFinish={saveSettings} layout="vertical"><Form.List name="resolvers">{(fields, { add, remove }) => <>{fields.map(field => <Space key={field.key} align="baseline" wrap><Form.Item name={[field.name, 'kind']} rules={[{ required: true }]}><Select style={{ width: 120 }} options={[{ value: 'dns', label: '国内 DNS' }, { value: 'doh', label: '面板 DoH' }]} /></Form.Item><Form.Item name={[field.name, 'address']} rules={[{ required: true, message: '请输入解析器地址' }]}><Input style={{ width: 330, maxWidth: '100%' }} /></Form.Item><Button danger onClick={() => remove(field.name)}>移除</Button></Space>)}<Button disabled={fields.length >= 8} onClick={() => add({ kind: 'dns', address: '' })}>增加解析器</Button></>}</Form.List></Form>
     </Modal>
-    <Drawer title={detail?.domain ?? '解析详情'} open={!!selected} onClose={() => setSelected(undefined)} width={1050} destroyOnHidden loading={!detail}>
+    <Drawer title={detail?.domain ?? '解析详情'} open={!!selected} onClose={() => setSelected(undefined)} size={1050} destroyOnHidden loading={!detail}>
       {detail && <Space orientation="vertical" size="large" style={{ width: '100%' }}>
         <Space wrap><Tag color={color(detail.status)}>{detail.status}</Tag><span>{detail.coverage_label}</span><span>期望版本 {detail.expected_version} · 变化 {detail.change_count} 次 · 不同 IP {detail.different_ip_count} 个</span></Space>
         <Typography.Text>期望：{detail.expected_ips.length ? ips(detail.expected_ips) : '仅观察'}；下次查询：{date(detail.next_sample_at)}</Typography.Text>
@@ -111,7 +115,7 @@ export function DNSWatch({ onSessionExpired }: { onSessionExpired: () => void })
           { title: '状态', dataIndex: 'status', render: value => <Tag color={color(value)}>{value}</Tag> },
           { title: '连续不符', dataIndex: 'consecutive_mismatches' }, { title: '最近采样', dataIndex: 'sampled_at', render: date },
         ]} />
-        <Typography.Title level={4}>解析变化与失败历史</Typography.Title>
+        <div className="section-title" style={{ margin: 0 }}><h2>解析变化与失败历史</h2></div>
         <Typography.Text type="secondary">首次成功建立基线；地址集合变化才增加变化次数，解析失败保留上次成功基线。不同 IP 数为所有路径成功观察值的去重总数。</Typography.Text>
         <Table rowKey="sequence" size="small" scroll={{ x: 850 }} dataSource={detail.history ?? []} columns={[
           { title: '时间', dataIndex: 'sampled_at', render: date, width: 180 },
