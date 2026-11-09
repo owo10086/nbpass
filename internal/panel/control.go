@@ -19,6 +19,7 @@ import (
 )
 
 type controlSession struct {
+	upgradeCapable         bool
 	rotationRecheckCapable bool
 	done                   chan struct{}
 	once                   sync.Once
@@ -200,9 +201,14 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 			response.DnsWatchTasks = nil
 			checkerTasks := response.CheckerTasks
 			response.CheckerTasks = nil
+			upgrade := response.UpgradeManifest
+			response.UpgradeManifest = nil
 			command := response.RotationCommand
 			response.RotationCommand = nil
 			err := stream.Send(response)
+			if err == nil && len(upgrade) > 0 {
+				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, UpgradeOnly: true, UpgradeManifest: upgrade})
+			}
 			if err == nil && command != nil {
 				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: response.DesiredRevision, RotationCommand: command})
 			}
@@ -275,7 +281,7 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 
 // 独立上报不能续期活性、附带配置或打开跨节点授权门禁。
 func independentNodeReport(report *controlpb.NodeReport) bool {
-	return report.ProbeOnly || report.EventsOnly || report.RotationOnly || report.SelfCheckOnly || report.DnsWatchOnly || report.TrafficOnly || report.CheckerOnly
+	return report.UpgradeOnly || report.ProbeOnly || report.EventsOnly || report.RotationOnly || report.SelfCheckOnly || report.DnsWatchOnly || report.TrafficOnly || report.CheckerOnly
 }
 
 func validateReport(report *controlpb.NodeReport) error {
@@ -409,6 +415,12 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 			return nil, status.Error(codes.InvalidArgument, "恢复证据无法保存")
 		}
 	}
+	if report.UpgradeOnly {
+		if err := p.acceptUpgrade(ctx, id, report.UpgradeProgress); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "升级进度无效")
+		}
+		return &controlpb.PanelMessage{ProtocolVersion: 1, UpgradeOnly: true}, nil
+	}
 	if report.CheckerOnly {
 		ack, err := p.acceptCheckerResults(ctx, id, report.CheckerResults)
 		if err != nil {
@@ -459,12 +471,16 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 	}
 	heartbeat := !independentNodeReport(report) && report.AttemptedRevision == 0
 	if heartbeat {
+		session.upgradeCapable = report.UpgradeCapable
 		session.rotationRecheckCapable = report.RotationRecheckCapable
 		if err := p.recordNodeIP(ctx, id, report.PublicIpv4); err != nil {
 			return nil, status.Error(codes.Unavailable, "存储暂不可用")
 		}
 		if err := p.recordHeartbeat(ctx, id, report.SoftwareVersion, digest); err != nil {
 			return nil, status.Error(codes.Unavailable, "存储暂不可用")
+		}
+		if err := p.confirmUpgrade(ctx, id, session.instance, report.SoftwareVersion); err != nil {
+			return nil, status.Error(codes.Unavailable, "升级确认无法保存")
 		}
 	}
 	// 只有当前期望版本与摘要的确认才更新应用结果；旧版本只证明活性。

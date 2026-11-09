@@ -4,15 +4,18 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"flag"
 	"log"
 	"os"
 	"os/signal"
+	"runtime"
 	"syscall"
 
 	"nbpass/internal/forwarding"
 	"nbpass/internal/node"
+	"nbpass/internal/nodeupdate"
 	"nbpass/internal/platform"
 )
 
@@ -26,6 +29,9 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	updateService := flag.Bool("update-service", false, "运行独立固定路径更新服务")
+	updateOrigin := flag.String("update-origin", "", "更新服务的固定 HTTPS 面板源")
+	updateCheck := flag.Bool("update-check", false, "执行候选程序自检并输出版本与平台")
 	control := flag.String("control-url", "", "经 TLS 校验的 HTTPS 控制地址（必填）")
 	ticket := flag.String("ticket", "", "首次接入或重新安装的一次性安装票据")
 	dir := flag.String("data-dir", "/var/lib/nbpass-node", "节点凭据与本机密钥专用目录")
@@ -47,7 +53,16 @@ func run(ctx context.Context) error {
 			return errors.New("控制端点 CA 文件无有效证书")
 		}
 	}
+	if *updateCheck {
+		return json.NewEncoder(os.Stdout).Encode(nodeupdate.Identity{Version: node.SoftwareVersion, Platform: runtime.GOOS + "/" + runtime.GOARCH})
+	}
+	if *updateService {
+		return runUpdateService(ctx, *updateOrigin, roots)
+	}
+	updater := nodeupdate.NewUnixClient()
+
 	return node.Run(ctx, node.Config{ControlURL: *control, InstallationTicket: *ticket, EnrollOnly: *enroll}, node.Dependencies{
+		Updater: updater, LocalHealth: writeLocalHealth(),
 		Clock: platform.RealClock{}, Store: node.FileStore{Dir: *dir, Random: rand.Reader}, Random: rand.Reader, RootCAs: roots,
 		Forwarding: forwarding.Dependencies{Limits: *limits},
 	})
