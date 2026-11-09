@@ -75,13 +75,17 @@ func (s *tunnelSelection) dial(ctx context.Context, cleanups ...*tunnelAttemptCl
 	seen := map[string]bool{}
 	var last error = errors.New("没有已确认且健康的出口")
 	for _, c := range s.clients {
-		if c == nil || seen[c.endpoint.NodeId] || !c.available() {
+		if c == nil {
+			continue
+		}
+		exitID := c.currentEndpoint().NodeId
+		if seen[exitID] || !c.available() {
 			continue
 		}
 		if len(seen) == 3 || ctx.Err() != nil {
 			break
 		}
-		seen[c.endpoint.NodeId] = true
+		seen[exitID] = true
 		conn, err := c.dial(ctx, s.rule, cleanup)
 		if err == nil {
 			return conn, nil

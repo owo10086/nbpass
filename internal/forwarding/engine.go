@@ -129,7 +129,7 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 	}
 	for _, r := range s.Rules {
 		result := &controlpb.RuleApplyResult{RuleId: r.Id, ApplyError: "配置应用尚未完成"}
-		if current := e.rules[r.Id]; current != nil && sameListenerRule(current.config, r) && proto.Equal(current.exit, groups[r.ExitGroupId]) {
+		if current := e.rules[r.Id]; current != nil && sameListenerRule(current.config, r) && sameTunnelGroupRoutes(current.exit, groups[r.ExitGroupId]) {
 			checkpoint.Rules = append(checkpoint.Rules, r)
 			result.AppliedRevision, result.ApplyError = s.Revision, ""
 		}
@@ -204,12 +204,16 @@ func (e *Engine) applyTunnelClients(endpoints map[string]*controlpb.TunnelEndpoi
 	e.healthMu.Lock()
 	defer e.healthMu.Unlock()
 	for id, client := range e.tunnelClients {
-		if !proto.Equal(client.endpoint, endpoints[id]) {
+		same := sameTunnelRoute(client.currentEndpoint(), endpoints[id])
+		if !same {
 			client.close()
 			delete(e.tunnelClients, id)
 		}
 	}
 	for id, ep := range endpoints {
+		if e.tunnelClients[id] != nil {
+			e.tunnelClients[id].updateEndpoint(ep)
+		}
 		if e.tunnelClients[id] == nil {
 			client := &tunnelClient{endpoint: proto.Clone(ep).(*controlpb.TunnelEndpoint), engine: e}
 			e.tunnelClients[id] = client
@@ -407,7 +411,7 @@ func (e *Engine) dialTargetWithin(ctx context.Context, r *controlpb.ForwardRule,
 func (e *Engine) applyTunnelServer(config *controlpb.TunnelServer) error {
 	if e.tunnelServer != nil {
 		old := e.tunnelServer.config
-		if config == nil || old.ListenPort != config.ListenPort || !bytes.Equal(old.CertificatePem, config.CertificatePem) || !bytes.Equal(old.PrivateKeyPem, config.PrivateKeyPem) {
+		if config == nil || old.ListenPort != config.ListenPort || old.ServerName != config.ServerName || old.RotationId == "" && config.RotationId == "" && (!bytes.Equal(old.CertificatePem, config.CertificatePem) || !bytes.Equal(old.PrivateKeyPem, config.PrivateKeyPem)) {
 			e.tunnelServer.close()
 			e.tunnelServer = nil
 		} else {

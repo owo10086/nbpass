@@ -14,6 +14,10 @@ func streamAuthorization(entry string, rule *controlpb.ForwardRule) tunnelReques
 
 func (s *tunnelServer) authorizeStream(auth tunnelAuth, request tunnelRequest) *controlpb.ForwardRule {
 	rule := s.authorized(auth.EntryID, auth.Credential, request.RuleID)
+	return matchStreamAuthorization(rule, auth, request)
+}
+
+func matchStreamAuthorization(rule *controlpb.ForwardRule, auth tunnelAuth, request tunnelRequest) *controlpb.ForwardRule {
 	if rule == nil || rule.AuthorizationGeneration != request.Generation {
 		return nil
 	}
@@ -39,7 +43,7 @@ func (s *tunnelServer) watchStreamAuthorization(ctx context.Context, cancel cont
 			case <-ctx.Done():
 				return
 			case <-timer.C():
-				if s.authorizeStream(auth, request) == nil {
+				if s.authorizeExistingStream(auth, request) == nil {
 					cancel()
 					stream.Close()
 					return
