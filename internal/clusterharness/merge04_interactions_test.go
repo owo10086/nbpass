@@ -39,7 +39,8 @@ func TestTunnelCacheSurvivesOfflineNodeRestart(t *testing.T) {
 	exitNode.Restart()
 	// 等待缓存 bind；不依赖面板已应用确认。
 	deadline := time.Now().Add(5 * time.Second)
-	for _, p := range []int{port, tunnelPort} {
+	// 先等出口监听恢复，避免入口端口轮询本身触发一次真实拨号失败（票12会立即标故障）。
+	for _, p := range []int{tunnelPort, port} {
 		for {
 			conn, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(p)), 50*time.Millisecond)
 			if err == nil {

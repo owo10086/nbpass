@@ -219,7 +219,10 @@ func TestEntryManualSwitchMigrationPreservesExistingMainData(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for version, migration := range migrations[:len(migrations)-1] {
+	for version, migration := range migrations {
+		if migration == entryManualSwitchMigration {
+			break
+		}
 		if _, err := db.Exec(migration); err != nil {
 			t.Fatal(err)
 		}

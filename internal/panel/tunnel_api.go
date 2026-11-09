@@ -36,6 +36,7 @@ type exitGroupView struct {
 
 func (p *Panel) tunnelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/tunnel-exits", p.listTunnelExits)
+	mux.HandleFunc("GET /api/nodes/{id}/exit-health", p.getExitHealth)
 	mux.HandleFunc("PUT /api/nodes/{id}/tunnel", p.saveTunnelExit)
 	mux.HandleFunc("GET /api/exit-groups", p.listExitGroups)
 	mux.HandleFunc("POST /api/exit-groups", p.saveExitGroup)
@@ -154,7 +155,11 @@ func loadExitGroups(ctx context.Context, q queryer) ([]exitGroupView, error) {
 			return nil, err
 		}
 		g.Members = []string{id}
-		groups = append(groups, g)
+		if len(groups) > 0 && groups[len(groups)-1].ID == g.ID {
+			groups[len(groups)-1].Members = append(groups[len(groups)-1].Members, id)
+		} else {
+			groups = append(groups, g)
+		}
 	}
 	return groups, rows.Err()
 }
@@ -176,8 +181,8 @@ func (p *Panel) saveExitGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Name = strings.TrimSpace(body.Name)
-	if body.Name == "" || len(body.Name) > 200 || len(body.Members) != 1 || body.Strategy != forwarding.PrimaryBackup {
-		problem(w, 400, "出口组须有名称、一个已配置 WSS 的出口成员及主备策略")
+	if body.Name == "" || len(body.Name) > 200 || len(body.Members) == 0 || body.Strategy != forwarding.PrimaryBackup {
+		problem(w, 400, "出口组须有名称、不重复的已配置 WSS 出口成员（按主备顺序）及主备策略")
 		return
 	}
 	creating := r.Method == "POST"
@@ -192,11 +197,18 @@ func (p *Panel) saveExitGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
 		var n int
-		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM tunnel_exits WHERE node_id=?", body.Members[0]).Scan(&n); err != nil {
-			return err
-		}
-		if n != 1 {
-			return &forwardingError{400, "出口成员不存在或尚未配置 WSS"}
+		seen := map[string]bool{}
+		for _, member := range body.Members {
+			if seen[member] {
+				return &forwardingError{400, "出口成员不能重复"}
+			}
+			seen[member] = true
+			if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM tunnel_exits WHERE node_id=?", member).Scan(&n); err != nil {
+				return err
+			}
+			if n != 1 {
+				return &forwardingError{400, "出口成员不存在或尚未配置 WSS"}
+			}
 		}
 		if creating {
 			if _, err := tx.ExecContext(r.Context(), "INSERT INTO exit_groups(id,name,strategy) VALUES(?,?,?)", id, body.Name, body.Strategy); err != nil {
@@ -210,8 +222,12 @@ func (p *Panel) saveExitGroup(w http.ResponseWriter, r *http.Request) {
 		if _, err := tx.ExecContext(r.Context(), "DELETE FROM exit_group_members WHERE group_id=?", id); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(r.Context(), "INSERT INTO exit_group_members(group_id,node_id,position) VALUES(?,?,0)", id, body.Members[0])
-		return err
+		for position, member := range body.Members {
+			if _, err := tx.ExecContext(r.Context(), "INSERT INTO exit_group_members(group_id,node_id,position) VALUES(?,?,?)", id, member, position); err != nil {
+				return err
+			}
+		}
+		return nil
 	}) {
 		return
 	}

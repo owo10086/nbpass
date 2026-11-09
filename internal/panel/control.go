@@ -154,11 +154,8 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 	if err != nil {
 		return err
 	}
-	if first.DnsWatchOnly {
+	if independentNodeReport(first) {
 		return status.Error(codes.InvalidArgument, "首报告必须为活性报告")
-	}
-	if first.TrafficOnly {
-		return status.Error(codes.InvalidArgument, "流量报告不能建立控制会话")
 	}
 	if err := p.admitControl(stream.Context(), id, digest, session, first); err != nil {
 		return err
@@ -260,19 +257,24 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 				return err
 			}
 			report := message.report
-			heartbeat := !report.ProbeOnly && !report.EventsOnly && !report.RotationOnly && !report.SelfCheckOnly && !report.DnsWatchOnly && !report.TrafficOnly && !report.CheckerOnly && report.AttemptedRevision == 0
+			heartbeat := !independentNodeReport(report) && report.AttemptedRevision == 0
 			if heartbeat {
 				alive.Stop()
 				alive = p.deps.Clock.NewTimer(90 * time.Second)
 			}
 			// 配置确认没有回包；探针/事件回包不附配置，避免相互触发同步。
-			if heartbeat || report.ProbeOnly || report.EventsOnly || report.RotationOnly || report.SelfCheckOnly || report.DnsWatchOnly || report.TrafficOnly || report.CheckerOnly || len(response.AcknowledgedEventIds) > 0 {
+			if heartbeat || independentNodeReport(report) || len(response.AcknowledgedEventIds) > 0 {
 				if err := send(response, heartbeat); err != nil {
 					return err
 				}
 			}
 		}
 	}
+}
+
+// 独立上报不能续期活性、附带配置或打开跨节点授权门禁。
+func independentNodeReport(report *controlpb.NodeReport) bool {
+	return report.ProbeOnly || report.EventsOnly || report.RotationOnly || report.SelfCheckOnly || report.DnsWatchOnly || report.TrafficOnly || report.CheckerOnly
 }
 
 func validateReport(report *controlpb.NodeReport) error {
@@ -332,8 +334,12 @@ func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, sess
 		}
 	}
 	var authorizationChanges []string
+	var failoverChanged bool
 	if err == nil {
-		authorizationChanges, err = p.admitTunnelAuthorization(ctx, tx, id, previous != first.ProcessInstance, first.TunnelAuthorizationVersion)
+		failoverChanged, err = p.admitExitFailover(ctx, tx, id, first.ExitFailoverVersion)
+	}
+	if err == nil {
+		authorizationChanges, err = p.admitTunnelAuthorization(ctx, tx, id, previous != first.ProcessInstance, first.TunnelAuthorizationVersion, failoverChanged)
 	}
 	if err == nil {
 		err = tx.Commit()
@@ -412,7 +418,7 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		}
 		return &controlpb.PanelMessage{ProtocolVersion: 1}, nil
 	}
-	if !report.EventsOnly && report.AttemptedRevision == 0 {
+	if report.ProbeOnly || !independentNodeReport(report) && report.AttemptedRevision == 0 {
 		if err := p.storeProbe(ctx, id, session.instance, report.Probe); err != nil {
 			return nil, status.Error(codes.Unavailable, "探针存储暂不可用")
 		}
@@ -428,10 +434,10 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 	}
 	response := &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired), AcknowledgedEventIds: acked}
 	// 独立探针/事件只消费自己的载荷，不能确认或回退配置结果。
-	if report.ProbeOnly || report.EventsOnly {
+	if independentNodeReport(report) {
 		return response, nil
 	}
-	heartbeat := report.AttemptedRevision == 0
+	heartbeat := !independentNodeReport(report) && report.AttemptedRevision == 0
 	if heartbeat {
 		if err := p.recordNodeIP(ctx, id, report.PublicIpv4); err != nil {
 			return nil, status.Error(codes.Unavailable, "存储暂不可用")

@@ -69,6 +69,14 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 	legacyReady := map[[2]string]bool{}
 	pairs := map[string]bool{}
 	seenGroups := map[string]bool{}
+	failoverCapable := map[string]bool{}
+	for id := range compiled {
+		var version uint32
+		if err := tx.QueryRowContext(ctx, "SELECT exit_failover_version FROM nodes WHERE id=?", id).Scan(&version); err != nil {
+			return err
+		}
+		failoverCapable[id] = version == 1
+	}
 	for _, r := range rules {
 		if !r.Enabled || r.Kind != forwarding.Tunnel {
 			continue
@@ -78,6 +86,9 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 			return errors.New("隧道规则引用的出口组不存在")
 		}
 		for _, entry := range members[r.EntryGroupID] {
+			if len(g.Members) > 1 && !failoverCapable[entry] {
+				continue
+			}
 			groupKey := entry + ":" + g.ID
 			cg := &controlpb.ExitGroup{Id: g.ID, Strategy: controlpb.ExitStrategy_EXIT_STRATEGY_PRIMARY_BACKUP}
 			for _, exit := range g.Members {
@@ -98,7 +109,7 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 					config := r.Config()
 					config.AuthorizationGeneration = generations[r.ID]
 					server.Grants = append(server.Grants, &controlpb.TunnelGrant{EntryId: entry, Rule: config})
-				} else if legacy[[3]string{exit, entry, r.ID}] {
+				} else if len(g.Members) == 1 && legacy[[3]string{exit, entry, r.ID}] {
 					server.Grants = append(server.Grants, &controlpb.TunnelGrant{EntryId: entry, Rule: r.Config()})
 					legacyReady[[2]string{entry, r.ID}] = true
 				}
@@ -108,6 +119,18 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 				seenGroups[groupKey] = true
 			}
 		}
+	}
+	for entry, snapshot := range compiled {
+		if failoverCapable[entry] {
+			continue
+		}
+		var compatible []*controlpb.ForwardRule
+		for _, r := range snapshot.Rules {
+			if r.Kind != controlpb.RuleKind_RULE_KIND_TUNNEL || len(byGroup[r.ExitGroupId].Members) == 1 {
+				compatible = append(compatible, r)
+			}
+		}
+		snapshot.Rules = compatible
 	}
 	return gateTunnelRules(ctx, tx, compiled, capable, generations, byGroup, legacyReady)
 }

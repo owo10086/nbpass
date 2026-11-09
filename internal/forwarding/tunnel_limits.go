@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	yamux "github.com/libp2p/go-yamux/v5"
@@ -49,24 +50,26 @@ func (r *listenerRule) acceptTunnel(client net.Conn) {
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		defer lease.release()
+		cleanup := &tunnelAttemptCleanup{}
+		defer cleanup.after(lease.release)
 		defer finishTraffic()
 		defer r.engine.businessConnections.Add(^uint64(0))
 		defer r.untrack(client)
-		r.serveLimitedTunnel(client, lease)
+		r.serveLimitedTunnel(client, lease, cleanup)
 	}()
 }
 
-func (r *listenerRule) serveLimitedTunnel(client net.Conn, lease *resourceLease) {
+func (r *listenerRule) serveLimitedTunnel(client net.Conn, lease *resourceLease, cleanup *tunnelAttemptCleanup) {
 	ctx, cancel := context.WithCancel(r.ctx)
 	defer cancel()
 	input := newDirectInput(ctx, client, cancel, r.engine.deps.Clock)
 	defer func() { cancel(); client.Close(); <-input.done }()
-	if r.tunnel == nil {
+	selection := r.selection.Load()
+	if selection == nil {
 		return
 	}
-	target, err := r.tunnel.dial(ctx, r.config)
-	lease.dialDone()
+	target, err := selection.dial(ctx, cleanup)
+	cleanup.after(lease.dialDone)
 	if err != nil {
 		return
 	}
@@ -115,8 +118,12 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 		request = streamAuthorization(auth.EntryID, request.Check)
 	}
 	rule := s.authorizeStream(auth, request)
-	if rule == nil || lease != nil && !lease.assignRule(rule.Id) {
+	if rule == nil {
 		s.rejectStream(stream)
+		return
+	}
+	if lease != nil && !lease.assignRule(rule.Id) {
+		s.finishStream(stream, tunnelResult{Failure: failureLocal})
 		return
 	}
 	if check {
@@ -138,7 +145,11 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 		lease.dialDone()
 	}
 	if err != nil {
-		s.rejectStream(stream)
+		class := classifyTunnel(failTunnel(failureTarget, err))
+		if ctx.Err() != nil || s.authorizeStream(auth, request) == nil {
+			class = failureConfig
+		}
+		s.finishStream(stream, tunnelResult{Failure: class})
 		return
 	}
 	defer target.Close()
@@ -158,7 +169,7 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 }
 
 func (s *tunnelServer) rejectStream(stream net.Conn) {
-	s.finishStream(stream, tunnelResult{})
+	s.finishStream(stream, tunnelResult{Failure: failureConfig})
 }
 
 func (s *tunnelServer) finishStream(stream net.Conn, result tunnelResult) {
@@ -192,7 +203,7 @@ func (e *Engine) yamuxClientConfig() *yamux.Config {
 	return c
 }
 
-func (c *tunnelClient) openStream(ctx context.Context, session *yamux.Session) (*yamux.Stream, error) {
+func (c *tunnelClient) openStream(ctx context.Context, session *yamux.Session, cleanups ...*tunnelAttemptCleanup) (*yamux.Stream, error) {
 	if err := c.openMu.LockContext(ctx); err != nil {
 		return nil, err
 	}
@@ -220,7 +231,12 @@ func (c *tunnelClient) openStream(ctx context.Context, session *yamux.Session) (
 		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
-		(&tunnelStream{Stream: stream, engine: c.engine}).Close()
+		stream := &tunnelStream{Stream: stream, engine: c.engine}
+		if len(cleanups) > 0 {
+			cleanups[0].close(ctx, stream)
+		} else {
+			stream.Close()
+		}
 		return nil, err
 	}
 	return stream, nil
@@ -294,3 +310,37 @@ func (m *tunnelMutex) LockContext(ctx context.Context) error {
 
 func (m *tunnelMutex) Lock()   { _ = m.LockContext(context.Background()) }
 func (m *tunnelMutex) Unlock() { <-m.gate }
+
+// 单次连接的全部失败尝试共用回收登记；超时只结束调用方等待，
+// Reset 仍有独立的控制帧期限，回收完成前继续占用原有资源预算。
+type tunnelAttemptCleanup struct {
+	wg      sync.WaitGroup
+	pending atomic.Int64
+}
+
+func (c *tunnelAttemptCleanup) close(ctx context.Context, conn net.Conn) error {
+	done := make(chan error, 1)
+	c.wg.Add(1)
+	c.pending.Add(1)
+	go func() {
+		defer c.wg.Done()
+		err := conn.Close()
+		c.pending.Add(-1)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// 必须在本次所有尝试都已登记后调用；不会再与新的 Add 并发。
+func (c *tunnelAttemptCleanup) after(finish func()) {
+	if c.pending.Load() == 0 {
+		finish()
+		return
+	}
+	go func() { c.wg.Wait(); finish() }()
+}

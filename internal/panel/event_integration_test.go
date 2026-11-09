@@ -66,7 +66,7 @@ func TestEventMigrationPreservesVersionFiveProbeData(t *testing.T) {
 	}
 	for _, query := range []string{
 		"INSERT INTO nodes(id, name, created_at) VALUES('existing', '已有节点', 0)",
-		"INSERT INTO probe_realtime VALUES('existing', 'process', 42, 123, '{\"cpu_percent\":25}')",
+		"INSERT INTO probe_realtime(node_id,process_instance,sequence,received_at,values_json) VALUES('existing', 'process', 42, 123, '{\"cpu_percent\":25}')",
 		"INSERT INTO probe_minutes VALUES('existing', 60, 2, '{}')",
 	} {
 		if _, err := db.Exec(query); err != nil {

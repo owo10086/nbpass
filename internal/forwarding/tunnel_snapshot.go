@@ -30,14 +30,16 @@ func validateTunnelSnapshot(s *controlpb.ConfigSnapshot) error {
 	groups := map[string]bool{}
 	endpoints := map[string]*controlpb.TunnelEndpoint{}
 	for _, g := range s.ExitGroups {
-		if g == nil || g.Id == "" || groups[g.Id] || g.Strategy != controlpb.ExitStrategy_EXIT_STRATEGY_PRIMARY_BACKUP || len(g.Exits) != 1 {
+		if g == nil || g.Id == "" || groups[g.Id] || g.Strategy != controlpb.ExitStrategy_EXIT_STRATEGY_PRIMARY_BACKUP || len(g.Exits) == 0 {
 			return invalid
 		}
 		groups[g.Id] = true
+		seen := map[string]bool{}
 		for _, ep := range g.Exits {
-			if ep == nil || ep.NodeId == "" || ep.EntryId == "" || len(ep.Credential) != 43 || ep.Port < 1 || ep.Port > 65535 || ep.Transport != controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS {
+			if ep == nil || ep.NodeId == "" || seen[ep.NodeId] || ep.EntryId == "" || len(ep.Credential) != 43 || ep.Port < 1 || ep.Port > 65535 || ep.Transport != controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS {
 				return invalid
 			}
+			seen[ep.NodeId] = true
 			ip, err := netip.ParseAddr(ep.Address)
 			if err != nil || !AllowedIP(ip, true) {
 				return invalid
@@ -52,6 +54,32 @@ func validateTunnelSnapshot(s *controlpb.ConfigSnapshot) error {
 		}
 	}
 	for _, r := range s.Rules {
+		if r.Kind == controlpb.RuleKind_RULE_KIND_TUNNEL {
+			var group *controlpb.ExitGroup
+			for _, g := range s.ExitGroups {
+				if g.Id == r.ExitGroupId {
+					group = g
+					break
+				}
+			}
+			if group == nil {
+				return invalid
+			}
+			if len(group.Exits) > 1 && len(r.AuthorizedExitIds) == 0 {
+				return invalid
+			}
+			seen := map[string]bool{}
+			for _, id := range r.AuthorizedExitIds {
+				found := false
+				for _, ep := range group.Exits {
+					found = found || ep.NodeId == id
+				}
+				if !found || seen[id] {
+					return invalid
+				}
+				seen[id] = true
+			}
+		}
 		if r.Kind == controlpb.RuleKind_RULE_KIND_TUNNEL && !groups[r.ExitGroupId] || r.Kind == controlpb.RuleKind_RULE_KIND_DIRECT && r.ExitGroupId != "" {
 			return invalid
 		}
