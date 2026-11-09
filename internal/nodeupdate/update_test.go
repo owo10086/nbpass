@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -134,14 +135,14 @@ func TestFixedInstallerRollsBackOnlyBinary(t *testing.T) {
 }
 
 func TestCandidateIdentityAndMutationAreRejectedBeforeSwitch(t *testing.T) {
-	for _, kind := range []string{"version", "platform", "mutation"} {
+	for _, kind := range []string{"version", "platform", "mutation", "state_format"} {
 		t.Run(kind, func(t *testing.T) {
 			dir := realTemp(t)
 			path := filepath.Join(dir, "nbpass-node")
 			os.WriteFile(path, []byte("old"), 0700)
 			data := []byte("new")
 			m := manifest(data)
-			installer := &FixedInstaller{Path: path, allowedDir: dir, Check: func(_ context.Context, p string) (Identity, error) {
+			installer := &FixedInstaller{Path: path, allowedDir: dir, Restart: func(context.Context) error { return nil }, Healthy: func(context.Context) error { return nil }, Check: func(_ context.Context, p string) (Identity, error) {
 				i := Identity{Version: m.Version, Platform: m.Platform}
 				if kind == "version" {
 					i.Version = "wrong"
@@ -151,6 +152,11 @@ func TestCandidateIdentityAndMutationAreRejectedBeforeSwitch(t *testing.T) {
 				}
 				if kind == "mutation" {
 					os.WriteFile(p, []byte("changed"), 0700)
+				}
+				if kind == "state_format" {
+					// A writer of state format 2 would break the rollback binary's format-1 reader.
+					raw, _ := json.Marshal(map[string]any{"version": m.Version, "platform": m.Platform, "compatibility": map[string]any{"control_min": 1, "control_max": 2, "tunnel_min": 1, "tunnel_max": 1, "state_min": 1, "state_max": 2, "state_write": 2}})
+					json.Unmarshal(raw, &i)
 				}
 				return i, nil
 			}}

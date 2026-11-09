@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"syscall"
 
+	"nbpass/internal/compatibility"
 	"nbpass/internal/forwarding"
 	"nbpass/internal/node"
 	"nbpass/internal/nodeupdate"
@@ -54,7 +55,7 @@ func run(ctx context.Context) error {
 		}
 	}
 	if *updateCheck {
-		return json.NewEncoder(os.Stdout).Encode(nodeupdate.Identity{Version: node.SoftwareVersion, Platform: runtime.GOOS + "/" + runtime.GOARCH})
+		return json.NewEncoder(os.Stdout).Encode(nodeupdate.Identity{Version: node.SoftwareVersion, Platform: runtime.GOOS + "/" + runtime.GOARCH, Compatibility: compatibility.Current()})
 	}
 	if *updateService {
 		return runUpdateService(ctx, *updateOrigin, roots)

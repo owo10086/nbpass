@@ -52,7 +52,7 @@ func upgradeRig(t *testing.T, env clusterharness.UpdateEnvironment) (*clusterhar
 		if env.FailStartup || env.FailBusiness {
 			version = "0.0.9"
 		}
-		n.RestartVersion(version)
+		n.RestartImage(version, []byte("embedded-node-binary"))
 	}
 	n = h.StartNode(created["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) {
 		d.SoftwareVersion = "0.0.9"

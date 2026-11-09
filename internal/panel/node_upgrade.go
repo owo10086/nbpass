@@ -32,6 +32,7 @@ type nodeUpgradeView struct {
 }
 
 func (p *Panel) upgradeRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("GET /api/nodes/{id}/compatibility", p.getNodeCompatibility)
 	mux.HandleFunc("POST /api/nodes/{id}/upgrade", p.startNodeUpgrade)
 	mux.HandleFunc("GET /api/nodes/{id}/upgrade", p.getNodeUpgrade)
 	mux.HandleFunc("GET /node-upgrades/{task}/{resource}", p.nodeUpgradeResource)
@@ -167,7 +168,7 @@ func (p *Panel) acceptUpgrade(ctx context.Context, id string, data []byte) error
 		return errors.New("无效升级报告")
 	}
 	switch v.State {
-	case "downloading", "verifying", "switching", "rolling_back", "rolled_back", "reconnecting", "failed":
+	case "downloading", "verifying", "switching", "rolling_back", "rolled_back", "reconnecting", "unconfirmed", "failed":
 	default:
 		return errors.New("无效升级阶段")
 	}
@@ -184,11 +185,24 @@ func (p *Panel) acceptUpgrade(ctx context.Context, id string, data []byte) error
 	if err = json.Unmarshal(saved, &old); err != nil {
 		return err
 	}
-	if !active || old.Manifest != v.Manifest || v.Sequence <= old.Sequence {
+	if !active || old.Manifest != v.Manifest || v.Sequence < old.Sequence {
 		return nil
 	}
-	if old.State == "reconnecting" && v.State != "reconnecting" {
+	if v.Sequence == old.Sequence {
+		if v.State != old.State && old.State != "unconfirmed" {
+			return nil
+		}
+		// Readiness can recover while updater progress stays fixed. Refresh only the
+		// running-process evidence; an equal sequence cannot rewrite the task stage.
+		old.Verification = v.Verification
+		v = old
+	}
+	if old.State == "reconnecting" && v.State != "reconnecting" && v.State != "unconfirmed" {
 		return nil
+	}
+	if old.State == "unconfirmed" && v.State != "rolled_back" && v.State != "failed" && v.State != "unconfirmed" {
+		v.State = "unconfirmed"
+		v.Steps = append(v.Steps, "unconfirmed")
 	}
 	now := p.deps.Clock.Now()
 	terminal := v.State == "rolled_back" || v.State == "failed"
@@ -226,7 +240,10 @@ func (p *Panel) confirmUpgrade(ctx context.Context, id, instance, version string
 	if err = json.Unmarshal(data, &v); err != nil {
 		return err
 	}
-	if v.State != "reconnecting" || initial == instance || version != v.Manifest.Version {
+	if (v.State != "reconnecting" && v.State != "unconfirmed") || initial == instance || version != v.Manifest.Version {
+		return nil
+	}
+	if !v.Verification.Matches(v.Manifest, instance) {
 		return nil
 	}
 	var desired, applied int64

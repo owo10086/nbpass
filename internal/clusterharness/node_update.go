@@ -2,8 +2,10 @@ package clusterharness
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -104,6 +106,16 @@ func (h *Harness) UpdateService(store node.Store, env UpdateEnvironment) *Update
 
 // RestartVersion models installing another binary, retaining all node data and real runtime.
 func (n *Node) RestartVersion(version string) { n.Stop(); n.deps.SoftwareVersion = version; n.start() }
+
+// RestartImage substitutes the installed image while retaining the real runtime and state.
+func (n *Node) RestartImage(version string, image []byte) {
+	n.Stop()
+	n.deps.SoftwareVersion = version
+	sum := sha256.Sum256(image)
+	n.deps.ArtifactSHA256 = fmt.Sprintf("%x", sum)
+	n.deps.ArtifactSize = int64(len(image))
+	n.start()
+}
 
 func (h *Harness) AttachUpdater(n *Node, env UpdateEnvironment) *UpdateService {
 	n.Stop()

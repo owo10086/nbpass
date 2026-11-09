@@ -168,6 +168,7 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 	p.startRotationPolicy(background)
 	p.startRetention(background)
 	p.startEntryCandidates(background)
+	p.startUpgradeConfirmation(background)
 	return p, nil
 }
 
