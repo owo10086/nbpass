@@ -56,6 +56,8 @@ type Config struct {
 type Dependencies struct {
 	localReady      *atomic.Bool
 	Updater         nodeupdate.Service
+	ArtifactSHA256  string
+	ArtifactSize    int64
 	SoftwareVersion string
 	upgrades        *upgradeRunner
 	LocalHealth     func(string, string, bool)
@@ -216,6 +218,9 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 	deps.exitHealth = engine.ExitHealth
 	if deps.SoftwareVersion == "" {
 		deps.SoftwareVersion = SoftwareVersion
+	}
+	if deps.ArtifactSHA256 == "" && deps.Updater != nil {
+		deps.ArtifactSHA256, deps.ArtifactSize, _ = nodeupdate.ExecutableDigest()
 	}
 	report := &controlpb.NodeReport{UpgradeCapable: deps.Updater != nil, TunnelRotationVersion: 1, ExitFailoverVersion: 1, RotationRecheckCapable: true, DnsWatchCapable: true, TunnelAuthorizationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: deps.SoftwareVersion}
 	defer func() {
@@ -440,6 +445,14 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			if len(outgoing.UpgradeProgress) == 0 {
 				return nil
 			}
+			var progress nodeupdate.Progress
+			if json.Unmarshal(outgoing.UpgradeProgress, &progress) == nil {
+				progress.Verification = &nodeupdate.Verification{Instance: report.ProcessInstance, Version: deps.SoftwareVersion, Platform: nodeupdate.Platform, SHA256: deps.ArtifactSHA256, Size: deps.ArtifactSize}
+				if progress.State == "reconnecting" || progress.State == "unconfirmed" {
+					progress.Verification.Ready = engine.UpgradeReady(ctx) == nil
+				}
+				outgoing.UpgradeProgress, _ = json.Marshal(progress)
+			}
 		}
 		outgoing.SelfCheckOnly = kind == selfCheckReport
 		outgoing.CheckerOnly = kind == checkerReport
@@ -610,6 +623,11 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			nextHeartbeat = clock.Now().Add(10 * time.Second)
 			if err := send(heartbeatReport, nil); err != nil {
 				return err
+			}
+			if deps.upgrades != nil {
+				if err := send(upgradeReport, nil); err != nil {
+					return err
+				}
 			}
 			heartbeat.Stop()
 			heartbeat = clock.NewTimer(nextHeartbeat.Sub(clock.Now()))

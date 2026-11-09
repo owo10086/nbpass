@@ -20,6 +20,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"nbpass/internal/controlpb"
 	"nbpass/internal/dnswatch"
 	"nbpass/internal/panel"
 	"nbpass/internal/platform"
@@ -36,6 +37,8 @@ type Harness struct {
 	Control                *httptest.Server
 	controlServer          atomic.Pointer[grpc.Server]
 	repeatRotationCommands atomic.Bool
+	dropUpgradeCommands    atomic.Bool
+	controlReportTransform atomic.Pointer[func(*controlpb.NodeReport)]
 	ports                  portReservations
 }
 

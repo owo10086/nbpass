@@ -47,15 +47,30 @@ func Verify(m Manifest, data []byte) error {
 }
 
 type Progress struct {
-	Manifest Manifest `json:"manifest"`
-	Sequence uint64   `json:"sequence"`
-	State    string   `json:"state"`
-	Steps    []string `json:"steps"`
-	Error    string   `json:"error,omitempty"`
+	Verification *Verification `json:"verification,omitempty"`
+	Manifest     Manifest      `json:"manifest"`
+	Sequence     uint64        `json:"sequence"`
+	State        string        `json:"state"`
+	Steps        []string      `json:"steps"`
+	Error        string        `json:"error,omitempty"`
+}
+
+// Verification is produced by the running node, independently of updater progress.
+type Verification struct {
+	Instance string `json:"instance"`
+	Version  string `json:"version"`
+	Platform string `json:"platform"`
+	SHA256   string `json:"sha256"`
+	Size     int64  `json:"size"`
+	Ready    bool   `json:"ready"`
+}
+
+func (v *Verification) Matches(m Manifest, instance string) bool {
+	return v != nil && v.Ready && v.Instance == instance && v.Version == m.Version && v.Platform == m.Platform && v.Size == m.Size && v.SHA256 == m.SHA256
 }
 
 func Terminal(state string) bool {
-	return state == "ready" || state == "rolled_back" || state == "failed" || state == "unconfirmed"
+	return state == "ready" || state == "rolled_back" || state == "failed"
 }
 
 type Service interface {
