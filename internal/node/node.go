@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -25,6 +26,7 @@ import (
 	"nbpass/internal/controlpb"
 	"nbpass/internal/dnswatch"
 	"nbpass/internal/forwarding"
+	"nbpass/internal/nodeupdate"
 	"nbpass/internal/probe"
 	"nbpass/internal/publicip"
 	"nbpass/internal/rotation"
@@ -52,6 +54,12 @@ type Config struct {
 }
 
 type Dependencies struct {
+	localReady      *atomic.Bool
+	Updater         nodeupdate.Service
+	SoftwareVersion string
+	upgrades        *upgradeRunner
+	LocalHealth     func(string, string, bool)
+
 	CheckerLookup       func(context.Context, string) ([]string, error)
 	CheckerDial         func(context.Context, string) (net.Conn, error)
 	exitHealth          func() []*controlpb.ExitHealth
@@ -206,7 +214,10 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 	deps.Forwarding.DefaultCheckPort = 18080
 	engine := forwarding.NewEngine(deps.Forwarding)
 	deps.exitHealth = engine.ExitHealth
-	report := &controlpb.NodeReport{TunnelRotationVersion: 1, ExitFailoverVersion: 1, RotationRecheckCapable: true, DnsWatchCapable: true, TunnelAuthorizationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
+	if deps.SoftwareVersion == "" {
+		deps.SoftwareVersion = SoftwareVersion
+	}
+	report := &controlpb.NodeReport{UpgradeCapable: deps.Updater != nil, TunnelRotationVersion: 1, ExitFailoverVersion: 1, RotationRecheckCapable: true, DnsWatchCapable: true, TunnelAuthorizationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: deps.SoftwareVersion}
 	defer func() {
 		engine.Close()
 		if deps.Traffic != nil {
@@ -249,6 +260,36 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 			deps.selfChecks.wg.Wait()
 		}
 	}()
+	upgradeCtx, stopUpgrades := context.WithCancel(ctx)
+	deps.upgrades = startUpgrades(upgradeCtx, deps)
+	defer func() {
+		stopUpgrades()
+		if deps.upgrades != nil {
+			<-deps.upgrades.done
+		}
+	}()
+	deps.localReady = &atomic.Bool{}
+	if deps.LocalHealth != nil {
+		deps.localReady.Store(engine.UpgradeReady(ctx) == nil)
+	}
+	if deps.LocalHealth != nil {
+		healthCtx, stopHealth := context.WithCancel(ctx)
+		healthDone := make(chan struct{})
+		defer func() { stopHealth(); <-healthDone }()
+		go func() {
+			defer close(healthDone)
+			for {
+				deps.LocalHealth(report.ProcessInstance, deps.SoftwareVersion, deps.localReady.Load())
+				timer := deps.Clock.NewTimer(time.Second)
+				select {
+				case <-healthCtx.Done():
+					timer.Stop()
+					return
+				case <-timer.C():
+				}
+			}
+		}()
+	}
 	state := engine.State()
 	report.AttemptedRevision, report.AttemptedDigest, report.RuleResults = state.HighestRevision, state.HighestDigest, state.Results
 	report.AppliedRevision, report.AppliedDigest = engine.Applied()
@@ -276,6 +317,10 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 	for {
 		if ctx.Err() != nil {
 			return nil
+		}
+		// Local readiness is independent of control connectivity, including failed Connect calls.
+		if deps.LocalHealth != nil && !deps.localReady.Load() {
+			deps.localReady.Store(engine.UpgradeReady(ctx) == nil)
 		}
 		// 由注入时钟控制重试，不额外等待 gRPC 内部的墙上时钟退避。
 		client.ResetConnectBackoff()
@@ -380,6 +425,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		dnsReport
 		trafficReport
 		checkerReport
+		upgradeReport
 	)
 	var checkerResult []byte
 	send := func(kind reportKind, sample *controlpb.ProbeSample) error {
@@ -387,6 +433,14 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		outgoing.Probe, outgoing.ProbeOnly, outgoing.EventsOnly = sample, kind == probeReport, kind == eventReport
 		outgoing.Events, outgoing.PublicIpv4 = nil, ""
 		outgoing.Recovery = nil
+		outgoing.UpgradeProgress = nil
+		outgoing.UpgradeOnly = kind == upgradeReport
+		if kind == upgradeReport {
+			outgoing.UpgradeProgress = deps.upgrades.snapshot()
+			if len(outgoing.UpgradeProgress) == 0 {
+				return nil
+			}
+		}
 		outgoing.SelfCheckOnly = kind == selfCheckReport
 		outgoing.CheckerOnly = kind == checkerReport
 		outgoing.CheckerResults = nil
@@ -441,10 +495,14 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		} else if err := limitConfigReport(outgoing); err != nil {
 			return err
 		}
-		if kind == probeReport || kind == eventReport || kind == rotationReport || kind == selfCheckReport || kind == dnsReport || kind == trafficReport || kind == checkerReport {
+		if kind == probeReport || kind == eventReport || kind == rotationReport || kind == selfCheckReport || kind == dnsReport || kind == trafficReport || kind == checkerReport || kind == upgradeReport {
 			outgoing.AppliedRevision, outgoing.AppliedDigest = 0, ""
 		}
 		if kind == heartbeatReport {
+			outgoing.UpgradeCapable = deps.upgrades != nil && deps.upgrades.available.Load()
+			if deps.LocalHealth != nil && !deps.localReady.Load() {
+				deps.localReady.Store(engine.UpgradeReady(ctx) == nil)
+			}
 			outgoing.Recovery = deps.rotations.recoveryReport(engine.State().HighestRevision, clock.Now())
 			queryCtx, queryCancel := timeout(ctx, clock, 5*time.Second)
 			if value, err := deps.PublicIPv4(queryCtx); err == nil && queryCtx.Err() == nil {
@@ -498,11 +556,15 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		case <-timer.C():
 			return errors.New("控制发送超时")
 		}
-		if kind != configReport && kind != trafficReport && responseC == nil {
+		if kind != configReport && kind != trafficReport && kind != upgradeReport && responseC == nil {
 			response = clock.NewTimer(15 * time.Second)
 			responseC = response.C()
 		}
 		return nil
+	}
+	var upgradeWake <-chan struct{}
+	if deps.upgrades != nil {
+		upgradeWake = deps.upgrades.wake
 	}
 	var rotationWake <-chan struct{}
 	if deps.rotations != nil {
@@ -523,6 +585,11 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	}
 	if deps.rotations != nil && deps.rotations.snapshot() != nil {
 		if err := send(rotationReport, nil); err != nil {
+			return err
+		}
+	}
+	if deps.upgrades != nil {
+		if err := send(upgradeReport, nil); err != nil {
 			return err
 		}
 	}
@@ -594,6 +661,10 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			if err := send(dnsReport, nil); err != nil {
 				return err
 			}
+		case <-upgradeWake:
+			if err := send(upgradeReport, nil); err != nil {
+				return err
+			}
 		case <-rotationWake:
 			if err := send(rotationReport, nil); err != nil {
 				return err
@@ -621,6 +692,12 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			m := received.message
 			if m.ProtocolVersion != ProtocolVersion {
 				return errors.New("控制协议不兼容")
+			}
+			if m.UpgradeOnly {
+				if len(m.UpgradeManifest) > 0 {
+					deps.upgrades.submit(m.UpgradeManifest)
+				}
+				continue
 			}
 			if m.TrafficOnly {
 				matched := make([]*controlpb.TrafficAck, 0, len(m.AcknowledgedTraffic))
@@ -742,6 +819,9 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				err = engine.ApplyContext(onlineCtx, snapshot)
 			}
 			report.AppliedRevision, report.AppliedDigest = engine.Applied()
+			if deps.localReady != nil && deps.LocalHealth != nil {
+				deps.localReady.Store(err == nil && engine.UpgradeReady(ctx) == nil)
+			}
 			state := engine.State()
 			report.RuleResults = state.Results
 			report.RevocationsApplied = state.HighestRevision == snapshot.Revision && state.HighestDigest == snapshot.Digest

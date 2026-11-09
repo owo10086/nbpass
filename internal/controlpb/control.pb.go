@@ -306,7 +306,10 @@ func (x *EnrollResponse) GetToken() string {
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 type NodeReport struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	UpgradeOnly     bool                   `protobuf:"varint,260,opt,name=upgrade_only,json=upgradeOnly,proto3" json:"upgrade_only,omitempty"`
+	UpgradeProgress []byte                 `protobuf:"bytes,261,opt,name=upgrade_progress,json=upgradeProgress,proto3" json:"upgrade_progress,omitempty"`
+	UpgradeCapable  bool                   `protobuf:"varint,262,opt,name=upgrade_capable,json=upgradeCapable,proto3" json:"upgrade_capable,omitempty"`
 	// 票 36：仅活性报告携带；独立上报中的该载荷不参与恢复核对。
 	Recovery               *RecoveryReport `protobuf:"bytes,200,opt,name=recovery,proto3" json:"recovery,omitempty"`
 	RotationRecheckCapable bool            `protobuf:"varint,180,opt,name=rotation_recheck_capable,json=rotationRecheckCapable,proto3" json:"rotation_recheck_capable,omitempty"`
@@ -381,6 +384,27 @@ func (x *NodeReport) ProtoReflect() protoreflect.Message {
 // Deprecated: Use NodeReport.ProtoReflect.Descriptor instead.
 func (*NodeReport) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *NodeReport) GetUpgradeOnly() bool {
+	if x != nil {
+		return x.UpgradeOnly
+	}
+	return false
+}
+
+func (x *NodeReport) GetUpgradeProgress() []byte {
+	if x != nil {
+		return x.UpgradeProgress
+	}
+	return nil
+}
+
+func (x *NodeReport) GetUpgradeCapable() bool {
+	if x != nil {
+		return x.UpgradeCapable
+	}
+	return false
 }
 
 func (x *NodeReport) GetRecovery() *RecoveryReport {
@@ -731,6 +755,8 @@ func (x *ProbeSample) GetValues() map[string]float64 {
 // 配置为完整快照；缺失规则表示撤销，摘要覆盖版本与全部内容。
 type PanelMessage struct {
 	state                    protoimpl.MessageState `protogen:"open.v1"`
+	UpgradeManifest          []byte                 `protobuf:"bytes,260,opt,name=upgrade_manifest,json=upgradeManifest,proto3" json:"upgrade_manifest,omitempty"`
+	UpgradeOnly              bool                   `protobuf:"varint,261,opt,name=upgrade_only,json=upgradeOnly,proto3" json:"upgrade_only,omitempty"`
 	CheckerTasks             [][]byte               `protobuf:"bytes,140,rep,name=checker_tasks,json=checkerTasks,proto3" json:"checker_tasks,omitempty"`
 	AcknowledgedCheckerIds   []string               `protobuf:"bytes,141,rep,name=acknowledged_checker_ids,json=acknowledgedCheckerIds,proto3" json:"acknowledged_checker_ids,omitempty"`
 	AcknowledgedSelfCheckIds []string               `protobuf:"bytes,90,rep,name=acknowledged_self_check_ids,json=acknowledgedSelfCheckIds,proto3" json:"acknowledged_self_check_ids,omitempty"`
@@ -774,6 +800,20 @@ func (x *PanelMessage) ProtoReflect() protoreflect.Message {
 // Deprecated: Use PanelMessage.ProtoReflect.Descriptor instead.
 func (*PanelMessage) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *PanelMessage) GetUpgradeManifest() []byte {
+	if x != nil {
+		return x.UpgradeManifest
+	}
+	return nil
+}
+
+func (x *PanelMessage) GetUpgradeOnly() bool {
+	if x != nil {
+		return x.UpgradeOnly
+	}
+	return false
 }
 
 func (x *PanelMessage) GetCheckerTasks() [][]byte {
@@ -2438,9 +2478,12 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\xe7\v\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\xe1\f\n" +
 	"\n" +
-	"NodeReport\x12>\n" +
+	"NodeReport\x12\"\n" +
+	"\fupgrade_only\x18\x84\x02 \x01(\bR\vupgradeOnly\x12*\n" +
+	"\x10upgrade_progress\x18\x85\x02 \x01(\fR\x0fupgradeProgress\x12(\n" +
+	"\x0fupgrade_capable\x18\x86\x02 \x01(\bR\x0eupgradeCapable\x12>\n" +
 	"\brecovery\x18\xc8\x01 \x01(\v2!.nbpass.control.v1.RecoveryReportR\brecovery\x129\n" +
 	"\x18rotation_recheck_capable\x18\xb4\x01 \x01(\bR\x16rotationRecheckCapable\x12\"\n" +
 	"\fchecker_only\x18\x8c\x01 \x01(\bR\vcheckerOnly\x12(\n" +
@@ -2489,8 +2532,10 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x06values\x18\x02 \x03(\v2*.nbpass.control.v1.ProbeSample.ValuesEntryR\x06values\x1a9\n" +
 	"\vValuesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\x86\x05\n" +
-	"\fPanelMessage\x12$\n" +
+	"\x05value\x18\x02 \x01(\x01R\x05value:\x028\x01\"\xd6\x05\n" +
+	"\fPanelMessage\x12*\n" +
+	"\x10upgrade_manifest\x18\x84\x02 \x01(\fR\x0fupgradeManifest\x12\"\n" +
+	"\fupgrade_only\x18\x85\x02 \x01(\bR\vupgradeOnly\x12$\n" +
 	"\rchecker_tasks\x18\x8c\x01 \x03(\fR\fcheckerTasks\x129\n" +
 	"\x18acknowledged_checker_ids\x18\x8d\x01 \x03(\tR\x16acknowledgedCheckerIds\x12=\n" +
 	"\x1backnowledged_self_check_ids\x18Z \x03(\tR\x18acknowledgedSelfCheckIds\x12G\n" +

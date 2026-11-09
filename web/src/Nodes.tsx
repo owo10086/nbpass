@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Form, Input, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
+import { NodeUpgrade, type NodeUpgradeFields } from './NodeUpgrade';
 import { NodeRegion, type NodeRegionFields } from './NodeRegion';
 import { ProbeDetails } from './ProbeDetails';
 import { NodeValidationActions } from './NodeValidationActions';
 import { NodeRotation } from './NodeRotation';
 import { NodeSelfCheck, SelfCheckSettings } from './NodeSelfCheck';
 
-type NodeRow = NodeRegionFields & {
+type NodeRow = NodeRegionFields & NodeUpgradeFields & {
   id: string; name: string; status: string; status_label: string; connected: boolean;
   last_seen_at: string | null; maintenance_until: string | null;
   desired_revision: number; applied_revision: number; config_status: string; software_version: string; apply_error: string;
@@ -81,6 +82,7 @@ export function Nodes({ onSessionExpired }: { onSessionExpired: () => void }) {
     <Card styles={{ body: { padding: 0 } }}>
       <Table<NodeRow> rowKey="id" dataSource={rows} loading={loading} scroll={{ x: 1300 }} locale={{ emptyText: '暂无节点，添加后复制安装命令到服务器执行。' }} columns={[
         { title: '节点', key: 'name', render: (_, row) => <Space orientation="vertical" size={0}><Typography.Text strong>{row.name}</Typography.Text><Typography.Text type="secondary">{row.software_version || '尚未接入'}</Typography.Text></Space> },
+        { title: '升级', key: 'upgrade', render: (_, row) => <NodeUpgrade node={row} onSaved={load} onError={failed} /> },
         { title: '地区', key: 'region', render: (_, row) => <Space orientation="vertical" size={2}><span>{row.region.name} <Tag>{row.region_source === 'manual' ? '人工覆盖' : '自动识别'}</Tag></span><Typography.Text type="secondary">{row.public_ipv4 || '尚未查询到 IP'}</Typography.Text></Space> },
         { title: '国内检测点角色', key: 'checker', render: (_, row) => <Tag color={row.domestic_checker ? 'green' : 'default'}>{row.checker_label}</Tag> },
         { title: '状态', key: 'status', render: (_, row) => <Space orientation="vertical" size={2}><Tag color={{ online: 'green', offline: 'default', maintenance: 'blue', pending: 'orange' }[row.status]}>{row.status_label}</Tag>{row.status === 'online' && !row.connected && <Typography.Text type="secondary">控制连接已中断</Typography.Text>}{row.status === 'maintenance' && row.maintenance_until && <Typography.Text type="secondary">至 {new Date(row.maintenance_until).toLocaleTimeString()}</Typography.Text>}</Space> },

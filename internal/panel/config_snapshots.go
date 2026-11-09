@@ -156,6 +156,10 @@ func (p *Panel) controlMessage(ctx context.Context, id string) (*controlpb.Panel
 			return nil, err
 		}
 	}
+	m.UpgradeManifest, err = p.upgradeCommand(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	m.RotationCommand, err = p.rotationCommand(ctx, id)
 	if err != nil {
 		return nil, err

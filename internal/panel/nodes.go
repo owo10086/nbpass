@@ -73,6 +73,7 @@ func (p *Panel) addNode(w http.ResponseWriter, r *http.Request) {
 }
 
 type nodeView struct {
+	nodeUpgradeView
 	nodeRegionView
 	ID               string     `json:"id"`
 	Name             string     `json:"name"`
@@ -147,6 +148,15 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 	if rows.Err() != nil {
 		problem(w, 503, "存储暂不可用")
 		return
+	}
+	rows.Close()
+	for i := range nodes {
+		view, err := p.upgradeView(r.Context(), nodes[i].ID, nodes[i].SoftwareVersion)
+		if err != nil {
+			problem(w, 503, "无法读取升级任务")
+			return
+		}
+		nodes[i].nodeUpgradeView = view
 	}
 	respond(w, 200, map[string]any{"nodes": nodes})
 }

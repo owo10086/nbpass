@@ -9,6 +9,7 @@ import (
 
 func (p *Panel) Handler() http.Handler {
 	mux := http.NewServeMux()
+	p.upgradeRoutes(mux)
 	p.recoveryRoutes(mux)
 	p.forwardingRoutes(mux)
 	p.tunnelRoutes(mux)
