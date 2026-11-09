@@ -8,8 +8,8 @@ import (
 )
 
 type blockedEntry struct {
-	group, node, ip, incident string
-	version                   int64
+	group, node, ip, incident, policy string
+	version                           int64
 }
 
 // 原始自测和检测点补判共同产出的被墙状态只在此消费，不推进其他上报状态。
@@ -17,10 +17,13 @@ const blockedEntryFrom = ` FROM entry_publications s JOIN entry_groups g ON g.id
  JOIN node_self_check c ON c.node_id=s.active_node_id
  JOIN nodes n ON n.id=c.node_id JOIN node_regions r ON r.node_id=n.id
  JOIN entry_blocked_incidents i ON i.node_id=n.id
- WHERE g.blocked_policy='switch_entry' AND c.enabled=1 AND c.state='blocked'
+ WHERE g.blocked_policy IN ('switch_entry','switch_then_rotate') AND c.enabled=1 AND c.state='blocked'
  AND (n.maintenance_until IS NULL OR n.maintenance_until<=?)
  AND s.expected_value=r.public_ipv4 AND i.target_ip=r.public_ipv4
- AND i.occurred_at>=COALESCE((SELECT MAX(restored_at) FROM recovery_state),0)`
+ AND i.occurred_at>=COALESCE((SELECT MAX(restored_at) FROM recovery_state),0)
+ AND NOT EXISTS(SELECT 1 FROM entry_blocked_rotations f JOIN entry_blocked_decisions d ON d.id=f.decision_id
+ WHERE g.blocked_policy='switch_then_rotate' AND d.group_id=g.id AND d.node_id=s.active_node_id
+ AND f.expected_version=s.desired_version AND d.created_at>=COALESCE((SELECT MAX(restored_at) FROM recovery_state),0))`
 
 // 沿用 entryMu → controlMu，只读写本地数据。外部 DNS 写入仍由统一协调器执行。
 func (p *Panel) checkBlockedEntries(ctx context.Context) error {
@@ -31,14 +34,14 @@ func (p *Panel) checkBlockedEntries(ctx context.Context) error {
 	if err := p.refreshBlockedEntryIncidents(ctx); err != nil {
 		return err
 	}
-	rows, err := p.db.QueryContext(ctx, "SELECT s.group_id,s.active_node_id,s.expected_value,s.desired_version,i.incident_id"+blockedEntryFrom, p.deps.Clock.Now().UnixNano())
+	rows, err := p.db.QueryContext(ctx, "SELECT s.group_id,s.active_node_id,s.expected_value,s.desired_version,i.incident_id,g.blocked_policy"+blockedEntryFrom, p.deps.Clock.Now().UnixNano())
 	if err != nil {
 		return err
 	}
 	var entries []blockedEntry
 	for rows.Next() {
 		var e blockedEntry
-		if err = rows.Scan(&e.group, &e.node, &e.ip, &e.version, &e.incident); err != nil {
+		if err = rows.Scan(&e.group, &e.node, &e.ip, &e.version, &e.incident, &e.policy); err != nil {
 			break
 		}
 		entries = append(entries, e)
@@ -126,13 +129,23 @@ func (p *Panel) submitBlockedSwitch(ctx context.Context, e blockedEntry, states 
 	if err != nil || !current {
 		return err
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d", e.group, e.incident, e.version)))
+	identity := fmt.Sprintf("%s:%s:%d", e.group, e.incident, e.version)
+	// 策略②等待期间改选③须形成自己的决策，不复用“不换 IP”的通知；保留②原去重键。
+	if e.policy == "switch_then_rotate" {
+		identity += ":switch_then_rotate"
+	}
+	sum := sha256.Sum256([]byte(identity))
 	id := fmt.Sprintf("entry-blocked:%x", sum)
-	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO entry_blocked_decisions(id,group_id,node_id,incident_id,desired_version,outcome,created_at) VALUES(?,?,?,?,?,'no_candidate',?)`, id, e.group, e.node, e.incident, e.version, p.deps.Clock.Now().UnixNano())
+	_, err = tx.ExecContext(ctx, `INSERT OR IGNORE INTO entry_blocked_decisions(id,group_id,node_id,incident_id,desired_version,outcome,created_at,policy) VALUES(?,?,?,?,?,'no_candidate',?,?)`, id, e.group, e.node, e.incident, e.version, p.deps.Clock.Now().UnixNano(), e.policy)
 	if err != nil {
 		return err
 	}
 	if candidate.NodeID == "" {
+		if e.policy == "switch_then_rotate" {
+			if _, err = tx.ExecContext(ctx, "INSERT OR IGNORE INTO entry_blocked_rotations(decision_id,expected_version) VALUES(?,?)", id, e.version); err != nil {
+				return err
+			}
+		}
 		return tx.Commit()
 	}
 	fresh, err := p.offlineCandidateCurrent(ctx, tx, candidate)
@@ -156,6 +169,11 @@ func (p *Panel) submitBlockedSwitch(ctx context.Context, e blockedEntry, states 
 	if _, err = tx.ExecContext(ctx, "UPDATE entry_blocked_decisions SET outcome='submitted',action_id=? WHERE id=?", a.ID, id); err != nil {
 		return err
 	}
+	if e.policy == "switch_then_rotate" {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO entry_blocked_rotations(decision_id,expected_version) VALUES(?,?)", id, a.Version); err != nil {
+			return err
+		}
+	}
 	if err = tx.Commit(); err == nil {
 		p.coordinator.wake(e.group)
 	}
@@ -164,6 +182,6 @@ func (p *Panel) submitBlockedSwitch(ctx context.Context, e blockedEntry, states 
 
 func (p *Panel) blockedEntryCurrent(ctx context.Context, tx *sql.Tx, e blockedEntry) (bool, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, "SELECT count(*)"+blockedEntryFrom+" AND s.group_id=? AND s.active_node_id=? AND s.expected_value=? AND s.desired_version=? AND i.incident_id=?", p.deps.Clock.Now().UnixNano(), e.group, e.node, e.ip, e.version, e.incident).Scan(&count)
+	err := tx.QueryRowContext(ctx, "SELECT count(*)"+blockedEntryFrom+" AND s.group_id=? AND s.active_node_id=? AND s.expected_value=? AND s.desired_version=? AND i.incident_id=? AND g.blocked_policy=?", p.deps.Clock.Now().UnixNano(), e.group, e.node, e.ip, e.version, e.incident, e.policy).Scan(&count)
 	return count == 1, err
 }

@@ -264,7 +264,6 @@ func TestEntryBlockedMaintenanceAndDisabledPolicyPreventSwitch(t *testing.T) {
 func TestEntryBlockedPolicySettingsPersistAndRejectUnsupported(t *testing.T) {
 	f := newBlockedEntryRig(t, true)
 	path := "/api/entry-groups/" + f.group + "/blocked-policy"
-	f.c.Do("PUT", path, map[string]string{"policy": "switch_then_rotate"}, 400)
 	f.c.Do("PUT", path, map[string]string{"policy": "invalid"}, 400)
 	f.h.Client().Do("PUT", path, map[string]string{"policy": "disabled"}, 401)
 	f.c.Do("PUT", "/api/entry-groups/missing/blocked-policy", map[string]string{"policy": "switch_entry"}, 404)

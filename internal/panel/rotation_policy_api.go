@@ -103,8 +103,8 @@ func (p *Panel) putBlockedPolicy(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &b) {
 		return
 	}
-	if b.Policy != "disabled" && b.Policy != "rotate_ip" && b.Policy != "switch_entry" {
-		problem(w, 400, "本版本支持停用、策略①仅换 IP 或策略②仅入口切换")
+	if b.Policy != "disabled" && b.Policy != "rotate_ip" && b.Policy != "switch_entry" && b.Policy != "switch_then_rotate" {
+		problem(w, 400, "请选择停用、策略①仅换 IP、策略②仅入口切换或策略③先切后换")
 		return
 	}
 	p.entryMu.Lock()
@@ -155,8 +155,11 @@ func (p *Panel) startRotationPolicy(ctx context.Context) {
 				rows.Close()
 			}
 			for _, id := range ids {
-				_, _ = p.authorizeRotation(ctx, id, false)
+				if _, err := p.authorizeRotation(ctx, id, false); err != nil {
+					_ = p.notifyStrategyThreeRestriction(ctx, id, err)
+				}
 			}
+			_ = p.observeStrategyThreeRotations(ctx)
 			p.controlMu.Unlock()
 			timer := p.deps.Clock.NewTimer(time.Second)
 			select {
