@@ -56,6 +56,7 @@ type Config struct {
 }
 
 type Panel struct {
+	entryChecks     map[[2]string]entryMemberState
 	dnsWatchMu      sync.Mutex
 	dnsWatchWake    chan struct{}
 	entryMu         sync.Mutex
@@ -163,6 +164,7 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 	p.startSelfCheckNotifications(background)
 	p.startDNSWatch(background)
 	p.startRotationPolicy(background)
+	p.startEntryCandidates(background)
 	return p, nil
 }
 

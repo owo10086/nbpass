@@ -226,6 +226,15 @@ func (p *Panel) finishCheckerRound(ctx context.Context, tx *sql.Tx, id, roundID 
 			return nil
 		}
 	}
+	if success && !invalidated {
+		var issued int64
+		if err = tx.QueryRowContext(ctx, "SELECT issued_at FROM checker_rounds WHERE node_id=? AND round_id=?", id, roundID).Scan(&issued); err != nil {
+			return err
+		}
+		if err = p.recordDomesticEvidence(ctx, tx, id, "domestic_checker", time.Unix(0, issued)); err != nil {
+			return err
+		}
+	}
 	status = "completed"
 	if invalidated {
 		status = "invalidated"

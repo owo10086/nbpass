@@ -422,7 +422,13 @@ func (p *Panel) acceptRotation(ctx context.Context, id string, result *controlpb
 		_, err = tx.ExecContext(ctx, "DELETE FROM rotation_quota WHERE action_id=?", a.ID)
 	}
 	if err == nil && result.State == "changed" {
-		_, err = tx.ExecContext(ctx, `INSERT INTO node_regions(node_id,public_ipv4,auto_name,auto_mainland) VALUES(?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET public_ipv4=excluded.public_ipv4,auto_name=excluded.auto_name,auto_mainland=excluded.auto_mainland`, id, result.NewIp, region.Name, region.MainlandChina)
+		_, err = tx.ExecContext(ctx, `INSERT INTO node_regions(node_id,public_ipv4,auto_name,auto_mainland,domestic_since) VALUES(?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET public_ipv4=excluded.public_ipv4,auto_name=excluded.auto_name,auto_mainland=excluded.auto_mainland,domestic_since=CASE WHEN node_regions.public_ipv4<>excluded.public_ipv4 THEN excluded.domestic_since ELSE node_regions.domestic_since END`, id, result.NewIp, region.Name, region.MainlandChina, p.deps.Clock.Now().UnixNano())
+	}
+	if err == nil && recheckStatus == "recovered" {
+		var evidence []selfcheck.Round
+		if err = json.Unmarshal(rounds, &evidence); err == nil && len(evidence) > 0 {
+			err = p.recordAddressDomesticEvidence(ctx, tx, id, result.NewIp, "self_check", evidence[len(evidence)-1].StartedAt)
+		}
 	}
 	if err == nil && result.UnsafeNetwork {
 		_, err = tx.ExecContext(ctx, "UPDATE rotation_settings SET unsafe_network=1 WHERE node_id=?", id)
