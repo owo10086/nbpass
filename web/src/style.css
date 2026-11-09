@@ -4,7 +4,6 @@
   --bg-sidebar: #f7f7f8;
   --bg-hover: #f0f0f2;
   --line: #e8e8eb;
-  --line-strong: #d9d9de;
   --text: #18181b;
   --text-2: #5f5f67;
   --text-3: #75757d;
@@ -37,7 +36,7 @@ body { margin: 0; min-width: 320px; }
 .auth-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; background: var(--bg-subtle); }
 .auth-box { width: 100%; max-width: 380px; }
 .auth-brand { font-size: 17px; font-weight: 650; letter-spacing: -.01em; margin-bottom: 28px; display: flex; align-items: center; gap: 10px; }
-.auth-card { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 28px; box-shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 8px 24px -12px rgb(0 0 0 / 8%); }
+.auth-card { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 28px; box-shadow: 0 1px 2px rgb(0 0 0 / 4%), 0 8px 24px -12px rgb(0 0 0 / 8%); }
 .auth-card h1 { font-size: 18px; font-weight: 600; margin: 0 0 6px; }
 .auth-card .lead { color: var(--text-2); margin: 0 0 24px; font-size: 13px; }
 .auth-foot { color: var(--text-3); font-size: 12px; margin-top: 16px; text-align: center; }
