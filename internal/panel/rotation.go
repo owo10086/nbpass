@@ -267,6 +267,9 @@ func (p *Panel) authorizeRotation(ctx context.Context, id string, manual bool) (
 		err = p.rotationNotice(ctx, tx, id, actionID, "authorized", label+"换 IP 已授权")
 	}
 	if err == nil {
+		err = linkStrategyThreeRotation(ctx, tx, id, actionID, manual)
+	}
+	if err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {

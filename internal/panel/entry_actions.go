@@ -145,6 +145,9 @@ func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryAc
 	a.CreatedAt = p.deps.Clock.Now()
 	_, err = tx.ExecContext(ctx, `INSERT INTO entry_actions(id,group_id,version,kind,node_id,old_value,new_value,old_ttl,stage,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, a.ID, a.GroupID, a.Version, a.Kind, a.NodeID, a.OldValue, a.NewValue, a.OldTTL, a.Stage, a.CreatedAt.UnixNano())
 	if err == nil {
+		err = carryStrategyThreeVersion(ctx, tx, req, a.Version)
+	}
+	if err == nil {
 		_, err = tx.ExecContext(ctx, `INSERT INTO entry_publications(group_id,desired_version,active_node_id,expected_value,current_action_id) VALUES(?,?,?,?,?) ON CONFLICT(group_id) DO UPDATE SET desired_version=excluded.desired_version,active_node_id=excluded.active_node_id,expected_value=excluded.expected_value,current_action_id=excluded.current_action_id,written_at=NULL`, a.GroupID, a.Version, a.NodeID, a.NewValue, a.ID)
 	}
 	if err == nil {

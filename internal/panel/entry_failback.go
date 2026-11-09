@@ -60,6 +60,13 @@ func (p *Panel) checkEntryFailbacks(ctx context.Context, states map[[2]string]en
 	}
 	next := make(map[string]entryFailbackWindow)
 	for _, v := range publications {
+		allowed, err := strategyThreeFailbackAllowed(ctx, p.db, v.group, v.version)
+		if err != nil {
+			return nil, err
+		}
+		if !allowed {
+			continue
+		}
 		state := states[[2]string{v.group, v.preferred}]
 		now := p.deps.Clock.Now()
 		if v.active == v.preferred || !state.Candidate || state.CheckedAt == nil || now.Before(*state.CheckedAt) || now.Sub(*state.CheckedAt) > entryCandidateInterval || state.DomesticEvidence == nil || !now.Before(state.DomesticEvidence.ExpiresAt) {
@@ -78,7 +85,7 @@ func (p *Panel) checkEntryFailbacks(ctx context.Context, states map[[2]string]en
 		if w.successes < entryFailbackSuccesses || v.paused || !v.written.Valid || now.Sub(time.Unix(0, v.written.Int64)) < entryMinimumResidence {
 			continue
 		}
-		allowed, err := recoveryGroupAllowed(ctx, p.db, v.group)
+		allowed, err = recoveryGroupAllowed(ctx, p.db, v.group)
 		if err != nil {
 			return nil, err
 		}
@@ -106,6 +113,10 @@ func (p *Panel) submitEntryFailback(ctx context.Context, observed entryFailbackP
 	}
 	if v.version != observed.version || v.preferred != observed.preferred || v.active == v.preferred || v.paused || !v.written.Valid || p.deps.Clock.Now().Sub(time.Unix(0, v.written.Int64)) < entryMinimumResidence {
 		return false, nil
+	}
+	allowed, err := strategyThreeFailbackAllowed(ctx, tx, v.group, v.version)
+	if err != nil || !allowed {
+		return false, err
 	}
 	fresh, err := p.offlineCandidateCurrent(ctx, tx, state)
 	if err != nil || !fresh {

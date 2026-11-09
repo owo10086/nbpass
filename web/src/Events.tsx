@@ -11,7 +11,7 @@ type EventPage = { events: EventRow[]; next_before: number | null };
 type Filters = { node_id?: string; type?: string; from?: string; to?: string };
 const labels: Record<string, string> = { ip_rotation_authorized: '换 IP 已授权', ip_rotation_started: '换 IP 已开始', ip_rotation_observing: '换 IP 观察中', ip_rotation_changed: 'IP 已变化', ip_rotation_recovered: '新 IP 已恢复', ip_rotation_no_improvement: '换 IP 无改善', ip_rotation_pending: '新 IP 待确认', ip_rotation_paused: '无改善暂停', ip_rotation_resumed: '无改善暂停已解除', ip_rotation_unconfirmed: '换 IP 结果未确认', ip_rotation_cancelled: '换 IP 已取消', ip_rotation_released: '换 IP 冻结已解除', node_blocked: '被墙', node_unblocked: '解除疑似被墙或被墙', node_online: '节点上线', node_offline: '节点离线', node_recovered: '节点恢复上线', node_started: '节点启动', sync_failed: '同步失败', dns_watch_failed: '解析采样失败', dns_watch_mismatch: '解析期望不符', dns_watch_poisoned: '解析疑似污染', event_gap: '事件缺口' };
 const date = (value: string) => new Date(value).toLocaleString();
-Object.assign(labels, { entry_blocked_waiting: '被墙入口等待候选', entry_blocked_switch: '被墙入口已切换' });
+Object.assign(labels, { entry_blocked_waiting: '被墙入口等待候选', entry_blocked_switch: '被墙入口已切换', ip_rotation_entry_waiting: '策略③等待恢复' });
 
 export function Events({ onSessionExpired }: { onSessionExpired: () => void }) {
   const [rows, setRows] = useState<EventRow[]>([]);

@@ -11,7 +11,7 @@ import (
 
 // 事件与通知从持久决策重建。队列写入失败不能回滚切换，下一轮继续投递。
 func (p *Panel) flushBlockedEntryNotifications(ctx context.Context) error {
-	rows, err := p.db.QueryContext(ctx, `SELECT d.id,d.group_id,d.node_id,d.desired_version,d.outcome,d.action_id,d.created_at,COALESCE(a.node_id,''),a.written_at
+	rows, err := p.db.QueryContext(ctx, `SELECT d.id,d.group_id,d.node_id,d.desired_version,d.outcome,d.action_id,d.created_at,COALESCE(a.node_id,''),a.written_at,d.policy
  FROM entry_blocked_decisions d LEFT JOIN entry_actions a ON a.id=d.action_id
  WHERE (d.outcome='no_candidate' AND d.waiting_notified=0)
  OR (d.outcome='submitted' AND d.switch_notified=0 AND a.stage=? AND a.written_at IS NOT NULL) ORDER BY d.created_at`, EntryWritten)
@@ -19,14 +19,14 @@ func (p *Panel) flushBlockedEntryNotifications(ctx context.Context) error {
 		return err
 	}
 	type notice struct {
-		id, group, node, outcome, action, target string
-		version, created                         int64
-		written                                  sql.NullInt64
+		id, group, node, outcome, action, target, policy string
+		version, created                                 int64
+		written                                          sql.NullInt64
 	}
 	var notices []notice
 	for rows.Next() {
 		var n notice
-		if err = rows.Scan(&n.id, &n.group, &n.node, &n.version, &n.outcome, &n.action, &n.created, &n.target, &n.written); err != nil {
+		if err = rows.Scan(&n.id, &n.group, &n.node, &n.version, &n.outcome, &n.action, &n.created, &n.target, &n.written, &n.policy); err != nil {
 			break
 		}
 		notices = append(notices, n)
@@ -45,7 +45,14 @@ func (p *Panel) flushBlockedEntryNotifications(ctx context.Context) error {
 			kind, column, at = "entry_blocked_switch", "switch_notified", n.written.Int64
 			message = fmt.Sprintf("活动入口被墙，入口切换已写入 DNSPod：%s → %s（动作 %s）", n.node, n.target, n.action)
 		}
-		message = fmt.Sprintf("入口组 %s 期望版本 %d（策略②仅入口切换）：%s", n.group, n.version, message)
+		label := "策略②仅入口切换"
+		if n.policy == "switch_then_rotate" {
+			label = "策略③先切后换"
+			if n.outcome == "no_candidate" {
+				message = "活动入口被墙，没有就绪备用，退化为策略①申请换 IP，仍受节点授权、额度与冻结限制"
+			}
+		}
+		message = fmt.Sprintf("入口组 %s 期望版本 %d（%s）：%s", n.group, n.version, label, message)
 		key := n.id + ":" + n.outcome
 		now := p.deps.Clock.Now()
 		if err = p.RecordEvent(ctx, n.node, eventlog.Event{ID: key, Type: kind, OccurredAt: time.Unix(0, at).UTC(), Message: message}); err != nil {

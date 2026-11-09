@@ -22,7 +22,7 @@ CREATE TABLE exit_address_progress (
 );`
 
 // 出口用途和入口组用途只决定申请资格；执行、额度、冻结仍只有节点级一份。
-const automaticRotationPurpose = `(EXISTS(SELECT 1 FROM entry_group_members m JOIN entry_groups g ON g.id=m.group_id WHERE m.node_id=c.node_id AND g.blocked_policy='rotate_ip') OR EXISTS(SELECT 1 FROM tunnel_exits e WHERE e.node_id=c.node_id AND e.blocked_enabled=1))`
+const automaticRotationPurpose = `(EXISTS(SELECT 1 FROM entry_group_members m JOIN entry_groups g ON g.id=m.group_id WHERE m.node_id=c.node_id AND g.blocked_policy='rotate_ip') OR EXISTS(SELECT 1 FROM tunnel_exits e WHERE e.node_id=c.node_id AND e.blocked_enabled=1) OR ` + strategyThreeRotationPurpose + `)`
 
 func (p *Panel) exitBlockedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/nodes/{id}/exit-blocked", p.getExitBlocked)
