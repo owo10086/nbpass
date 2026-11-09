@@ -103,8 +103,8 @@ func (p *Panel) putBlockedPolicy(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &b) {
 		return
 	}
-	if b.Policy != "disabled" && b.Policy != "rotate_ip" {
-		problem(w, 400, "本版本支持停用或策略①仅换 IP")
+	if b.Policy != "disabled" && b.Policy != "rotate_ip" && b.Policy != "switch_entry" {
+		problem(w, 400, "本版本支持停用、策略①仅换 IP 或策略②仅入口切换")
 		return
 	}
 	p.entryMu.Lock()
