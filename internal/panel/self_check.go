@@ -98,6 +98,11 @@ func (p *Panel) acceptSelfChecks(ctx context.Context, nodeID string, batch [][]b
 				return nil, err
 			}
 		}
+		if round.Result == "normal" {
+			if err = p.rotationNormalEvidence(ctx, tx, nodeID, round.ID, round.StartedAt); err != nil {
+				return nil, err
+			}
+		}
 		state, consecutive = advanceSelfCheckState(state, consecutive, round.Result)
 		kind, message := "", ""
 		if old != "blocked" && state == "blocked" {

@@ -258,6 +258,7 @@ func (p *Panel) recomputeCheckerState(ctx context.Context, tx *sql.Tx, id, round
 	if err != nil {
 		return err
 	}
+	var normal *selfcheck.Round
 	for rows.Next() {
 		var data []byte
 		var final string
@@ -280,6 +281,9 @@ func (p *Panel) recomputeCheckerState(ctx context.Context, tx *sql.Tx, id, round
 			count = 0
 			continue
 		}
+		if final == "normal" && (normal == nil || r.StartedAt.After(normal.StartedAt)) {
+			normal = &r
+		}
 		state, count = advanceSelfCheckState(state, count, final)
 	}
 	if err == nil {
@@ -291,6 +295,13 @@ func (p *Panel) recomputeCheckerState(ctx context.Context, tx *sql.Tx, id, round
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE node_self_check SET state=?,consecutive=? WHERE node_id=?", state, count, id); err != nil {
 		return err
+	}
+	// 正常补判可能晚于后续异常轮到达；恢复证据按发生时间处理，
+	// 不能要求重放结束时仍为正常，也不能让旧证据清掉较晚的暂停。
+	if normal != nil {
+		if err = p.rotationNormalEvidence(ctx, tx, id, normal.ID, normal.StartedAt); err != nil {
+			return err
+		}
 	}
 	kind, message := "", ""
 	if old != "blocked" && state == "blocked" {

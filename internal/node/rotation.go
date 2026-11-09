@@ -21,10 +21,12 @@ type RotationStore interface {
 }
 
 type rotationJournal struct {
-	Current       string                                 `json:"current"`
-	Results       map[string]*controlpb.RotationProgress `json:"results"`
-	RetiredBefore int64                                  `json:"retired_before"`
-	NextCheck     int64                                  `json:"next_check"`
+	RecheckConfig   []byte                                 `json:"recheck_config"`
+	RecheckRevision uint64                                 `json:"recheck_revision"`
+	Current         string                                 `json:"current"`
+	Results         map[string]*controlpb.RotationProgress `json:"results"`
+	RetiredBefore   int64                                  `json:"retired_before"`
+	NextCheck       int64                                  `json:"next_check"`
 }
 type rotationRunner struct {
 	mu      sync.Mutex
@@ -62,6 +64,14 @@ func openRotations(ctx context.Context, deps Dependencies) (*rotationRunner, err
 		r.running = true
 		r.wg.Add(1)
 		go func() { defer r.wg.Done(); defer r.finished(); r.observe(current) }()
+	} else if current := r.state.Results[r.state.Current]; current != nil && current.State == "changed" && !current.RecheckComplete && len(r.state.RecheckConfig) > 0 {
+		r.running = true
+		r.wg.Add(1)
+		go func() {
+			defer r.wg.Done()
+			defer r.finished()
+			r.recheck(proto.Clone(current).(*controlpb.RotationProgress))
+		}()
 	}
 	return r, nil
 }
@@ -94,7 +104,7 @@ func (r *rotationRunner) save(p *controlpb.RotationProgress, next int64) error {
 		results = map[string]*controlpb.RotationProgress{}
 	}
 	results[p.ActionId] = copy
-	state := rotationJournal{Current: p.ActionId, Results: results, NextCheck: next, RetiredBefore: cutoff}
+	state := rotationJournal{RecheckConfig: r.state.RecheckConfig, RecheckRevision: r.state.RecheckRevision, Current: p.ActionId, Results: results, NextCheck: next, RetiredBefore: cutoff}
 	data, err := json.Marshal(state)
 	if err == nil {
 		err = r.deps.RotationStore.SaveRotation(r.ctx, data)
@@ -238,6 +248,10 @@ func (r *rotationRunner) execute(online context.Context, c *controlpb.RotationCo
 	if err != nil || len(locals) != 1 || locals[0] != ip {
 		p.UnsafeNetwork = true
 	}
+	if c.Automatic && p.UnsafeNetwork {
+		cancel("unsafe_network")
+		return
+	}
 	var config rotation.Config
 	if json.Unmarshal(c.ConfigJson, &config) != nil || config.Validate() != nil {
 		cancel("invalid_config")
@@ -246,6 +260,10 @@ func (r *rotationRunner) execute(online context.Context, c *controlpb.RotationCo
 	if !valid() {
 		return
 	}
+	r.mu.Lock()
+	r.state.RecheckConfig = append([]byte(nil), c.RecheckConfig...)
+	r.state.RecheckRevision = c.RecheckRevision
+	r.mu.Unlock()
 	p.State, p.Reason = "started", "started"
 	if r.save(p, 0) != nil {
 		cancel("action_storage_failed")
@@ -314,6 +332,7 @@ func (r *rotationRunner) observe(input *controlpb.RotationProgress) {
 			if r.persist(p, 0) == nil && r.deps.Events != nil {
 				_ = r.deps.Events.Record(r.ctx, "ip_rotation_changed", "换 IP 动作 "+p.ActionId+" 已观察到公网 IPv4 变化，可达性尚未复检", 0)
 			}
+			r.recheck(p)
 			return
 		}
 		// 一旦结果不确定，即使下一次仍看到旧 IP，也不能自动解除冻结。

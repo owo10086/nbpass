@@ -2,6 +2,7 @@ package rotation
 
 // Reasons 仅允许安全的固定摘要，第三方错误及响应不进入动作、事件或通知。
 var Reasons = map[string]string{
+	"unsafe_network":           "换前检测到 NAT 或多 IP 风险，自动换 IP 已取消且未调用接口",
 	"action_storage_failed":    "动作开始记录持久化失败，已取消且未调用接口",
 	"event_storage_failed":     "开始事件持久化失败，已取消且未调用接口",
 	"invalid_config":           "换 IP 请求配置无效，已取消",

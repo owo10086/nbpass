@@ -63,7 +63,7 @@ func (p *Panel) actionEvent(ctx context.Context, tx *sql.Tx, a EntryAction, stag
 }
 
 func (p *Panel) SubmitEntryAction(ctx context.Context, req EntryActionRequest) (EntryAction, error) {
-	ip, err := publicip.Parse(req.IPv4)
+	_, err := publicip.Parse(req.IPv4)
 	if err != nil || req.NodeID == "" {
 		return EntryAction{}, &forwardingError{400, "请选择活动入口并确认单个可入站公网 IPv4"}
 	}
@@ -82,6 +82,24 @@ func (p *Panel) SubmitEntryAction(ctx context.Context, req EntryActionRequest) (
 		return EntryAction{}, err
 	}
 	defer tx.Rollback()
+	a, err := p.submitEntryActionTx(ctx, tx, req)
+	if err == nil {
+		err = tx.Commit()
+	}
+	if err != nil {
+		return EntryAction{}, err
+	}
+	p.coordinator.wake(a.GroupID)
+	return a, nil
+}
+
+// 同一数据库事务串行维护期望版本；普通提交持 entryMu，地址确认持 controlMu。
+// 地址确认不再获取 entryMu，避免与入口组配置的 entryMu → controlMu 次序反转。
+func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryActionRequest) (EntryAction, error) {
+	ip, err := publicip.Parse(req.IPv4)
+	if err != nil {
+		return EntryAction{}, err
+	}
 	var a EntryAction
 	a.GroupID, a.NodeID, a.Kind, a.NewValue, a.Stage = req.GroupID, req.NodeID, req.Kind, ip, EntryDesired
 	err = tx.QueryRowContext(ctx, "SELECT current_value,current_ttl FROM managed_records WHERE group_id=?", req.GroupID).Scan(&a.OldValue, &a.OldTTL)
@@ -128,12 +146,8 @@ func (p *Panel) SubmitEntryAction(ctx context.Context, req EntryActionRequest) (
 	if err == nil {
 		err = p.actionEvent(ctx, tx, a, EntryDesired)
 	}
-	if err == nil {
-		err = tx.Commit()
-	}
 	if err != nil {
 		return EntryAction{}, err
 	}
-	p.coordinator.wake(a.GroupID)
 	return a, nil
 }

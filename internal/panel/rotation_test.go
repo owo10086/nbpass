@@ -49,6 +49,9 @@ func TestRotationSecretCiphertextAndCommandScope(t *testing.T) {
 	if !strings.Contains(string(command.ConfigJson), secret) || command.NodeId != ids[0] || command.ExpiresAt-command.IssuedAt != int64(2*time.Minute) {
 		t.Fatal("命令未绑定节点/期限/秘密")
 	}
+	if len(command.RecheckConfig) != 0 {
+		t.Fatal("旧节点未声明能力，不应收到强制复检命令")
+	}
 	other, err := p.rotationCommand(context.Background(), ids[1])
 	if err != nil || other != nil {
 		t.Fatal("其他节点收到凭据")

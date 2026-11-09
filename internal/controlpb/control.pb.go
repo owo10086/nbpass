@@ -306,9 +306,10 @@ func (x *EnrollResponse) GetToken() string {
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 type NodeReport struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	CheckerOnly    bool                   `protobuf:"varint,140,opt,name=checker_only,json=checkerOnly,proto3" json:"checker_only,omitempty"`
-	CheckerResults [][]byte               `protobuf:"bytes,141,rep,name=checker_results,json=checkerResults,proto3" json:"checker_results,omitempty"`
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	RotationRecheckCapable bool                   `protobuf:"varint,180,opt,name=rotation_recheck_capable,json=rotationRecheckCapable,proto3" json:"rotation_recheck_capable,omitempty"`
+	CheckerOnly            bool                   `protobuf:"varint,140,opt,name=checker_only,json=checkerOnly,proto3" json:"checker_only,omitempty"`
+	CheckerResults         [][]byte               `protobuf:"bytes,141,rep,name=checker_results,json=checkerResults,proto3" json:"checker_results,omitempty"`
 	// 自测独立补报，只消费自测结果，不推进活性、探针、事件或配置确认。
 	SelfCheckOnly    bool     `protobuf:"varint,90,opt,name=self_check_only,json=selfCheckOnly,proto3" json:"self_check_only,omitempty"`
 	SelfCheckResults [][]byte `protobuf:"bytes,91,rep,name=self_check_results,json=selfCheckResults,proto3" json:"self_check_results,omitempty"`
@@ -376,6 +377,13 @@ func (x *NodeReport) ProtoReflect() protoreflect.Message {
 // Deprecated: Use NodeReport.ProtoReflect.Descriptor instead.
 func (*NodeReport) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *NodeReport) GetRotationRecheckCapable() bool {
+	if x != nil {
+		return x.RotationRecheckCapable
+	}
+	return false
 }
 
 func (x *NodeReport) GetCheckerOnly() bool {
@@ -1684,14 +1692,17 @@ func (x *TunnelServer) GetGrants() []*TunnelGrant {
 
 // 一次性命令独立于配置；秘密仅经已认证的执行节点控制流传输。
 type RotationCommand struct {
-	state      protoimpl.MessageState `protogen:"open.v1"`
-	ActionId   string                 `protobuf:"bytes,80,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
-	NodeId     string                 `protobuf:"bytes,81,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	OldIp      string                 `protobuf:"bytes,82,opt,name=old_ip,json=oldIp,proto3" json:"old_ip,omitempty"`
-	ExpiresAt  int64                  `protobuf:"varint,83,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
-	ConfigJson []byte                 `protobuf:"bytes,84,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
-	NodeName   string                 `protobuf:"bytes,85,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
-	IssuedAt   int64                  `protobuf:"varint,86,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	RecheckConfig   []byte                 `protobuf:"bytes,180,opt,name=recheck_config,json=recheckConfig,proto3" json:"recheck_config,omitempty"`
+	Automatic       bool                   `protobuf:"varint,182,opt,name=automatic,proto3" json:"automatic,omitempty"`
+	RecheckRevision uint64                 `protobuf:"varint,181,opt,name=recheck_revision,json=recheckRevision,proto3" json:"recheck_revision,omitempty"`
+	ActionId        string                 `protobuf:"bytes,80,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
+	NodeId          string                 `protobuf:"bytes,81,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	OldIp           string                 `protobuf:"bytes,82,opt,name=old_ip,json=oldIp,proto3" json:"old_ip,omitempty"`
+	ExpiresAt       int64                  `protobuf:"varint,83,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	ConfigJson      []byte                 `protobuf:"bytes,84,opt,name=config_json,json=configJson,proto3" json:"config_json,omitempty"`
+	NodeName        string                 `protobuf:"bytes,85,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
+	IssuedAt        int64                  `protobuf:"varint,86,opt,name=issued_at,json=issuedAt,proto3" json:"issued_at,omitempty"`
 	// 空值为原执行许可；reconcile / release 只操作已持久化动作，不调用商家。
 	Operation       string `protobuf:"bytes,120,opt,name=operation,proto3" json:"operation,omitempty"`
 	ControlSequence uint64 `protobuf:"varint,121,opt,name=control_sequence,json=controlSequence,proto3" json:"control_sequence,omitempty"`
@@ -1727,6 +1738,27 @@ func (x *RotationCommand) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RotationCommand.ProtoReflect.Descriptor instead.
 func (*RotationCommand) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *RotationCommand) GetRecheckConfig() []byte {
+	if x != nil {
+		return x.RecheckConfig
+	}
+	return nil
+}
+
+func (x *RotationCommand) GetAutomatic() bool {
+	if x != nil {
+		return x.Automatic
+	}
+	return false
+}
+
+func (x *RotationCommand) GetRecheckRevision() uint64 {
+	if x != nil {
+		return x.RecheckRevision
+	}
+	return 0
 }
 
 func (x *RotationCommand) GetActionId() string {
@@ -1794,6 +1826,8 @@ func (x *RotationCommand) GetControlSequence() uint64 {
 
 type RotationProgress struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
+	RecheckRounds       [][]byte               `protobuf:"bytes,180,rep,name=recheck_rounds,json=recheckRounds,proto3" json:"recheck_rounds,omitempty"`
+	RecheckComplete     bool                   `protobuf:"varint,181,opt,name=recheck_complete,json=recheckComplete,proto3" json:"recheck_complete,omitempty"`
 	ActionId            string                 `protobuf:"bytes,80,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
 	Sequence            uint64                 `protobuf:"varint,81,opt,name=sequence,proto3" json:"sequence,omitempty"`
 	State               string                 `protobuf:"bytes,82,opt,name=state,proto3" json:"state,omitempty"`
@@ -1836,6 +1870,20 @@ func (x *RotationProgress) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RotationProgress.ProtoReflect.Descriptor instead.
 func (*RotationProgress) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *RotationProgress) GetRecheckRounds() [][]byte {
+	if x != nil {
+		return x.RecheckRounds
+	}
+	return nil
+}
+
+func (x *RotationProgress) GetRecheckComplete() bool {
+	if x != nil {
+		return x.RecheckComplete
+	}
+	return false
 }
 
 func (x *RotationProgress) GetActionId() string {
@@ -2062,9 +2110,11 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\xfe\t\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\xb9\n" +
 	"\n" +
-	"NodeReport\x12\"\n" +
+	"\n" +
+	"NodeReport\x129\n" +
+	"\x18rotation_recheck_capable\x18\xb4\x01 \x01(\bR\x16rotationRecheckCapable\x12\"\n" +
 	"\fchecker_only\x18\x8c\x01 \x01(\bR\vcheckerOnly\x12(\n" +
 	"\x0fchecker_results\x18\x8d\x01 \x03(\fR\x0echeckerResults\x12&\n" +
 	"\x0fself_check_only\x18Z \x01(\bR\rselfCheckOnly\x12,\n" +
@@ -2205,8 +2255,11 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x0fcertificate_pem\x18+ \x01(\fR\x0ecertificatePem\x12&\n" +
 	"\x0fprivate_key_pem\x18, \x01(\fR\rprivateKeyPem\x123\n" +
 	"\x05peers\x18- \x03(\v2\x1d.nbpass.control.v1.TunnelPeerR\x05peers\x126\n" +
-	"\x06grants\x18. \x03(\v2\x1e.nbpass.control.v1.TunnelGrantR\x06grants\"\xa1\x02\n" +
-	"\x0fRotationCommand\x12\x1b\n" +
+	"\x06grants\x18. \x03(\v2\x1e.nbpass.control.v1.TunnelGrantR\x06grants\"\x94\x03\n" +
+	"\x0fRotationCommand\x12&\n" +
+	"\x0erecheck_config\x18\xb4\x01 \x01(\fR\rrecheckConfig\x12\x1d\n" +
+	"\tautomatic\x18\xb6\x01 \x01(\bR\tautomatic\x12*\n" +
+	"\x10recheck_revision\x18\xb5\x01 \x01(\x04R\x0frecheckRevision\x12\x1b\n" +
 	"\taction_id\x18P \x01(\tR\bactionId\x12\x17\n" +
 	"\anode_id\x18Q \x01(\tR\x06nodeId\x12\x15\n" +
 	"\x06old_ip\x18R \x01(\tR\x05oldIp\x12\x1d\n" +
@@ -2217,8 +2270,10 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\tnode_name\x18U \x01(\tR\bnodeName\x12\x1b\n" +
 	"\tissued_at\x18V \x01(\x03R\bissuedAt\x12\x1c\n" +
 	"\toperation\x18x \x01(\tR\toperation\x12)\n" +
-	"\x10control_sequence\x18y \x01(\x04R\x0fcontrolSequence\"\xc8\x02\n" +
-	"\x10RotationProgress\x12\x1b\n" +
+	"\x10control_sequence\x18y \x01(\x04R\x0fcontrolSequence\"\x9c\x03\n" +
+	"\x10RotationProgress\x12&\n" +
+	"\x0erecheck_rounds\x18\xb4\x01 \x03(\fR\rrecheckRounds\x12*\n" +
+	"\x10recheck_complete\x18\xb5\x01 \x01(\bR\x0frecheckComplete\x12\x1b\n" +
 	"\taction_id\x18P \x01(\tR\bactionId\x12\x1a\n" +
 	"\bsequence\x18Q \x01(\x04R\bsequence\x12\x14\n" +
 	"\x05state\x18R \x01(\tR\x05state\x12\x15\n" +

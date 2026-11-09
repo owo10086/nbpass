@@ -51,6 +51,8 @@ func (r *rotationRunner) submitControlLocked(online context.Context, c *controlp
 			}
 		}
 		// 重试仅写盘；管理命令重投也永远不进入 execute。
-		_ = r.persist(copy, 0)
+		if r.persist(copy, 0) == nil && copy.State == "changed" {
+			r.recheck(copy)
+		}
 	}()
 }

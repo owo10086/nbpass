@@ -13,6 +13,7 @@ message EnrollResponse { string node_id = 1; string token = 2; }
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 message NodeReport {
+  bool rotation_recheck_capable = 180;
   bool checker_only = 140;
   repeated bytes checker_results = 141;
   // 自测独立补报，只消费自测结果，不推进活性、探针、事件或配置确认。
@@ -175,6 +176,9 @@ enum ExitStrategy { EXIT_STRATEGY_UNSPECIFIED = 0; EXIT_STRATEGY_PRIMARY_BACKUP 
 
 // 一次性命令独立于配置；秘密仅经已认证的执行节点控制流传输。
 message RotationCommand {
+ bytes recheck_config = 180;
+ bool automatic = 182;
+ uint64 recheck_revision = 181;
  string action_id = 80;
  string node_id = 81;
  string old_ip = 82;
@@ -187,6 +191,8 @@ message RotationCommand {
  uint64 control_sequence = 121;
 }
 message RotationProgress {
+ repeated bytes recheck_rounds = 180;
+ bool recheck_complete = 181;
  string action_id = 80;
  uint64 sequence = 81;
  string state = 82;
