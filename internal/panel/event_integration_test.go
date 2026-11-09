@@ -67,7 +67,7 @@ func TestEventMigrationPreservesVersionFiveProbeData(t *testing.T) {
 	for _, query := range []string{
 		"INSERT INTO nodes(id, name, created_at) VALUES('existing', '已有节点', 0)",
 		"INSERT INTO probe_realtime(node_id,process_instance,sequence,received_at,values_json) VALUES('existing', 'process', 42, 123, '{\"cpu_percent\":25}')",
-		"INSERT INTO probe_minutes VALUES('existing', 60, 2, '{}')",
+		fmt.Sprintf("INSERT INTO probe_minutes VALUES('existing', %d, 2, '{}')", time.Now().Add(-time.Hour).Truncate(time.Minute).Unix()),
 	} {
 		if _, err := db.Exec(query); err != nil {
 			t.Fatal(err)
@@ -139,7 +139,8 @@ func TestDirectMigrationPreservesVersionSixEventsAndCredentials(t *testing.T) {
 	if _, err := db.Exec("INSERT INTO nodes(id,name,token_hash,created_at) VALUES('existing','已有节点',?,0)", digest[:]); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec("INSERT INTO events(node_id,source,event_id,type,occurred_at,received_at,config_revision,message) VALUES('existing','node','kept','sync_failed',1,2,3,'历史事件')"); err != nil {
+	// 迁移验证使用保留期内的历史，避免与启动后的正常保留期清理竞争。
+	if _, err := db.Exec("INSERT INTO events(node_id,source,event_id,type,occurred_at,received_at,config_revision,message) VALUES('existing','node','kept','sync_failed',?,?,3,'历史事件')", time.Now().Add(-time.Hour).UnixNano(), time.Now().UnixNano()); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 )
 
 // 从已有 rotationMigration 的数据库追加升级，旧事件/动作/节点数据仍可使用。
@@ -22,7 +23,7 @@ func TestSelfCheckMigrationPreservesVersionTwelveData(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, query := range []string{"INSERT INTO nodes(id,name,created_at) VALUES('n','已有节点',123)", "INSERT INTO events(node_id,source,event_id,type,occurred_at,received_at,config_revision,message) VALUES('n','panel','kept','node_offline',1,2,3,'旧事件')", "INSERT INTO rotation_actions(id,node_id,old_ip,state,created_at,expires_at,updated_at,secret_name) VALUES('a','n','8.8.8.8','unconfirmed',1,2,3,'secret')"} {
+	for _, query := range []string{"INSERT INTO nodes(id,name,created_at) VALUES('n','已有节点',123)", fmt.Sprintf("INSERT INTO events(node_id,source,event_id,type,occurred_at,received_at,config_revision,message) VALUES('n','panel','kept','node_offline',%d,2,3,'旧事件')", time.Now().Add(-time.Hour).UnixNano()), "INSERT INTO rotation_actions(id,node_id,old_ip,state,created_at,expires_at,updated_at,secret_name) VALUES('a','n','8.8.8.8','unconfirmed',1,2,3,'secret')"} {
 		if _, err := db.Exec(query); err != nil {
 			t.Fatal(err)
 		}
