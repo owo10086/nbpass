@@ -113,7 +113,7 @@ func (e *Engine) ExitHealth() []*controlpb.ExitHealth {
 				state = "recovering"
 			}
 		}
-		h := &controlpb.ExitHealth{ExitId: id, State: state, ConsecutiveFailures: c.failures, LastProbe: c.lastProbe, FailureClass: string(c.failure)}
+		h := &controlpb.ExitHealth{ExitId: id, AddressVersion: c.currentEndpoint().AddressVersion, State: state, ConsecutiveFailures: c.failures, LastProbe: c.lastProbe, FailureClass: string(c.failure)}
 		if !c.recoverySince.IsZero() {
 			h.RecoverySinceUnix = c.recoverySince.Unix()
 		}

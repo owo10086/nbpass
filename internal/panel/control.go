@@ -491,6 +491,9 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 	}
 	var authorizationChanges []string
 	if err == nil {
+		err = p.confirmExitAddresses(ctx, tx, id, report, uint64(desired), expectedDigest)
+	}
+	if err == nil {
 		authorizationChanges, err = p.confirmTunnelAuthorizations(ctx, tx, id, report, uint64(desired), expectedDigest)
 	}
 	if err == nil {

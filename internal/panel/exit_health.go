@@ -35,6 +35,9 @@ func (p *Panel) storeExitHealth(ctx context.Context, tx *sql.Tx, id string, heal
 			continue
 		}
 		seen[h.ExitId] = true
+		if err := p.confirmExitAddressHandshake(ctx, tx, id, h); err != nil {
+			return err
+		}
 		valid = append(valid, h)
 	}
 	raw, err := json.Marshal(valid)

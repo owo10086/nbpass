@@ -232,7 +232,7 @@ func (p *Panel) authorizeRotation(ctx context.Context, id string, manual bool) (
 	defer tx.Rollback()
 	if !manual {
 		var eligible int
-		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM node_self_check c WHERE c.node_id=? AND c.enabled=1 AND c.state='blocked' AND EXISTS(SELECT 1 FROM entry_group_members m JOIN entry_groups g ON g.id=m.group_id WHERE m.node_id=c.node_id AND g.blocked_policy='rotate_ip')`, id).Scan(&eligible); err != nil {
+		if err = tx.QueryRowContext(ctx, `SELECT count(*) FROM node_self_check c WHERE c.node_id=? AND c.enabled=1 AND c.state='blocked' AND `+automaticRotationPurpose, id).Scan(&eligible); err != nil {
 			return nil, err
 		}
 		if eligible == 0 {
@@ -409,8 +409,12 @@ func (p *Panel) acceptRotation(ctx context.Context, id string, result *controlpb
 		_, err = tx.ExecContext(ctx, "UPDATE rotation_actions SET recheck_status=?,recheck_rounds=? WHERE id=?", recheckStatus, rounds, a.ID)
 	}
 	var groups []string
+	var addressChanges []string
 	if err == nil && result.State == "changed" && a.State != "changed" {
 		groups, err = p.rotationDNSActions(ctx, tx, a, result.NewIp)
+		if err == nil {
+			addressChanges, err = p.rotateExitAddress(ctx, tx, a, result.NewIp)
+		}
 	}
 	if err == nil {
 		err = p.finishRotationRecheck(ctx, tx, a, recheckStatus, rounds)
@@ -437,5 +441,6 @@ func (p *Panel) acceptRotation(ctx context.Context, id string, result *controlpb
 	for _, gid := range groups {
 		p.coordinator.wake(gid)
 	}
+	p.notifyConfiguration(addressChanges)
 	return nil
 }
