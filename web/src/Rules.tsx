@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Switch, Table, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
 import { RuleSyncDetails, SyncHelp, SyncTag, type SyncMember } from './ConfigSync';
+import { RulesTransfer } from './RulesTransfer';
 
 type RuleInput = { name: string; entry_group_id: string; kind: 'direct' | 'tunnel'; exit_group_id?: string; listen_port: number; target_address: string; target_family: 'ipv4'; target_port: number; allow_private: boolean; enabled: boolean };
 type Rule = RuleInput & { id: string; sync_status: string; sync_members: SyncMember[]; traffic?: { upload_bytes: number; download_bytes: number; active_connections: number | null } };
@@ -20,8 +21,10 @@ export function Rules({ onSessionExpired }: { onSessionExpired: () => void }) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [selectedIDs, setSelectedIDs] = useState<string[]>([]);
   const [form] = Form.useForm();
   const kind = Form.useWatch('kind', form);
+  const randomPort = Form.useWatch('random_port', form);
   const expired = useRef(onSessionExpired); expired.current = onSessionExpired;
   function failed(e: unknown) {
     if (e instanceof APIError && (e.status === 401 || e.status === 428)) expired.current();
@@ -31,7 +34,7 @@ export function Rules({ onSessionExpired }: { onSessionExpired: () => void }) {
     setLoading(true);
     try {
       const [rules, entryGroups, exits] = await Promise.all([api<{ rules: Rule[] }>('/rules'), api<{ entry_groups: Group[] }>('/entry-groups'), api<{ exit_groups: Group[] }>('/exit-groups')]);
-      setRows(rules.rules); setGroups(entryGroups.entry_groups); setExitGroups(exits.exit_groups); setError('');
+      setRows(rules.rules); setSelectedIDs(ids => ids.filter(id => rules.rules.some(row => row.id === id))); setGroups(entryGroups.entry_groups); setExitGroups(exits.exit_groups); setError('');
     } catch (e) { failed(e); }
     finally { setLoading(false); }
   }
@@ -39,10 +42,10 @@ export function Rules({ onSessionExpired }: { onSessionExpired: () => void }) {
   function edit(row: Rule | null) {
     setError(''); form.resetFields(); form.setFieldsValue(row ?? { kind: 'direct', enabled: true, allow_private: false }); setEditing(row);
   }
-  async function save(values: RuleInput) {
+  async function save(values: RuleInput & { random_port?: boolean }) {
     setSaving(true);
     try {
-      await api(editing ? `/rules/${editing.id}` : '/rules', editing ? 'PUT' : 'POST', { ...values, exit_group_id: values.kind === 'tunnel' ? values.exit_group_id : undefined, target_family: 'ipv4' });
+      await api(editing ? `/rules/${editing.id}` : '/rules', editing ? 'PUT' : 'POST', { ...values, listen_port: values.random_port ? 0 : values.listen_port, exit_group_id: values.kind === 'tunnel' ? values.exit_group_id : undefined, target_family: 'ipv4' });
       setEditing(undefined); form.resetFields(); await load();
     } catch (e) { failed(e); }
     finally { setSaving(false); }
@@ -54,9 +57,9 @@ export function Rules({ onSessionExpired }: { onSessionExpired: () => void }) {
     try { await api(`/rules/${id}`, 'DELETE'); await load(); } catch (e) { failed(e); }
   }
   return <>
-    <div className="nodes-heading"><div><Typography.Title level={2}>转发规则</Typography.Title><Typography.Paragraph type="secondary">将入口组的 TCP 监听端口通过直连或出口组转发到一个 IPv4 或域名目标。</Typography.Paragraph></div><Space><Button onClick={() => void load()}>刷新</Button><Button type="primary" onClick={() => edit(null)}>创建转发规则</Button></Space></div>
+    <div className="nodes-heading"><div><Typography.Title level={2}>转发规则</Typography.Title><Typography.Paragraph type="secondary">将入口组的 TCP 监听端口通过直连或出口组转发到一个 IPv4 或域名目标。</Typography.Paragraph></div><Space wrap><RulesTransfer selectedIDs={selectedIDs} onChanged={load} onSessionExpired={onSessionExpired} /><Button onClick={() => void load()}>刷新</Button><Button type="primary" onClick={() => edit(null)}>创建转发规则</Button></Space></div>
     {error && <Alert title={error} type="error" showIcon className="message" />}
-    <Card styles={{ body: { padding: 0 } }}><Table<Rule> rowKey="id" dataSource={rows} loading={loading} scroll={{ x: 1500 }} locale={{ emptyText: '暂无转发规则，请先创建入口组。' }} expandable={{ expandedRowRender: row => <RuleSyncDetails members={row.sync_members} /> }} columns={[
+    <Card styles={{ body: { padding: 0 } }}><Table<Rule> rowKey="id" dataSource={rows} rowSelection={{ selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} loading={loading} scroll={{ x: 1500 }} locale={{ emptyText: '暂无转发规则，请先创建入口组。' }} expandable={{ expandedRowRender: row => <RuleSyncDetails members={row.sync_members} /> }} columns={[
       { title: '规则', dataIndex: 'name' },
       { title: '入口组', render: (_, row) => groups.find(g => g.id === row.entry_group_id)?.name ?? row.entry_group_id },
       { title: '链路', render: (_, row) => row.kind === 'tunnel' ? <Space orientation="vertical" size={0}><Tag color="blue">隧道</Tag><span>{exitGroups.find(g => g.id === row.exit_group_id)?.name ?? row.exit_group_id}</span></Space> : <Tag>直连</Tag> },
@@ -78,7 +81,8 @@ export function Rules({ onSessionExpired }: { onSessionExpired: () => void }) {
         <Form.Item name="entry_group_id" label="入口组" rules={[{ required: true, message: '请选择入口组' }]}><Select options={groups.map(g => ({ value: g.id, label: g.name }))} /></Form.Item>
         <Form.Item name="kind" label="链路形态" rules={[{ required: true }]}><Select options={[{ value: 'direct', label: '直连' }, { value: 'tunnel', label: '隧道' }]} /></Form.Item>
         {kind === 'tunnel' && <Form.Item name="exit_group_id" label="出口组" preserve={false} rules={[{ required: true, message: '请选择出口组' }]} extra="域名目标由出口解析。出口不可用时，新连接失败。"><Select options={exitGroups.map(g => ({ value: g.id, label: g.name }))} /></Form.Item>}
-        <Form.Item name="listen_port" label="TCP 监听端口" rules={[{ required: true, message: '请输入监听端口' }]}><InputNumber min={1} max={65535} precision={0} style={{ width: '100%' }} /></Form.Item>
+        {!editing && <Form.Item name="random_port" label="随机监听端口" valuePropName="checked" extra="保存时从 1024–65535 中选一个在所有入口成员配置中均空闲的端口，保存后固定使用。"><Switch /></Form.Item>}
+        {!randomPort && <Form.Item name="listen_port" label="TCP 监听端口" preserve={false} rules={[{ required: true, message: '请输入监听端口' }]}><InputNumber min={1} max={65535} precision={0} style={{ width: '100%' }} /></Form.Item>}
         <Form.Item name="target_address" label="目标 IPv4 或域名" rules={[{ required: true, whitespace: true, message: '请输入目标地址' }]}><Input placeholder="例如：203.0.113.10 或 target.example.com" maxLength={253} /></Form.Item>
         <Form.Item name="target_port" label="目标端口" rules={[{ required: true, message: '请输入目标端口' }]}><InputNumber min={1} max={65535} precision={0} style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="allow_private" label="允许私网目标" valuePropName="checked" extra="域名解析到私网、回环或链路本地地址时，同样需要显式允许。"><Switch /></Form.Item>

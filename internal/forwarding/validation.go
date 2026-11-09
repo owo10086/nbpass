@@ -3,6 +3,7 @@ package forwarding
 import (
 	"fmt"
 	"net/netip"
+	"sort"
 	"strings"
 )
 
@@ -52,50 +53,43 @@ type ValidationError struct {
 
 func (e *ValidationError) Error() string { return e.Message }
 
-// ValidateConfiguration 检查所有成员上的实际启用监听，并在“节点 × 规则”图中找环。
-// targets 为当前能确认的 A 记录；域名解析失败或未来 DNS 变化不构成静态证明。
+// ValidateConfiguration 保留单次保存的首个错误契约。
 func ValidateConfiguration(nodes []ValidationNode, rules []Rule, members map[string][]string, targets map[string][]netip.Addr) error {
+	failures := ConfigurationErrors(nodes, rules, members, targets)
+	if len(failures) > 0 {
+		return failures[0]
+	}
+	return nil
+}
+
+// ConfigurationErrors 一次收集端口冲突和所有强连通分量中的环路参与者。
+// targets 为当前能确认的 A 记录；域名解析失败或未来变化不构成静态证明。
+func ConfigurationErrors(nodes []ValidationNode, rules []Rule, members map[string][]string, targets map[string][]netip.Addr) []*ValidationError {
+	failures := ListenerConflicts(nodes, rules, members)
+	invalid := map[string]bool{}
+	for _, failure := range failures {
+		for _, listener := range failure.Listeners {
+			if listener.Kind == "rule" {
+				invalid[listener.RuleID] = true
+			}
+		}
+	}
 	type endpoint struct {
 		ref  ListenerReference
 		rule Rule
 	}
 	byNode := map[string]ValidationNode{}
-	occupied := map[string]map[int]ListenerReference{}
 	var endpoints []endpoint
-	reserve := func(ref ListenerReference) error {
-		if previous, ok := occupied[ref.NodeID][ref.Port]; ok {
-			return &ValidationError{Code: "port_conflict", Message: "监听端口冲突：" + ref.String() + "与" + previous.String() + "冲突", Listeners: []ListenerReference{previous, ref}}
-		}
-		occupied[ref.NodeID][ref.Port] = ref
-		return nil
-	}
 	for _, n := range nodes {
 		byNode[n.ID] = n
-		occupied[n.ID] = map[int]ListenerReference{}
-		for _, service := range []struct {
-			kind string
-			port int
-		}{{"tunnel", n.TunnelListenPort}, {"check", n.CheckPort}} {
-			if err := reserve(ListenerReference{NodeID: n.ID, NodeName: n.Name, Port: service.port, Kind: service.kind}); err != nil {
-				return err
-			}
-		}
-		if n.ActiveTunnelListenPort != 0 && n.ActiveTunnelListenPort != n.TunnelListenPort {
-			if err := reserve(ListenerReference{NodeID: n.ID, NodeName: n.Name, Port: n.ActiveTunnelListenPort, Kind: "tunnel"}); err != nil {
-				return err
-			}
-		}
 	}
 	for _, r := range rules {
-		if !r.Enabled {
+		if !r.Enabled || invalid[r.ID] {
 			continue
 		}
 		for _, id := range members[r.EntryGroupID] {
 			n := byNode[id]
 			ref := ListenerReference{NodeID: id, NodeName: n.Name, Port: r.ListenPort, Kind: "rule", RuleID: r.ID, RuleName: r.Name}
-			if err := reserve(ref); err != nil {
-				return err
-			}
 			endpoints = append(endpoints, endpoint{ref: ref, rule: r})
 		}
 	}
@@ -125,42 +119,117 @@ func ValidateConfiguration(nodes []ValidationNode, rules []Rule, members map[str
 			}
 		}
 	}
-	state := make([]uint8, len(endpoints))
-	var stack []int
-	var visit func(int) error
-	visit = func(i int) error {
-		if state[i] == 2 {
-			return nil
-		}
-		if state[i] == 1 {
-			start := 0
-			for stack[start] != i {
-				start++
-			}
-			path := append(append([]int{}, stack[start:]...), i)
-			refs := make([]ListenerReference, 0, len(path))
-			labels := make([]string, 0, len(path))
-			for _, index := range path {
-				refs = append(refs, endpoints[index].ref)
-				labels = append(labels, endpoints[index].ref.String())
-			}
-			return &ValidationError{Code: "forwarding_loop", Message: "配置会形成转发循环：" + strings.Join(labels, " → "), Listeners: refs}
-		}
-		state[i] = 1
+	indices, low := make([]int, len(endpoints)), make([]int, len(endpoints))
+	for i := range indices {
+		indices[i] = -1
+	}
+	onStack := make([]bool, len(endpoints))
+	stack := []int{}
+	next := 0
+	var visit func(int)
+	visit = func(i int) {
+		indices[i], low[i] = next, next
+		next++
 		stack = append(stack, i)
+		onStack[i] = true
 		for _, j := range edges[i] {
-			if err := visit(j); err != nil {
-				return err
+			if indices[j] == -1 {
+				visit(j)
+				low[i] = min(low[i], low[j])
+			} else if onStack[j] {
+				low[i] = min(low[i], indices[j])
 			}
 		}
-		stack = stack[:len(stack)-1]
-		state[i] = 2
-		return nil
+		if low[i] != indices[i] {
+			return
+		}
+		component := []int{}
+		for {
+			j := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			onStack[j] = false
+			component = append(component, j)
+			if j == i {
+				break
+			}
+		}
+		cyclic := len(component) > 1
+		if !cyclic {
+			for _, j := range edges[i] {
+				cyclic = cyclic || j == i
+			}
+		}
+		if !cyclic {
+			return
+		}
+		sort.Ints(component)
+		refs := make([]ListenerReference, 0, len(component))
+		for _, j := range component {
+			refs = append(refs, endpoints[j].ref)
+		}
+		failures = append(failures, &ValidationError{Code: "forwarding_loop", Message: validationSummary("配置会形成转发循环", refs), Listeners: refs})
 	}
 	for i := range endpoints {
-		if err := visit(i); err != nil {
-			return err
+		if indices[i] == -1 {
+			visit(i)
 		}
 	}
-	return nil
+	return failures
+}
+
+// 摘要有界，全部参与者保留在结构化引用中，避免重复拼接长名单。
+func validationSummary(label string, refs []ListenerReference) string {
+	labels := []string{}
+	for _, ref := range refs[:min(2, len(refs))] {
+		labels = append(labels, ref.String())
+	}
+	message := label + "：" + strings.Join(labels, "与")
+	if len(refs) > 2 {
+		message += fmt.Sprintf("（共 %d 处监听）", len(refs))
+	}
+	return message
+}
+
+// ListenerConflicts 保留每个冲突端点上的全部占用者，供批量预检逐条归属原因。
+// 单条保存也使用此结果，避免导入与普通保存产生不同的端口语义。
+func ListenerConflicts(nodes []ValidationNode, rules []Rule, members map[string][]string) []*ValidationError {
+	type endpoint struct {
+		node string
+		port int
+	}
+	occupied := map[endpoint][]ListenerReference{}
+	order := []endpoint{}
+	reserve := func(ref ListenerReference) {
+		key := endpoint{ref.NodeID, ref.Port}
+		if len(occupied[key]) == 0 {
+			order = append(order, key)
+		}
+		occupied[key] = append(occupied[key], ref)
+	}
+	byID := map[string]ValidationNode{}
+	for _, n := range nodes {
+		byID[n.ID] = n
+		reserve(ListenerReference{NodeID: n.ID, NodeName: n.Name, Port: n.TunnelListenPort, Kind: "tunnel"})
+		reserve(ListenerReference{NodeID: n.ID, NodeName: n.Name, Port: n.CheckPort, Kind: "check"})
+		if n.ActiveTunnelListenPort != 0 && n.ActiveTunnelListenPort != n.TunnelListenPort {
+			reserve(ListenerReference{NodeID: n.ID, NodeName: n.Name, Port: n.ActiveTunnelListenPort, Kind: "tunnel"})
+		}
+	}
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		for _, id := range members[rule.EntryGroupID] {
+			reserve(ListenerReference{NodeID: id, NodeName: byID[id].Name, Port: rule.ListenPort, Kind: "rule", RuleID: rule.ID, RuleName: rule.Name})
+		}
+	}
+	conflicts := []*ValidationError{}
+	for _, key := range order {
+		refs := occupied[key]
+		if len(refs) < 2 {
+			continue
+		}
+		conflicts = append(conflicts, &ValidationError{Code: "port_conflict", Message: validationSummary("监听端口冲突", refs), Listeners: refs})
+	}
+	return conflicts
 }

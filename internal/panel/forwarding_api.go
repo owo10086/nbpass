@@ -25,6 +25,9 @@ func (p *Panel) forwardingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/entry-groups/{id}", p.saveEntryGroup)
 	mux.HandleFunc("DELETE /api/entry-groups/{id}", p.deleteEntryGroup)
 	mux.HandleFunc("GET /api/rules", p.listRules)
+	mux.HandleFunc("GET /api/rules/export", p.exportRules)
+	mux.HandleFunc("POST /api/rules/import/preflight", p.importRules)
+	mux.HandleFunc("POST /api/rules/import", p.importRules)
 	mux.HandleFunc("POST /api/rules", p.saveRule)
 	mux.HandleFunc("PUT /api/rules/{id}", p.saveRule)
 	mux.HandleFunc("DELETE /api/rules/{id}", p.deleteRule)
@@ -148,9 +151,17 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Name = strings.TrimSpace(body.Name)
-	if body.Name == "" || len(body.Name) > 200 || len(body.Members) == 0 {
-		problem(w, 400, "入口组须有名称且至少包含一个成员")
+	if body.Name == "" || len(body.Name) > 200 || len(body.Members) == 0 || len(body.Members) > 64 {
+		problem(w, 400, "入口组须有名称及 1–64 个有序成员")
 		return
+	}
+	seen := map[string]bool{}
+	for _, member := range body.Members {
+		if member == "" || seen[member] {
+			problem(w, 400, "入口成员不能为空或重复")
+			return
+		}
+		seen[member] = true
 	}
 	id := r.PathValue("id")
 	creating := r.Method == "POST"
@@ -290,15 +301,26 @@ func loadRules(ctx context.Context, q queryer) ([]forwarding.Rule, error) {
 	return rules, rows.Err()
 }
 func (p *Panel) saveRule(w http.ResponseWriter, r *http.Request) {
-	var body forwarding.Rule
-	if !decode(w, r, &body) {
+	var input struct {
+		forwarding.Rule
+		RandomPort bool `json:"random_port"`
+	}
+	if !decode(w, r, &input) {
 		return
+	}
+	body := input.Rule
+	creating := r.Method == "POST"
+	if input.RandomPort {
+		if !creating || body.ListenPort != 0 {
+			problem(w, 400, "仅新建规则可选择随机端口，且不能同时指定监听端口")
+			return
+		}
+		body.ListenPort = 1024 // 先验证其余输入，具体端口在同一保存事务内选择。
 	}
 	if err := body.Validate(); err != nil {
 		problem(w, 400, err.Error())
 		return
 	}
-	creating := r.Method == "POST"
 	body.ID = r.PathValue("id")
 	if creating {
 		var err error
@@ -324,12 +346,14 @@ func (p *Panel) saveRule(w http.ResponseWriter, r *http.Request) {
 				return &forwardingError{400, "出口组不存在"}
 			}
 		}
-		args := []any{body.Name, body.EntryGroupID, body.Kind, body.ListenPort, body.TargetAddress, body.TargetFamily, body.TargetPort, body.AllowPrivate, body.Enabled, body.ExitGroupID, body.ID}
-		if creating {
-			_, err := tx.ExecContext(r.Context(), `INSERT INTO forward_rules(name,entry_group_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled,exit_group_id,id) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, args...)
-			return err
+		if input.RandomPort {
+			port, err := p.randomRulePort(r.Context(), tx, body.EntryGroupID)
+			if err != nil {
+				return err
+			}
+			body.ListenPort = port
 		}
-		return missingResult(tx.ExecContext(r.Context(), `UPDATE forward_rules SET name=?,entry_group_id=?,kind=?,listen_port=?,target_address=?,target_family=?,target_port=?,allow_private=?,enabled=?,exit_group_id=? WHERE id=?`, args...))
+		return storeRule(r.Context(), tx, body, creating)
 	}) {
 		return
 	}

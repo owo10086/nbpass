@@ -214,7 +214,14 @@ func TestDirectListenFailureIsVisibleAndCanRetry(t *testing.T) {
 		return row["config_status"] == "同步失败" && row["apply_error"] != "" && row["applied_revision"] == float64(0)
 	})
 	occupied.Close()
-	h.Clock.Advance(60 * time.Second)
+	// 分步推进全量同步周期，让在途控制/事件确认先被处理，避免同时触发超时。
+	for range 60 {
+		if nodeRow(t, c, id)["config_status"] == "正常" {
+			break
+		}
+		h.Clock.Advance(time.Second)
+		time.Sleep(10 * time.Millisecond)
+	}
 	awaitRevision(t, c, id, 0)
 	tcpExchange(t, body["listen_port"].(int), "A:")
 }

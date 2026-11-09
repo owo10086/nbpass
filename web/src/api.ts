@@ -3,11 +3,16 @@ export class APIError extends Error {
 }
 
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
+  return apiRawJSON<T>(path, method, body === undefined ? undefined : JSON.stringify(body));
+}
+
+// 规则文件导入保留原始 JSON，让服务端能够拒绝重复键等歧义输入。
+export async function apiRawJSON<T>(path: string, method = 'GET', body?: string): Promise<T> {
   const response = await fetch(`/api${path}`, {
     method,
     credentials: 'same-origin',
     headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body,
   });
   if (response.status === 204) return undefined as T;
   const result = await response.json();
