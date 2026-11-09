@@ -17,7 +17,7 @@ CREATE UNIQUE INDEX rotation_node_pending ON rotation_actions(node_id)
  WHERE state NOT IN ('changed','cancelled','released');`
 
 func rotationPending(a *rotationAction) bool {
-	return a != nil && a.State != "changed" && a.State != "cancelled" && a.State != "released"
+	return a != nil && (a.RecheckStatus == "checking" || (a.State != "changed" && a.State != "cancelled" && a.State != "released"))
 }
 
 func (p *Panel) reconcileRotation(w http.ResponseWriter, r *http.Request) {

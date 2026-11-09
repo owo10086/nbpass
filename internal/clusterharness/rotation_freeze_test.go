@@ -133,8 +133,8 @@ func TestRotationUnconfirmedFreezeAndManualRelease(t *testing.T) {
 		t.Fatalf("解除改写历史事实: %v", released)
 	}
 	v = f.c.Do("GET", f.path, nil, 200)
-	if v["frozen"] != false || v["automatic_eligible"] != true {
-		t.Fatalf("解除后未恢复资格: %v", v)
+	if v["frozen"] != false || v["automatic_eligible"] != false || v["quota"].(map[string]any)["used_day"] != float64(1) {
+		t.Fatalf("解除后应保留已用额度与自动限额: %v", v)
 	}
 	if f.calls.Load() != 1 {
 		t.Fatal("解除调用了商家")
@@ -168,8 +168,8 @@ func TestRotationReconcileReadsIPWithoutCallingVendor(t *testing.T) {
 	if changed["id"] != a["id"] || changed["new_ip"] != "8.8.8.8" || f.calls.Load() != 1 {
 		t.Fatalf("核对重调接口或丢失动作: %v 调用%d", changed, f.calls.Load())
 	}
-	if v := f.c.Do("GET", f.path, nil, 200); v["frozen"] != false || v["automatic_eligible"] != true {
-		t.Fatalf("核对清楚没有解冻: %v", v)
+	if v := f.c.Do("GET", f.path, nil, 200); v["frozen"] != false || v["automatic_eligible"] != false || v["quota"].(map[string]any)["used_day"] != float64(1) {
+		t.Fatalf("核对清楚应解冻且保留已用额度: %v", v)
 	}
 	if nodeRow(t, f.c, f.id)["public_ipv4"] != "8.8.8.8" {
 		t.Fatal("核对结果未更新节点 IP")
@@ -201,7 +201,7 @@ func TestRotationQueryUncertaintyFreezesDuringObservation(t *testing.T) {
 			f.h.Clock.Advance(time.Minute)
 			awaitRotation(t, f.c, f.path, "changed")
 			v = f.c.Do("GET", f.path, nil, 200)
-			if f.calls.Load() != 1 || v["frozen"] != false || v["automatic_eligible"] != true {
+			if f.calls.Load() != 1 || v["frozen"] != false || v["automatic_eligible"] != false || v["quota"].(map[string]any)["used_day"] != float64(1) {
 				t.Fatal("观察恢复未正确收敛")
 			}
 		})

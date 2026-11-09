@@ -162,6 +162,7 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 	p.startTelegram(background)
 	p.startSelfCheckNotifications(background)
 	p.startDNSWatch(background)
+	p.startRotationPolicy(background)
 	return p, nil
 }
 

@@ -19,12 +19,13 @@ import (
 )
 
 type controlSession struct {
-	done            chan struct{}
-	once            sync.Once
-	instance        string
-	changed         chan struct{}
-	eventsLogged    bool
-	dnsWatchCapable bool
+	rotationRecheckCapable bool
+	done                   chan struct{}
+	once                   sync.Once
+	instance               string
+	changed                chan struct{}
+	eventsLogged           bool
+	dnsWatchCapable        bool
 }
 
 func (s *controlSession) stop() { s.once.Do(func() { close(s.done) }) }
@@ -439,6 +440,7 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 	}
 	heartbeat := !independentNodeReport(report) && report.AttemptedRevision == 0
 	if heartbeat {
+		session.rotationRecheckCapable = report.RotationRecheckCapable
 		if err := p.recordNodeIP(ctx, id, report.PublicIpv4); err != nil {
 			return nil, status.Error(codes.Unavailable, "存储暂不可用")
 		}

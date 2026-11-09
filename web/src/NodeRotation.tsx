@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
-import { Alert, Button, Descriptions, Form, Input, Modal, Popconfirm, Select, Space, Tag, Typography } from 'antd';
+import { Alert, Button, Descriptions, Form, Input, Modal, Popconfirm, Select, Space, Switch, Tag, Typography } from 'antd';
 import { api } from './api';
 
 type RotationNode = { id: string; name: string; connected: boolean };
-type Action = { id: string; old_ip: string; new_ip: string; state: string; reason: string; attempts: number; expires_at: string; updated_at: string; observation_complete: boolean };
-type State = { configured: boolean; unsafe_network: boolean; warning: string; action: Action | null; frozen: boolean; freeze_reason: string; pending_operation: string; can_reconcile: boolean; can_unfreeze: boolean };
+type Action = { id: string; old_ip: string; new_ip: string; state: string; reason: string; attempts: number; expires_at: string; updated_at: string; observation_complete: boolean; recheck_status: string; recheck_rounds: { result: string; finished_at: string }[] };
+type State = { automatic_enabled: boolean; automatic_eligible: boolean; paused: boolean; no_improvement: number; recheck_status: string; quota: { used_hour: number; used_day: number; cooldown_seconds: number; retry_after_seconds: number }; configured: boolean; unsafe_network: boolean; warning: string; action: Action | null; frozen: boolean; freeze_reason: string; pending_operation: string; can_reconcile: boolean; can_unfreeze: boolean };
 type Values = { url: string; method: string; headers: string; body: string; private_endpoints: string };
+const recheckLabels: Record<string, string> = { checking: '新 IP 正在复检', recovered: '已恢复', no_improvement: '无改善', pending: '待确认' };
 const labels: Record<string, string> = { authorized: '等待节点执行', started: '已开始调用', observing: '正在观察 IP', changed: 'IP 已变化', cancelled: '已取消', unconfirmed: '结果未确认', released: '管理员已解除冻结（原结果未知）' };
 
 export function NodeRotation({ node, onClose, onError }: { node?: RotationNode; onClose: () => void; onError: (e: unknown) => void }) {
@@ -55,12 +56,26 @@ export function NodeRotation({ node, onClose, onError }: { node?: RotationNode; 
     catch (e) { onError(e); }
     finally { setControlling(false); }
   }
+  async function policy(operation: 'automatic' | 'resume', enabled?: boolean) {
+    setControlling(true);
+    try { await api(`${path}/${operation}`, operation === 'automatic' ? 'PUT' : 'POST', operation === 'automatic' ? { enabled } : { confirm: true }); setState(await api<State>(path)); }
+    catch (e) { onError(e); }
+    finally { setControlling(false); }
+  }
   const action = state?.action;
-  const busy = !!action && !['changed', 'cancelled', 'released'].includes(action.state);
+  const busy = !!action && (action.recheck_status === 'checking' || !['changed', 'cancelled', 'released'].includes(action.state));
   function close() { form.resetFields(); setEditing(false); onClose(); }
 
   return <Modal title={`换 IP${node ? `：${node.name}` : ''}`} open={!!node} onCancel={close} footer={null} width={720} destroyOnHidden>
-    <Alert type="warning" showIcon title="换 IP 可能中断已有连接。" description="观察到公网 IPv4 变化才算换成，可达性仍需复检。当前操作不更新受管记录或出口地址。" />
+    <Alert type="warning" showIcon title="换 IP 可能中断已有连接。" description="观察到公网 IPv4 变化才算换成，可达性仍需复检。换成后通过协调器更新仍使用该节点旧 IP 的受管记录。" />
+    {state && <Descriptions column={1} size="small" bordered style={{ marginTop: 12 }} items={[
+      { key: 'automatic', label: '节点自动换 IP 总授权', children: <Space><Switch checked={state.automatic_enabled} disabled={!state.configured || controlling} onChange={value => void policy('automatic', value)} /><Typography.Text type="secondary">由入口组策略①申请</Typography.Text></Space> },
+      { key: 'quota', label: '节点共享额度', children: `滚动 1 小时 ${state.quota.used_hour} / 1 次；滚动 24 小时 ${state.quota.used_day} / 3 次（手动也计入）` },
+      { key: 'cooldown', label: '自动换 IP 等待', children: `冷却剩余 ${Math.ceil(state.quota.cooldown_seconds / 60)} 分钟；额度最早释放约 ${Math.ceil(state.quota.retry_after_seconds / 60)} 分钟后` },
+      { key: 'no-improvement', label: '连续无改善', children: `${state.no_improvement} 次${state.paused ? ' · 自动换 IP 已暂停' : ''}` },
+      { key: 'recheck', label: '新 IP 复检', children: recheckLabels[state.recheck_status] || '尚无复检结果' },
+    ]} />}
+    {state?.paused && <Alert style={{ marginTop: 12 }} type="warning" showIcon title="连续两次换 IP 无改善，自动换 IP 已暂停" description={<Popconfirm title="解除无改善暂停？" description="解除保留已用额度；后续正常自测也会解除暂停。" onConfirm={() => policy('resume')}><Button disabled={controlling}>手动解除无改善暂停</Button></Popconfirm>} />}
     {state?.warning && <Alert style={{ marginTop: 12 }} type="warning" showIcon title={state.warning} />}
     {state?.frozen && <Alert style={{ marginTop: 12 }} type="warning" showIcon title="自动换 IP 已冻结" description={<>
       <div>{state.freeze_reason}</div>
@@ -76,7 +91,7 @@ export function NodeRotation({ node, onClose, onError }: { node?: RotationNode; 
     <Space style={{ margin: '16px 0' }} wrap>
       <Tag>{state?.configured ? '接口已配置，凭据不回显' : '尚未配置接口'}</Tag>
       <Button disabled={!state} onClick={() => { form.resetFields(); setEditing(!editing); }}>{editing ? '收起设置' : state?.configured ? '替换接口设置' : '配置换 IP 接口'}</Button>
-      <Popconfirm title="立即手动换 IP？" description="请确认目标为该节点；进行中或结果未确认时不能再次发起。" onConfirm={trigger}>
+      <Popconfirm title="立即手动换 IP？" description="手动换 IP 不受冷却与次数限制，执行后计入额度；进行中、复检中或结果未确认时不能再次发起。" onConfirm={trigger}>
         <Button danger disabled={!state?.configured || !node?.connected || busy} loading={triggering}>手动换 IP</Button>
       </Popconfirm>
     </Space>
@@ -85,6 +100,7 @@ export function NodeRotation({ node, onClose, onError }: { node?: RotationNode; 
       { key: 'state', label: '执行进度', children: <Tag color={action.state === 'changed' ? 'green' : action.state === 'unconfirmed' ? 'orange' : 'blue'}>{labels[action.state] || action.state}</Tag> },
       { key: 'reason', label: '说明', children: action.reason || '两分钟内有效的执行许可已下发' },
       { key: 'address', label: '公网 IPv4', children: `${action.old_ip} → ${action.new_ip || '待确认'}` },
+      { key: 'recheck-rounds', label: '新 IP 复检轮次', children: action.recheck_rounds?.map((r, i) => `${i + 1}：${({ normal: '正常', abnormal: '异常', unknown: '未知' })[r.result as 'normal' | 'abnormal' | 'unknown']}（${new Date(r.finished_at).toLocaleString()}）`).join('；') || '等待确认新 IP' },
       { key: 'attempts', label: '换后观察', children: `${action.attempts} / 5 次，每次间隔 60 秒` },
       { key: 'expires', label: '许可到期', children: new Date(action.expires_at).toLocaleString() },
       { key: 'id', label: '动作 ID', children: <Typography.Text copyable style={{ wordBreak: 'break-all' }}>{action.id}</Typography.Text> },

@@ -59,12 +59,12 @@ func TestCheckerArbitrationThreeStates(t *testing.T) {
 	}
 }
 
-func startChecker(t *testing.T, h *clusterharness.Harness, c *clusterharness.Client, index, mode int, gate <-chan struct{}) *clusterharness.Node {
+func startChecker(t *testing.T, h *clusterharness.Harness, c *clusterharness.Client, index, mode int, gate <-chan struct{}, options ...func(*node.Config, *node.Dependencies)) *clusterharness.Node {
 	t.Helper()
 	created := addNode(c, "国内检测点")
 	id := created["id"].(string)
 	c.Do("PUT", "/api/nodes/"+id+"/region", map[string]any{"name": "中国大陆", "mainland_china": true}, 204)
-	n := h.StartNode(created["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) {
+	n := h.StartNode(created["installation_ticket"].(string), func(cfg *node.Config, d *node.Dependencies) {
 		d.CheckerLookup = func(context.Context, string) ([]string, error) { return []string{"203.0.113.9"}, nil }
 		d.CheckerDial = func(ctx context.Context, address string) (net.Conn, error) {
 			if address == "203.0.113.9:443" {
@@ -93,6 +93,9 @@ func startChecker(t *testing.T, h *clusterharness.Harness, c *clusterharness.Cli
 				return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("目标拒绝连接")}
 			}
 			return checkerPipe(), nil
+		}
+		for _, option := range options {
+			option(cfg, d)
 		}
 	})
 	awaitNode(t, c, id, connected)
@@ -304,9 +307,19 @@ func TestCheckerArbitrationReleasesCompletedTasks(t *testing.T) {
 	var ip atomic.Value
 	ip.Store("8.8.8.8")
 	id, _ := startUnknownTarget(t, h, c, &ip)
-	awaitArbitration(t, c, id, "abnormal")
+	v := awaitArbitration(t, c, id, "abnormal")
+	checkerID := v["rounds"].([]any)[0].(map[string]any)["arbitration"].(map[string]any)["checkers"].([]any)[0].(map[string]any)["checker_id"].(string)
 	for round := 2; round <= 10; round++ {
-		advanceCheckerClock(t, h, c, id, 120)
+		for range 12 {
+			// 健康场景必须等两端心跳及响应消费完毕；只等目标落库会把
+			// 检测点仍在途的 15 秒确认误快进成超时，不能验证槽位释放。
+			awaitControlIdle(t, h)
+			beforeTarget := nodeRow(t, c, id)["last_seen_at"]
+			beforeChecker := nodeRow(t, c, checkerID)["last_seen_at"]
+			h.Clock.Advance(10 * time.Second)
+			awaitNode(t, c, id, func(v map[string]any) bool { return v["last_seen_at"] != beforeTarget })
+			awaitNode(t, c, checkerID, func(v map[string]any) bool { return v["last_seen_at"] != beforeChecker })
+		}
 		awaitSelfCheckCount(t, c, id, round)
 		awaitArbitration(t, c, id, "abnormal")
 	}

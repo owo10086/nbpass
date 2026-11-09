@@ -206,7 +206,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 	deps.Forwarding.DefaultCheckPort = 18080
 	engine := forwarding.NewEngine(deps.Forwarding)
 	deps.exitHealth = engine.ExitHealth
-	report := &controlpb.NodeReport{ExitFailoverVersion: 1, DnsWatchCapable: true, TunnelAuthorizationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
+	report := &controlpb.NodeReport{ExitFailoverVersion: 1, RotationRecheckCapable: true, DnsWatchCapable: true, TunnelAuthorizationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
 	defer func() {
 		engine.Close()
 		if deps.Traffic != nil {
