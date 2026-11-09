@@ -3,6 +3,7 @@ import { Alert, Button, Card, Checkbox, Descriptions, Form, Input, Modal, Select
 import { api, APIError } from './api';
 import { EntryBlockedPolicy } from './EntryBlockedPolicy';
 import { EntryMembers } from './EntryMembers';
+import { EntryReadiness, type EntryMemberState } from './EntryReadiness';
 import { EntrySwitch, type EntrySwitchState } from './EntrySwitch';
 
 type Account = { id: string; name: string; configured: boolean };
@@ -20,6 +21,7 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
   const [binding, setBinding] = useState<Binding | null>(null);
   const [publication, setPublication] = useState<Publication | null>(null);
   const [members, setMembers] = useState(group.members);
+  const [memberStates, setMemberStates] = useState<EntryMemberState[]>([]);
   const [groupName, setGroupName] = useState(group.name);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -30,6 +32,7 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
   const [publishForm] = Form.useForm();
   const [membersForm] = Form.useForm();
   const membersDirty = useRef(false);
+  const bindingDirty = useRef(false);
   const active = useRef(true);
   const expired = useRef(onSessionExpired); expired.current = onSessionExpired;
   const path = `/entry-groups/${group.id}`;
@@ -44,22 +47,23 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
         api<{ accounts: Account[] }>('/dns-accounts'),
         api<Binding>(`${path}/managed-record`).catch(e => { if (e instanceof APIError && e.status === 404) return null; throw e; }),
         api<Publication>(`${path}/publication`),
-        api<{ entry_groups: { id: string; name: string; members: string[] }[] }>('/entry-groups'),
+        api<{ entry_groups: { id: string; name: string; members: string[]; member_states: EntryMemberState[] }[] }>('/entry-groups'),
       ]);
       if (!active.current) return;
       setAccounts(list.accounts); setBinding(record); setPublication(state);
       const current = groups.entry_groups.find(g => g.id === group.id);
       if (current) {
-        setMembers(current.members); setGroupName(current.name);
+        setMembers(current.members); setGroupName(current.name); setMemberStates(current.member_states);
         if (!membersDirty.current) membersForm.setFieldsValue({ members: current.members });
       }
-      if (record) bindingForm.setFieldsValue(record);
+      if (record && !bindingDirty.current) bindingForm.setFieldsValue(record);
     } catch (e) { failed(e); }
     finally { if (active.current) setLoading(false); }
   }
   useEffect(() => {
     active.current = true; void load();
-    return () => { active.current = false; accountForm.resetFields(); publishForm.resetFields(); };
+    const timer = window.setInterval(() => void load(), 10_000);
+    return () => { window.clearInterval(timer); active.current = false; accountForm.resetFields(); publishForm.resetFields(); };
   }, []);
   useEffect(() => {
     if (!publication?.action) return;
@@ -75,13 +79,13 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
     try {
       const account = await api<Account>('/dns-accounts', 'POST', values);
       accountForm.resetFields(); setAddingAccount(false);
-      await load(); bindingForm.setFieldsValue({ account_id: account.id });
+      await load(); bindingDirty.current = true; bindingForm.setFieldsValue({ account_id: account.id });
     } catch (e) { failed(e); }
     finally { setSaving(false); }
   }
   async function bind(values: { account_id: string; domain: string; record_id: string; line_id: string }) {
     setSaving(true); setError('');
-    try { await api(`${path}/managed-record`, 'PUT', values); await load(); }
+    try { await api(`${path}/managed-record`, 'PUT', values); bindingDirty.current = false; await load(); }
     catch (e) { failed(e); }
     finally { setSaving(false); }
   }
@@ -101,8 +105,9 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
     finally { setSaving(false); }
   }
   const started = (publication?.desired_version ?? 0) > 0;
-  return <Modal title={`${groupName} · 入口组详情`} open onCancel={onClose} footer={null} width={720}>
+  return <Modal title={`${groupName} · 入口组详情`} open onCancel={onClose} footer={null} width={980}>
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
+      <Card title="成员就绪与自动切换候选"><EntryReadiness members={memberStates} /></Card>
       {error && <Alert title={error} type="error" showIcon />}
       <EntryBlockedPolicy path={path} onError={failed} />
       <Card title="成员与排序">
@@ -114,7 +119,7 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
       </Card>
       <Alert type="info" showIcon title="绑定后先核对当前记录，再由你明确选择活动入口并首次发布。" description="只管理这一条单线路 A 记录，发布 TTL 为 60 秒。" />
       <Card title="DNSPod 受管记录" loading={loading} extra={!started && <Button onClick={() => setAddingAccount(true)}>添加 DNSPod 账号</Button>}>
-        {!started && <Form form={bindingForm} layout="vertical" onFinish={bind} initialValues={{ line_id: '0' }}>
+        {!started && <Form form={bindingForm} layout="vertical" onFinish={bind} onValuesChange={() => { bindingDirty.current = true; }} initialValues={{ line_id: '0' }}>
           <Form.Item name="account_id" label="DNSPod 账号" rules={[{ required: true, message: '请选择账号' }]}><Select options={accounts.map(a => ({ value: a.id, label: a.name }))} /></Form.Item>
           <Form.Item name="domain" label="DNSPod 主域名" rules={[{ required: true, message: '请输入主域名' }]}><Input placeholder="example.com" maxLength={253} /></Form.Item>
           <Form.Item name="record_id" label="记录 ID" rules={[{ required: true, message: '请输入受管记录 ID' }]}><Input maxLength={100} /></Form.Item>
