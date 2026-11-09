@@ -46,6 +46,12 @@ func (p *Panel) flushBlockedEntryNotifications(ctx context.Context) error {
 			message = fmt.Sprintf("活动入口被墙，入口切换已写入 DNSPod：%s → %s（动作 %s）", n.node, n.target, n.action)
 		}
 		label := "策略②仅入口切换"
+		if n.policy == "rotate_ip" || n.policy == "disabled" {
+			label = "跨组换 IP 切离保护"
+			if n.outcome == "no_candidate" {
+				message = "共用节点需要换 IP，但本组没有就绪候选；保留最后的解析，按节点总授权、共享额度与冻结规则处理"
+			}
+		}
 		if n.policy == "switch_then_rotate" {
 			label = "策略③先切后换"
 			if n.outcome == "no_candidate" {

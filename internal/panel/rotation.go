@@ -223,6 +223,13 @@ func (p *Panel) authorizeRotation(ctx context.Context, id string, manual bool) (
 			return nil, &forwardingError{409, "自动换 IP 受额度、暂停、维护或网络风险限制"}
 		}
 	}
+	var entries []rotationEntry
+	if !manual {
+		entries, err = p.prepareCrossGroupRotation(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+	}
 	actionID, _, err := p.randomCredential()
 	if err != nil {
 		return nil, &forwardingError{503, "无法创建动作 ID"}
@@ -246,6 +253,13 @@ func (p *Panel) authorizeRotation(ctx context.Context, id string, manual bool) (
 		if eligible == 0 {
 			return nil, &forwardingError{409, "自动换 IP 申请策略或被墙状态已变化"}
 		}
+		current, err := rotationEntriesCurrent(ctx, tx, id, entries)
+		if err != nil {
+			return nil, err
+		}
+		if !current {
+			return nil, &forwardingError{409, "跨组切离期望版本已变化，等待重新检查"}
+		}
 	}
 	settings, e := loadSelfCheckSettings(ctx, tx)
 	if e != nil {
@@ -268,6 +282,13 @@ func (p *Panel) authorizeRotation(ctx context.Context, id string, manual bool) (
 	}
 	if err == nil {
 		err = linkStrategyThreeRotation(ctx, tx, id, actionID, manual)
+	}
+	if err == nil && !manual {
+		for _, entry := range entries {
+			if _, err = tx.ExecContext(ctx, `INSERT INTO rotation_entry_barriers(action_id,group_id,desired_version,policy) VALUES(?,?,?,?)`, actionID, entry.group, entry.version, entry.policy); err != nil {
+				break
+			}
+		}
 	}
 	if err == nil {
 		err = tx.Commit()
@@ -349,7 +370,8 @@ func (p *Panel) rotationCommand(ctx context.Context, id string) (*controlpb.Rota
 		return nil, err
 	}
 
-	if _, err = p.db.ExecContext(ctx, "UPDATE rotation_actions SET permit_sent=1 WHERE id=?", actionID); err != nil {
+	ready, err := p.markRotationPermit(ctx, id, actionID, origin)
+	if err != nil || !ready {
 		return nil, err
 	}
 	return &controlpb.RotationCommand{Automatic: origin == "automatic", RecheckConfig: recheck, RecheckRevision: revision, ActionId: actionID, NodeId: id, OldIp: oldIP, ExpiresAt: expires, IssuedAt: created, ConfigJson: data, NodeName: name}, nil
