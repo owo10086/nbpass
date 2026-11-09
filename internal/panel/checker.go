@@ -71,7 +71,12 @@ func (p *Panel) scheduleCheckers(ctx context.Context, tx *sql.Tx, nodeID string,
 	return nil
 }
 func (p *Panel) checkerTasks(ctx context.Context, id string) ([][]byte, error) {
-	rows, err := p.db.QueryContext(ctx, `SELECT t.task FROM checker_tasks t JOIN checker_rounds r ON r.node_id=t.node_id AND r.round_id=t.round_id WHERE t.checker_id=? AND t.result IS NULL AND r.status='pending' AND r.deadline>? ORDER BY r.issued_at,t.id LIMIT 8`, id, p.deps.Clock.Now().UnixNano())
+	now := p.deps.Clock.Now().UnixNano()
+	rows, err := p.db.QueryContext(ctx, `SELECT task FROM (
+ SELECT t.task,r.issued_at,t.id FROM checker_tasks t JOIN checker_rounds r ON r.node_id=t.node_id AND r.round_id=t.round_id WHERE t.checker_id=? AND t.result IS NULL AND r.status='pending' AND r.deadline>?
+ UNION ALL
+ SELECT t.task,r.issued_at,t.id FROM entry_offline_tasks t JOIN entry_offline_checks r ON r.id=t.check_id WHERE t.checker_id=? AND t.result IS NULL AND r.outcome='pending' AND r.deadline>?
+ ) ORDER BY issued_at,id LIMIT 8`, id, now, id, now)
 	if err != nil {
 		return nil, err
 	}
@@ -134,7 +139,8 @@ func (p *Panel) acceptCheckerResults(ctx context.Context, id string, batch [][]b
 		}
 		var assigned string
 		var taskData []byte
-		err = tx.QueryRowContext(ctx, "SELECT checker_id,task FROM checker_tasks WHERE id=?", result.Task.ID).Scan(&assigned, &taskData)
+		var offline bool
+		err = tx.QueryRowContext(ctx, `SELECT checker_id,task,0 FROM checker_tasks WHERE id=? UNION ALL SELECT checker_id,task,1 FROM entry_offline_tasks WHERE id=?`, result.Task.ID, result.Task.ID).Scan(&assigned, &taskData, &offline)
 		if err != nil || assigned != id {
 			return nil, errors.New("未分配给当前节点的检测任务")
 		}
@@ -152,6 +158,16 @@ func (p *Panel) acceptCheckerResults(ctx context.Context, id string, batch [][]b
 		}
 		if !validCheckerResult(result, task) {
 			return nil, errors.New("检测点证据与任务不一致")
+		}
+		if offline {
+			_, err = tx.ExecContext(ctx, `UPDATE entry_offline_tasks SET result=? WHERE id=? AND result IS NULL AND EXISTS(SELECT 1 FROM entry_offline_checks c WHERE c.id=entry_offline_tasks.check_id AND c.outcome='pending')`, data, task.ID)
+			if err == nil {
+				err = p.finishOfflineCheck(ctx, tx, task.RoundID, false)
+			}
+			if err != nil {
+				return nil, err
+			}
+			continue
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE checker_tasks SET result=? WHERE id=? AND result IS NULL AND EXISTS(SELECT 1 FROM checker_rounds r WHERE r.node_id=checker_tasks.node_id AND r.round_id=checker_tasks.round_id AND r.status='pending')`, data, task.ID)
 		if err != nil {

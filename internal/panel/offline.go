@@ -176,6 +176,8 @@ func (p *Panel) startOffline(ctx context.Context) {
 			case <-p.offlineWake:
 			}
 			_ = p.observeAllOffline(ctx)
+			_ = p.checkOfflineEntries(ctx)
+			_ = p.flushOfflineEntryNotifications(ctx)
 			_ = p.queueOfflineNotifications(ctx)
 		}
 	}()

@@ -104,6 +104,7 @@ var migrations = []string{
 	readinessMigration,
 	recoveryMigration,
 	exitBlockedMigration,
+	entryOfflineMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

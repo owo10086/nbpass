@@ -14,6 +14,7 @@ const entryManualSwitchMigration = `ALTER TABLE entry_groups ADD COLUMN auto_fai
 func (p *Panel) entryManualRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/entry-groups/{id}/switch", p.switchEntryGroup)
 	mux.HandleFunc("POST /api/entry-groups/{id}/resume-failback", p.resumeEntryFailback)
+	mux.HandleFunc("GET /api/entry-groups/{id}/offline-checks", p.listOfflineEntryChecks)
 }
 
 func (p *Panel) switchEntryGroup(w http.ResponseWriter, r *http.Request) {
