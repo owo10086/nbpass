@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Descriptions, Form, Input, Modal, Select, Space, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
+import { EntryBlockedPolicy } from './EntryBlockedPolicy';
 import { EntryMembers } from './EntryMembers';
 import { EntrySwitch, type EntrySwitchState } from './EntrySwitch';
 
@@ -103,6 +104,7 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
   return <Modal title={`${groupName} · 入口组详情`} open onCancel={onClose} footer={null} width={720}>
     <Space orientation="vertical" size="middle" style={{ width: '100%' }}>
       {error && <Alert title={error} type="error" showIcon />}
+      <EntryBlockedPolicy path={path} onError={failed} />
       <Card title="成员与排序">
         <Form form={membersForm} initialValues={{ members: group.members }} layout="vertical" onValuesChange={() => { membersDirty.current = true; }} onFinish={saveMembers} disabled={saving}>
           <EntryMembers nodes={nodes} />
