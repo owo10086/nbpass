@@ -230,9 +230,16 @@ func TestRotationExpiredOrDisconnectedDuringPreflightDoesNotCallVendor(t *testin
 				h.Clock.Advance(time.Second)
 			}
 			n.Restore()
-			for i := 0; i < 5; i++ {
+			// Keep driving reconnect timers until the HTTP-visible cancellation arrives.
+			// Under load the reconnect timer may be created after a fixed five ticks;
+			// wall-clock waiting alone cannot fire a paused fake clock.
+			deadline := time.Now().Add(6 * time.Second)
+			for time.Now().Before(deadline) {
 				h.Clock.Advance(time.Second)
 				time.Sleep(20 * time.Millisecond)
+				if a := c.Do("GET", path, nil, 200)["action"].(map[string]any); a["state"] == "cancelled" {
+					break
+				}
 			}
 			awaitRotation(t, c, path, "cancelled")
 			if calls.Load() != 0 {
