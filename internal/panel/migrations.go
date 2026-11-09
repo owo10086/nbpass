@@ -105,6 +105,7 @@ var migrations = []string{
 	recoveryMigration,
 	exitBlockedMigration,
 	entryOfflineMigration,
+	entryDomainWatchMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

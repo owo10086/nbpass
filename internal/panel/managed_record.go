@@ -169,12 +169,19 @@ func (p *Panel) bindManagedRecord(w http.ResponseWriter, r *http.Request) {
 	data, _ := json.Marshal(warnings)
 	_, err = tx.ExecContext(r.Context(), `INSERT INTO managed_records(`+managedColumns+`) VALUES(?,?,'dnspod',?,?,?,?,?,?,?,?) ON CONFLICT(group_id) DO UPDATE SET account_id=excluded.account_id,domain=excluded.domain,record_id=excluded.record_id,name=excluded.name,line=excluded.line,line_id=excluded.line_id,current_value=excluded.current_value,current_ttl=excluded.current_ttl,warnings=excluded.warnings`, r.PathValue("id"), body.AccountID, domain, body.RecordID, result.Record.Name, result.Record.Line, result.Record.LineID, result.Record.Value, result.Record.TTL, string(data))
 	if err == nil {
+		err = p.bindEntryDomainWatch(r.Context(), tx, r.PathValue("id"))
+	}
+	if err == nil {
 		err = tx.Commit()
 	}
 	if err != nil {
+		if writeConfigurationError(w, err) {
+			return
+		}
 		problem(w, 503, "无法保存受管记录")
 		return
 	}
+	p.wakeDNSWatch()
 	b, err := p.loadManaged(r.Context(), r.PathValue("id"))
 	if err != nil {
 		problem(w, 503, "无法读取受管记录")

@@ -164,10 +164,16 @@ func (p *Panel) putDNSWatch(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 	id := r.PathValue("id")
 	var old string
-	err = tx.QueryRowContext(r.Context(), "SELECT expected_ips FROM dns_watches WHERE id=?", id).Scan(&old)
+	var group sql.NullString
+	err = tx.QueryRowContext(r.Context(), "SELECT expected_ips,entry_group_id FROM dns_watches WHERE id=?", id).Scan(&old, &group)
 	if errors.Is(err, sql.ErrNoRows) {
 		p.dnsWatchMu.Unlock()
 		problem(w, 404, "解析监控不存在")
+		return
+	}
+	if err == nil && group.Valid {
+		p.dnsWatchMu.Unlock()
+		problem(w, 409, "入口组域名的期望由活动入口自动维护")
 		return
 	}
 	if err == nil && old != watchJSON(ips) {
@@ -193,13 +199,22 @@ func (p *Panel) putDNSWatch(w http.ResponseWriter, r *http.Request) {
 func (p *Panel) deleteDNSWatch(w http.ResponseWriter, r *http.Request) {
 	p.dnsWatchMu.Lock()
 	defer p.dnsWatchMu.Unlock()
-	result, err := p.db.ExecContext(r.Context(), "DELETE FROM dns_watches WHERE id=?", r.PathValue("id"))
+	result, err := p.db.ExecContext(r.Context(), "DELETE FROM dns_watches WHERE id=? AND entry_group_id IS NULL", r.PathValue("id"))
 	if err != nil {
 		problem(w, 503, "存储暂不可用")
 		return
 	}
 	n, _ := result.RowsAffected()
 	if n == 0 {
+		var managed int
+		if e := p.db.QueryRowContext(r.Context(), "SELECT count(*) FROM dns_watches WHERE id=? AND entry_group_id IS NOT NULL", r.PathValue("id")).Scan(&managed); e != nil {
+			problem(w, 503, "存储暂不可用")
+			return
+		}
+		if managed > 0 {
+			problem(w, 409, "入口组域名自动加入解析监控，不能单独删除")
+			return
+		}
 		problem(w, 404, "解析监控不存在")
 		return
 	}
@@ -227,19 +242,23 @@ type dnsWatchHistory struct {
 	Changed   bool      `json:"changed"`
 }
 type dnsWatchView struct {
-	ID               string            `json:"id"`
-	Domain           string            `json:"domain"`
-	ExpectedIPs      []string          `json:"expected_ips"`
-	ExpectedVersion  int64             `json:"expected_version"`
-	Round            int64             `json:"round"`
-	NextSampleAt     time.Time         `json:"next_sample_at"`
-	CoverageLabel    string            `json:"coverage_label"`
-	Status           string            `json:"status"`
-	ChangeCount      int               `json:"change_count"`
-	DifferentIPCount int               `json:"different_ip_count"`
-	Paths            []dnsWatchPath    `json:"paths"`
-	History          []dnsWatchHistory `json:"history,omitempty"`
-	NextBefore       *int64            `json:"next_before,omitempty"`
+	EntryGroupID        string            `json:"entry_group_id"`
+	PropagationStatus   string            `json:"propagation_status"`
+	ObservationDeadline *time.Time        `json:"observation_deadline"`
+	ProviderError       string            `json:"provider_error"`
+	ID                  string            `json:"id"`
+	Domain              string            `json:"domain"`
+	ExpectedIPs         []string          `json:"expected_ips"`
+	ExpectedVersion     int64             `json:"expected_version"`
+	Round               int64             `json:"round"`
+	NextSampleAt        time.Time         `json:"next_sample_at"`
+	CoverageLabel       string            `json:"coverage_label"`
+	Status              string            `json:"status"`
+	ChangeCount         int               `json:"change_count"`
+	DifferentIPCount    int               `json:"different_ip_count"`
+	Paths               []dnsWatchPath    `json:"paths"`
+	History             []dnsWatchHistory `json:"history,omitempty"`
+	NextBefore          *int64            `json:"next_before,omitempty"`
 }
 
 func (p *Panel) listDNSWatches(w http.ResponseWriter, r *http.Request) { p.readDNSWatches(w, r, false) }
@@ -260,7 +279,7 @@ func (p *Panel) readDNSWatches(w http.ResponseWriter, r *http.Request, detail bo
 	}
 	p.dnsWatchMu.Lock()
 
-	query := "SELECT id,domain,expected_ips,expected_version,round,next_sample_at FROM dns_watches"
+	query := "SELECT id,domain,expected_ips,expected_version,round,next_sample_at,coalesce(entry_group_id,''),propagation_status,observation_deadline,coalesce((SELECT last_error FROM entry_dns_audits WHERE group_id=entry_group_id),'') FROM dns_watches"
 	args := []any{}
 	if detail {
 		query += " WHERE id=?"
@@ -278,7 +297,8 @@ func (p *Panel) readDNSWatches(w http.ResponseWriter, r *http.Request, detail bo
 		var v dnsWatchView
 		var encoded string
 		var next int64
-		if err = rows.Scan(&v.ID, &v.Domain, &encoded, &v.ExpectedVersion, &v.Round, &next); err != nil {
+		var deadline sql.NullInt64
+		if err = rows.Scan(&v.ID, &v.Domain, &encoded, &v.ExpectedVersion, &v.Round, &next, &v.EntryGroupID, &v.PropagationStatus, &deadline, &v.ProviderError); err != nil {
 			break
 		}
 		err = json.Unmarshal([]byte(encoded), &v.ExpectedIPs)
@@ -286,6 +306,7 @@ func (p *Panel) readDNSWatches(w http.ResponseWriter, r *http.Request, detail bo
 			break
 		}
 		v.NextSampleAt = time.Unix(0, next).UTC()
+		v.ObservationDeadline = nullableTime(deadline)
 		v.Paths = []dnsWatchPath{}
 		v.Status = "等待采样"
 		v.CoverageLabel = "国内覆盖缺失"
