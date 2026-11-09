@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 在真实 WAL 和主库中验证 Telegram 设置复用票 01 的加密秘密存储。
@@ -69,7 +70,7 @@ func TestOfflineMigrationPreservesVersionSevenData(t *testing.T) {
 		"INSERT INTO nodes(id,name,created_at,desired_revision,applied_revision) VALUES('kept','已有节点',0,7,7)",
 		"INSERT INTO entry_groups(id,name) VALUES('g','已有入口组')",
 		"INSERT INTO entry_group_members VALUES('g','kept',0)",
-		"INSERT INTO events(node_id,source,event_id,type,occurred_at,received_at,config_revision,message) VALUES('kept','node','kept','sync_failed',1,2,7,'已有事件')",
+		fmt.Sprintf("INSERT INTO events(node_id,source,event_id,type,occurred_at,received_at,config_revision,message) VALUES('kept','node','kept','sync_failed',%d,2,7,'已有事件')", time.Now().Add(-time.Hour).UnixNano()),
 	} {
 		if _, err := db.Exec(query); err != nil {
 			t.Fatal(err)

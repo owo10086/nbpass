@@ -76,6 +76,7 @@ type Panel struct {
 	telegramMu      sync.Mutex
 	telegramWake    chan struct{}
 	offlineWake     chan struct{}
+	retentionWake   chan struct{}
 }
 
 func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error) {
@@ -163,6 +164,7 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 	p.startSelfCheckNotifications(background)
 	p.startDNSWatch(background)
 	p.startRotationPolicy(background)
+	p.startRetention(background)
 	return p, nil
 }
 

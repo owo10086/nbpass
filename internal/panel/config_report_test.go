@@ -126,14 +126,20 @@ func TestControlResendsFullSnapshotEverySixtySeconds(t *testing.T) {
 	if !proto.Equal(initial.Snapshot, snapshot) {
 		t.Fatalf("首包不是完整快照: %v", initial)
 	}
-	var timer *syncOnlyTimer
-	select {
-	case timer = <-clock.timers:
-	case <-time.After(2 * time.Second):
-		t.Fatal("未建立 60 秒同步计时器")
+	// 面板还会创建保留期清理等一分钟计时器，不能假设第一个属于控制流。
+	// 推进全部一分钟计时器，仍只断言真实控制流独立重发的完整快照。
+	var repeated *controlpb.PanelMessage
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for repeated == nil {
+		select {
+		case timer := <-clock.timers:
+			timer.channel <- time.Now()
+		case repeated = <-stream.sent:
+		case <-deadline.C:
+			t.Fatal("一分钟计时器触发后未重发配置快照")
+		}
 	}
-	timer.channel <- time.Now()
-	repeated := receive()
 	if repeated.DesiredRevision != 7 || !proto.Equal(repeated.Snapshot, snapshot) {
 		t.Fatalf("周期重发丢失版本或完整内容: %v", repeated)
 	}
