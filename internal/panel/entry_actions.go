@@ -153,6 +153,9 @@ func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryAc
 	if err == nil {
 		err = p.actionEvent(ctx, tx, a, EntryDesired)
 	}
+	if err == nil {
+		err = p.resetEntryDomainWatch(ctx, tx, a)
+	}
 	if err != nil {
 		return EntryAction{}, err
 	}

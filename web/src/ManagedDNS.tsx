@@ -5,6 +5,7 @@ import { EntryBlockedPolicy } from './EntryBlockedPolicy';
 import { EntryMembers } from './EntryMembers';
 import { EntryReadiness, type EntryMemberState } from './EntryReadiness';
 import { EntrySwitch, type EntrySwitchState } from './EntrySwitch';
+import { EntryDomainWatch } from './EntryDomainWatch';
 
 type Account = { id: string; name: string; configured: boolean };
 type Binding = { account_id: string; domain: string; record_id: string; line_id: string; line: string; hostname: string; current_value: string; current_ttl: number; warnings: string[] };
@@ -158,6 +159,7 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
         {publication?.action?.last_error && <Alert title={publication.action.last_error} type="warning" showIcon />}
         {publication?.action?.stage === '服务商已写入' && <Typography.Paragraph type="secondary">DNSPod 已确认记录；递归 DNS 缓存可能仍保留旧值。</Typography.Paragraph>}
       </Card>}
+      <EntryDomainWatch groupID={group.id} nodes={nodes} onSessionExpired={onSessionExpired} />
     </Space>
     <Modal title="添加 DNSPod 账号" open={addingAccount} onCancel={() => { setAddingAccount(false); accountForm.resetFields(); }} footer={null} destroyOnHidden>
       <Form form={accountForm} layout="vertical" onFinish={addAccount} clearOnDestroy>

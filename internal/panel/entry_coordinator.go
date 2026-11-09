@@ -227,7 +227,13 @@ func (c *entryCoordinator) finish(a EntryAction) error {
 		err = p.actionEvent(c.ctx, tx, a, EntryWritten)
 	}
 	if err == nil {
+		err = p.beginEntryPropagation(c.ctx, tx, a, now)
+	}
+	if err == nil {
 		err = tx.Commit()
+	}
+	if err == nil {
+		p.wakeDNSWatch()
 	}
 	return err
 }

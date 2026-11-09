@@ -5,7 +5,7 @@ import { api, APIError } from './api';
 type Resolver = { kind: 'dns' | 'doh'; address: string };
 type Path = { path_id: string; node_id: string; kind: string; resolver: string; ips: string[]; status: string; expected_version: number; consecutive_mismatches: number; consecutive_matches: number; sampled_at: string | null };
 type History = { sequence: number; path_id: string; sampled_at: string; old_ips: string[]; ips: string[]; status: string; changed: boolean };
-type Watch = { id: string; domain: string; expected_ips: string[]; expected_version: number; status: string; coverage_label: string; change_count: number; different_ip_count: number; next_sample_at: string; paths: Path[]; history?: History[]; next_before?: number };
+type Watch = { id: string; domain: string; entry_group_id: string; propagation_status: string; expected_ips: string[]; expected_version: number; status: string; coverage_label: string; change_count: number; different_ip_count: number; next_sample_at: string; paths: Path[]; history?: History[]; next_before?: number };
 const date = (value?: string | null) => value ? new Date(value).toLocaleString() : '尚未采样';
 const ips = (values: string[]) => values.length ? values.join('、') : '无 A 记录';
 const color = (status: string) => status === '疑似污染' || status === '期望不符' ? 'red' : status === '采样失败' ? 'orange' : status === '正常' || status === '符合期望' ? 'green' : 'default';
@@ -82,16 +82,16 @@ export function DNSWatch({ onSessionExpired }: { onSessionExpired: () => void })
   const pathName = (path: { node_id: string; resolver: string }) => `${path.node_id ? nodes[path.node_id] ?? '国内检测点' : '面板本机 DoH'} · ${path.resolver}`;
   return <>
     <Typography.Title level={2}>解析监控</Typography.Title>
-    <Typography.Paragraph type="secondary">每 5 分钟查询 A 记录。期望 IP 可选；同一路径对同一期望连续 3 次不符才判异常，其他路径正常时提示疑似污染。解析异常只记录和通知。</Typography.Paragraph>
+    <Typography.Paragraph type="secondary">每 5 分钟查询 A 记录，入口切换后每 30 秒观察传播。手工域名期望 IP 可选；入口组域名的期望由活动入口维护。同路径连续 3 次不符才判异常，旧 TTL 内的旧值享受缓存宽限。</Typography.Paragraph>
     {error && <Alert className="message" title={error} type="error" showIcon />}
     <Space wrap style={{ marginBottom: 16 }}><Button type="primary" onClick={() => edit()}>添加域名</Button><Button onClick={() => void openSettings()}>解析器设置</Button><Button onClick={() => void load().catch(failed)}>刷新</Button></Space>
     <Card styles={{ body: { padding: 0 } }}><Table rowKey="id" dataSource={rows} scroll={{ x: 1000 }} columns={[
       { title: '域名', dataIndex: 'domain', render: (_, row) => <Button type="link" onClick={() => setSelected(row.id)}>{row.domain}</Button> },
       { title: '期望 IP', render: (_, row) => row.expected_ips.length ? ips(row.expected_ips) : '仅观察' },
-      { title: '状态', render: (_, row) => <Space orientation="vertical"><Tag color={color(row.status)}>{row.status}</Tag><Typography.Text type="secondary">{row.coverage_label}</Typography.Text></Space> },
+      { title: '状态', render: (_, row) => <Space orientation="vertical"><Tag color={color(row.status)}>{row.status}</Tag>{row.propagation_status && <Tag>{row.propagation_status}</Tag>}<Typography.Text type="secondary">{row.coverage_label}</Typography.Text></Space> },
       { title: '变化次数', dataIndex: 'change_count' }, { title: '不同 IP 数', dataIndex: 'different_ip_count' },
       { title: '下次查询', dataIndex: 'next_sample_at', render: date },
-      { title: '操作', render: (_, row) => <Space><Button onClick={() => edit(row)}>修改期望</Button><Popconfirm title={`删除 ${row.domain} 的解析监控及历史？`} onConfirm={() => remove(row.id)}><Button danger loading={busy}>删除</Button></Popconfirm></Space> },
+      { title: '操作', render: (_, row) => row.entry_group_id ? <Typography.Text type="secondary">入口组自动管理</Typography.Text> : <Space><Button onClick={() => edit(row)}>修改期望</Button><Popconfirm title={`删除 ${row.domain} 的解析监控及历史？`} onConfirm={() => remove(row.id)}><Button danger loading={busy}>删除</Button></Popconfirm></Space> },
     ]} /></Card>
     <Modal title={editing === 'new' ? '添加解析监控' : '修改期望 IP'} open={!!editing} onCancel={() => setEditing(undefined)} onOk={() => form.submit()} confirmLoading={busy} destroyOnHidden>
       {error && <Alert title={error} type="error" showIcon />}

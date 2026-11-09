@@ -66,8 +66,9 @@ func (p *Panel) startDNSWatch(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
-			_ = p.scheduleDNSWatch(ctx)
+			// 传播轮次与任务期限同为 30 秒，先结算漏报，避免被新轮次清除。
 			p.expireDNSWatchTasks(ctx)
+			_ = p.scheduleDNSWatch(ctx)
 			p.flushDNSWatchNotices(ctx)
 			rows, err := p.db.QueryContext(ctx, "SELECT "+watchTaskColumns+" FROM dns_watch_tasks WHERE node_id='' AND expires_at>? ORDER BY expires_at LIMIT 32", p.deps.Clock.Now().UnixNano())
 			tasks := []dnsWatchTask{}
@@ -111,7 +112,10 @@ func (p *Panel) scheduleDNSWatch(ctx context.Context) error {
 		return err
 	}
 	p.dnsWatchMu.Lock()
-	err = p.createDNSWatchTasks(ctx, checkers)
+	err = p.reconcileEntryPropagation(ctx, checkers)
+	if err == nil {
+		err = p.createDNSWatchTasks(ctx, checkers)
+	}
 	if err == nil {
 		err = p.claimDNSWatchTasks(ctx)
 	}
@@ -156,18 +160,19 @@ func (p *Panel) createDNSWatchTasks(ctx context.Context, checkers map[string]str
 	if err = json.Unmarshal([]byte(encoded), &resolvers); err != nil {
 		return err
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT id,domain,expected_version,round FROM dns_watches WHERE next_sample_at<=? ORDER BY next_sample_at LIMIT 32", now.UnixNano())
+	rows, err := tx.QueryContext(ctx, "SELECT id,domain,expected_version,round,propagation_status FROM dns_watches WHERE next_sample_at<=? AND propagation_status<>? ORDER BY next_sample_at LIMIT 32", now.UnixNano(), EntryDesired)
 	if err != nil {
 		return err
 	}
 	type watch struct {
 		id, domain     string
 		version, round int64
+		propagation    string
 	}
 	watches := []watch{}
 	for rows.Next() {
 		var w watch
-		if err = rows.Scan(&w.id, &w.domain, &w.version, &w.round); err != nil {
+		if err = rows.Scan(&w.id, &w.domain, &w.version, &w.round, &w.propagation); err != nil {
 			break
 		}
 		watches = append(watches, w)
@@ -180,11 +185,15 @@ func (p *Panel) createDNSWatchTasks(ctx context.Context, checkers map[string]str
 		return err
 	}
 	for _, w := range watches {
-		if _, err = tx.ExecContext(ctx, "UPDATE dns_watches SET round=round+1,next_sample_at=? WHERE id=?", now.Add(5*time.Minute).UnixNano(), w.id); err != nil {
+		interval := 5 * time.Minute
+		if w.propagation == "传播中" {
+			interval = 30 * time.Second
+		}
+		if _, err = tx.ExecContext(ctx, "UPDATE dns_watches SET round=round+1,next_sample_at=? WHERE id=?", now.Add(interval).UnixNano(), w.id); err != nil {
 			return err
 		}
 		// 未采到的轮次、角色中断均不能与后来的异常拼成连续证据。
-		if _, err = tx.ExecContext(ctx, `UPDATE dns_watch_paths SET consecutive_mismatches=0,consecutive_matches=0 WHERE watch_id=? AND (active=0 OR sampled_at IS NULL OR round<>? OR sampled_at<?)`, w.id, w.round, now.Add(-5*time.Minute-30*time.Second).UnixNano()); err != nil {
+		if _, err = tx.ExecContext(ctx, `UPDATE dns_watch_paths SET consecutive_mismatches=0,consecutive_matches=0 WHERE watch_id=? AND (active=0 OR status='等待采样' OR sampled_at IS NULL OR round<>? OR sampled_at<?)`, w.id, w.round, now.Add(-interval-30*time.Second).UnixNano()); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE dns_watch_paths SET active=0 WHERE watch_id=?", w.id); err != nil {
@@ -208,7 +217,7 @@ func (p *Panel) createDNSWatchTasks(ctx context.Context, checkers map[string]str
 				if err != nil {
 					return err
 				}
-				_, err = tx.ExecContext(ctx, `INSERT INTO dns_watch_paths(watch_id,path_id,node_id,kind,resolver,expected_version,round) VALUES(?,?,?,?,?,?,?) ON CONFLICT(watch_id,path_id) DO UPDATE SET active=1,status='等待采样',ips='[]',round=excluded.round`, w.id, path, node, r.Kind, r.Address, w.version, w.round+1)
+				_, err = tx.ExecContext(ctx, `INSERT INTO dns_watch_paths(watch_id,path_id,node_id,kind,resolver,expected_version,round) VALUES(?,?,?,?,?,?,?) ON CONFLICT(watch_id,path_id) DO UPDATE SET active=1,status='等待采样',ips='[]',round=excluded.round,expected_version=excluded.expected_version`, w.id, path, node, r.Kind, r.Address, w.version, w.round+1)
 				if err != nil {
 					return err
 				}
@@ -320,7 +329,11 @@ func (p *Panel) completeDNSWatchTask(ctx context.Context, task dnsWatchTask, val
 	if err = json.Unmarshal([]byte(lastEncoded), &last); err != nil {
 		return err
 	}
-	state := progress.Observe(dnswatch.Expectation{Version: version, IPs: expected}, ips, failed, now)
+	expectation, err := entryWatchExpectation(ctx, tx, task.WatchID, dnswatch.Expectation{Version: version, IPs: expected}, ips, now)
+	if err != nil {
+		return err
+	}
+	state := progress.Observe(expectation, ips, failed, now)
 	changed := !failed && len(last) > 0 && !slices.Equal(last, ips)
 	if !failed {
 		for _, ip := range ips {
