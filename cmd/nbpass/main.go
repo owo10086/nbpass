@@ -34,6 +34,12 @@ func main() {
 }
 
 func run(ctx context.Context) error {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "backup", "upgrade", "restore":
+			return maintenanceCommand(ctx, os.Args[1], os.Args[2:], os.Stdout)
+		}
+	}
 	if len(os.Args) > 1 && os.Args[1] == "reset-password" {
 		return resetPassword(ctx, os.Args[2:], os.Stdin, os.Stdout)
 	}
@@ -53,6 +59,11 @@ func run(ctx context.Context) error {
 	if (ip == nil || !ip.IsLoopback()) && !*trustedControl {
 		return errors.New("控制端口仅可绑定回环地址；可信网络需显式指定 -trust-control-network")
 	}
+	unlock, err := lockPanelData(*dir)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	regions, err := ipregion.New()
 	if err != nil {
 		return fmt.Errorf("加载 ip2region 离线库: %w", err)

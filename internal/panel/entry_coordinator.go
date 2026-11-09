@@ -62,6 +62,7 @@ func (c *entryCoordinator) wake(gid string) {
 		c.workers[gid] = wake
 		c.wg.Add(1)
 		go c.run(gid, wake)
+		return // 新 worker 会立即查询，不需要初始唤醒跳过失败退避。
 	}
 	select {
 	case wake <- struct{}{}:
@@ -78,6 +79,11 @@ func (c *entryCoordinator) close() {
 func (c *entryCoordinator) run(gid string, wake <-chan struct{}) {
 	defer c.wg.Done()
 	for c.ctx.Err() == nil {
+		// 本轮查询已响应此前的唤醒；只允许查询期间的新唤醒打断退避。
+		select {
+		case <-wake:
+		default:
+		}
 		a, err := scanAction(c.p.db.QueryRowContext(c.ctx, "SELECT "+actionColumns+" FROM entry_actions WHERE group_id=? AND stage<>? ORDER BY version LIMIT 1", gid, EntryWritten))
 		if errors.Is(err, sql.ErrNoRows) {
 			// 与 wake 共用锁：已有唤醒则重新查询，否则撤下空队列。
@@ -103,6 +109,7 @@ func (c *entryCoordinator) run(gid string, wake <-chan struct{}) {
 		timer := c.p.deps.Clock.NewTimer(5 * time.Second)
 		select {
 		case <-timer.C():
+		case <-wake:
 		case <-c.ctx.Done():
 			timer.Stop()
 			return
@@ -112,6 +119,13 @@ func (c *entryCoordinator) run(gid string, wake <-chan struct{}) {
 }
 func (c *entryCoordinator) execute(a EntryAction) error {
 	p := c.p
+	allowed, e := recoveryGroupAllowed(c.ctx, p.db, a.GroupID)
+	if e != nil {
+		return e
+	}
+	if !allowed {
+		return c.note(a, "从旧备份恢复，入口组尚未核对，自动写暂停")
+	}
 	b, err := p.loadManaged(c.ctx, a.GroupID)
 	if err != nil {
 		return err

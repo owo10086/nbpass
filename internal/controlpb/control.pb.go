@@ -306,12 +306,14 @@ func (x *EnrollResponse) GetToken() string {
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 type NodeReport struct {
-	state                  protoimpl.MessageState `protogen:"open.v1"`
-	RotationRecheckCapable bool                   `protobuf:"varint,180,opt,name=rotation_recheck_capable,json=rotationRecheckCapable,proto3" json:"rotation_recheck_capable,omitempty"`
-	CheckerOnly            bool                   `protobuf:"varint,140,opt,name=checker_only,json=checkerOnly,proto3" json:"checker_only,omitempty"`
-	CheckerResults         [][]byte               `protobuf:"bytes,141,rep,name=checker_results,json=checkerResults,proto3" json:"checker_results,omitempty"`
-	ExitFailoverVersion    uint32                 `protobuf:"varint,150,opt,name=exit_failover_version,json=exitFailoverVersion,proto3" json:"exit_failover_version,omitempty"`
-	TunnelRotationVersion  uint32                 `protobuf:"varint,160,opt,name=tunnel_rotation_version,json=tunnelRotationVersion,proto3" json:"tunnel_rotation_version,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// 票 36：仅活性报告携带；独立上报中的该载荷不参与恢复核对。
+	Recovery               *RecoveryReport `protobuf:"bytes,200,opt,name=recovery,proto3" json:"recovery,omitempty"`
+	RotationRecheckCapable bool            `protobuf:"varint,180,opt,name=rotation_recheck_capable,json=rotationRecheckCapable,proto3" json:"rotation_recheck_capable,omitempty"`
+	CheckerOnly            bool            `protobuf:"varint,140,opt,name=checker_only,json=checkerOnly,proto3" json:"checker_only,omitempty"`
+	CheckerResults         [][]byte        `protobuf:"bytes,141,rep,name=checker_results,json=checkerResults,proto3" json:"checker_results,omitempty"`
+	ExitFailoverVersion    uint32          `protobuf:"varint,150,opt,name=exit_failover_version,json=exitFailoverVersion,proto3" json:"exit_failover_version,omitempty"`
+	TunnelRotationVersion  uint32          `protobuf:"varint,160,opt,name=tunnel_rotation_version,json=tunnelRotationVersion,proto3" json:"tunnel_rotation_version,omitempty"`
 	// 自测独立补报，只消费自测结果，不推进活性、探针、事件或配置确认。
 	SelfCheckOnly    bool     `protobuf:"varint,90,opt,name=self_check_only,json=selfCheckOnly,proto3" json:"self_check_only,omitempty"`
 	SelfCheckResults [][]byte `protobuf:"bytes,91,rep,name=self_check_results,json=selfCheckResults,proto3" json:"self_check_results,omitempty"`
@@ -379,6 +381,13 @@ func (x *NodeReport) ProtoReflect() protoreflect.Message {
 // Deprecated: Use NodeReport.ProtoReflect.Descriptor instead.
 func (*NodeReport) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *NodeReport) GetRecovery() *RecoveryReport {
+	if x != nil {
+		return x.Recovery
+	}
+	return nil
 }
 
 func (x *NodeReport) GetRotationRecheckCapable() bool {
@@ -2259,6 +2268,151 @@ func (x *ExitHealth) GetCheckedAtUnix() int64 {
 	return 0
 }
 
+// 只包含恢复所需的去重与额度证据，不包含换 IP 凭据或请求模板。
+type RecoveryReport struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ObservedAt    int64                  `protobuf:"varint,203,opt,name=observed_at,json=observedAt,proto3" json:"observed_at,omitempty"`
+	Current       *RecoveryRotation      `protobuf:"bytes,204,opt,name=current,proto3" json:"current,omitempty"`
+	HighWater     uint64                 `protobuf:"varint,200,opt,name=high_water,json=highWater,proto3" json:"high_water,omitempty"`
+	HistorySince  int64                  `protobuf:"varint,201,opt,name=history_since,json=historySince,proto3" json:"history_since,omitempty"`
+	Actions       []*RecoveryRotation    `protobuf:"bytes,202,rep,name=actions,proto3" json:"actions,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecoveryReport) Reset() {
+	*x = RecoveryReport{}
+	mi := &file_control_v1_control_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecoveryReport) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecoveryReport) ProtoMessage() {}
+
+func (x *RecoveryReport) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecoveryReport.ProtoReflect.Descriptor instead.
+func (*RecoveryReport) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *RecoveryReport) GetObservedAt() int64 {
+	if x != nil {
+		return x.ObservedAt
+	}
+	return 0
+}
+
+func (x *RecoveryReport) GetCurrent() *RecoveryRotation {
+	if x != nil {
+		return x.Current
+	}
+	return nil
+}
+
+func (x *RecoveryReport) GetHighWater() uint64 {
+	if x != nil {
+		return x.HighWater
+	}
+	return 0
+}
+
+func (x *RecoveryReport) GetHistorySince() int64 {
+	if x != nil {
+		return x.HistorySince
+	}
+	return 0
+}
+
+func (x *RecoveryReport) GetActions() []*RecoveryRotation {
+	if x != nil {
+		return x.Actions
+	}
+	return nil
+}
+
+type RecoveryRotation struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Progress      *RotationProgress      `protobuf:"bytes,203,opt,name=progress,proto3" json:"progress,omitempty"`
+	ActionId      string                 `protobuf:"bytes,200,opt,name=action_id,json=actionId,proto3" json:"action_id,omitempty"`
+	AttemptedAt   int64                  `protobuf:"varint,201,opt,name=attempted_at,json=attemptedAt,proto3" json:"attempted_at,omitempty"`
+	State         string                 `protobuf:"bytes,202,opt,name=state,proto3" json:"state,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecoveryRotation) Reset() {
+	*x = RecoveryRotation{}
+	mi := &file_control_v1_control_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecoveryRotation) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecoveryRotation) ProtoMessage() {}
+
+func (x *RecoveryRotation) ProtoReflect() protoreflect.Message {
+	mi := &file_control_v1_control_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecoveryRotation.ProtoReflect.Descriptor instead.
+func (*RecoveryRotation) Descriptor() ([]byte, []int) {
+	return file_control_v1_control_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *RecoveryRotation) GetProgress() *RotationProgress {
+	if x != nil {
+		return x.Progress
+	}
+	return nil
+}
+
+func (x *RecoveryRotation) GetActionId() string {
+	if x != nil {
+		return x.ActionId
+	}
+	return ""
+}
+
+func (x *RecoveryRotation) GetAttemptedAt() int64 {
+	if x != nil {
+		return x.AttemptedAt
+	}
+	return 0
+}
+
+func (x *RecoveryRotation) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
 var File_control_v1_control_proto protoreflect.FileDescriptor
 
 const file_control_v1_control_proto_rawDesc = "" +
@@ -2268,9 +2422,10 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x13installation_ticket\x18\x01 \x01(\tR\x12installationTicket\"?\n" +
 	"\x0eEnrollResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
-	"\x05token\x18\x02 \x01(\tR\x05token\"\xa7\v\n" +
+	"\x05token\x18\x02 \x01(\tR\x05token\"\xe7\v\n" +
 	"\n" +
-	"NodeReport\x129\n" +
+	"NodeReport\x12>\n" +
+	"\brecovery\x18\xc8\x01 \x01(\v2!.nbpass.control.v1.RecoveryReportR\brecovery\x129\n" +
 	"\x18rotation_recheck_capable\x18\xb4\x01 \x01(\bR\x16rotationRecheckCapable\x12\"\n" +
 	"\fchecker_only\x18\x8c\x01 \x01(\bR\vcheckerOnly\x12(\n" +
 	"\x0fchecker_results\x18\x8d\x01 \x03(\fR\x0echeckerResults\x123\n" +
@@ -2473,7 +2628,20 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"last_probe\x18\x99\x01 \x01(\tR\tlastProbe\x12$\n" +
 	"\rfailure_class\x18\x9a\x01 \x01(\tR\ffailureClass\x12/\n" +
 	"\x13recovery_since_unix\x18\x9b\x01 \x01(\x03R\x11recoverySinceUnix\x12'\n" +
-	"\x0fchecked_at_unix\x18\x9c\x01 \x01(\x03R\rcheckedAtUnix*H\n" +
+	"\x0fchecked_at_unix\x18\x9c\x01 \x01(\x03R\rcheckedAtUnix\"\xf8\x01\n" +
+	"\x0eRecoveryReport\x12 \n" +
+	"\vobserved_at\x18\xcb\x01 \x01(\x03R\n" +
+	"observedAt\x12>\n" +
+	"\acurrent\x18\xcc\x01 \x01(\v2#.nbpass.control.v1.RecoveryRotationR\acurrent\x12\x1e\n" +
+	"\n" +
+	"high_water\x18\xc8\x01 \x01(\x04R\thighWater\x12$\n" +
+	"\rhistory_since\x18\xc9\x01 \x01(\x03R\fhistorySince\x12>\n" +
+	"\aactions\x18\xca\x01 \x03(\v2#.nbpass.control.v1.RecoveryRotationR\aactions\"\xad\x01\n" +
+	"\x10RecoveryRotation\x12@\n" +
+	"\bprogress\x18\xcb\x01 \x01(\v2#.nbpass.control.v1.RotationProgressR\bprogress\x12\x1c\n" +
+	"\taction_id\x18\xc8\x01 \x01(\tR\bactionId\x12\"\n" +
+	"\fattempted_at\x18\xc9\x01 \x01(\x03R\vattemptedAt\x12\x15\n" +
+	"\x05state\x18\xca\x01 \x01(\tR\x05state*H\n" +
 	"\rAddressFamily\x12\x1e\n" +
 	"\x1aADDRESS_FAMILY_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ADDRESS_FAMILY_IPV4\x10\x01*Q\n" +
@@ -2504,7 +2672,7 @@ func file_control_v1_control_proto_rawDescGZIP() []byte {
 }
 
 var file_control_v1_control_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 23)
+var file_control_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_control_v1_control_proto_goTypes = []any{
 	(AddressFamily)(0),       // 0: nbpass.control.v1.AddressFamily
 	(RuleKind)(0),            // 1: nbpass.control.v1.RuleKind
@@ -2532,43 +2700,49 @@ var file_control_v1_control_proto_goTypes = []any{
 	(*DNSWatchTask)(nil),     // 23: nbpass.control.v1.DNSWatchTask
 	(*DNSWatchResult)(nil),   // 24: nbpass.control.v1.DNSWatchResult
 	(*ExitHealth)(nil),       // 25: nbpass.control.v1.ExitHealth
-	nil,                      // 26: nbpass.control.v1.ProbeSample.ValuesEntry
+	(*RecoveryReport)(nil),   // 26: nbpass.control.v1.RecoveryReport
+	(*RecoveryRotation)(nil), // 27: nbpass.control.v1.RecoveryRotation
+	nil,                      // 28: nbpass.control.v1.ProbeSample.ValuesEntry
 }
 var file_control_v1_control_proto_depIdxs = []int32{
-	24, // 0: nbpass.control.v1.NodeReport.dns_watch_results:type_name -> nbpass.control.v1.DNSWatchResult
-	22, // 1: nbpass.control.v1.NodeReport.rotation:type_name -> nbpass.control.v1.RotationProgress
-	8,  // 2: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
-	12, // 3: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
-	7,  // 4: nbpass.control.v1.NodeReport.rule_results:type_name -> nbpass.control.v1.RuleApplyResult
-	10, // 5: nbpass.control.v1.NodeReport.traffic:type_name -> nbpass.control.v1.RuleTraffic
-	25, // 6: nbpass.control.v1.ProbeSample.exit_health:type_name -> nbpass.control.v1.ExitHealth
-	26, // 7: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
-	23, // 8: nbpass.control.v1.PanelMessage.dns_watch_tasks:type_name -> nbpass.control.v1.DNSWatchTask
-	21, // 9: nbpass.control.v1.PanelMessage.rotation_command:type_name -> nbpass.control.v1.RotationCommand
-	14, // 10: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
-	11, // 11: nbpass.control.v1.PanelMessage.acknowledged_traffic:type_name -> nbpass.control.v1.TrafficAck
-	13, // 12: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
-	15, // 13: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
-	17, // 14: nbpass.control.v1.ConfigSnapshot.exit_groups:type_name -> nbpass.control.v1.ExitGroup
-	20, // 15: nbpass.control.v1.ConfigSnapshot.tunnel_server:type_name -> nbpass.control.v1.TunnelServer
-	0,  // 16: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
-	1,  // 17: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
-	2,  // 18: nbpass.control.v1.TunnelEndpoint.transport:type_name -> nbpass.control.v1.TunnelTransport
-	3,  // 19: nbpass.control.v1.ExitGroup.strategy:type_name -> nbpass.control.v1.ExitStrategy
-	16, // 20: nbpass.control.v1.ExitGroup.exits:type_name -> nbpass.control.v1.TunnelEndpoint
-	15, // 21: nbpass.control.v1.TunnelGrant.rule:type_name -> nbpass.control.v1.ForwardRule
-	2,  // 22: nbpass.control.v1.TunnelServer.transport:type_name -> nbpass.control.v1.TunnelTransport
-	18, // 23: nbpass.control.v1.TunnelServer.peers:type_name -> nbpass.control.v1.TunnelPeer
-	19, // 24: nbpass.control.v1.TunnelServer.grants:type_name -> nbpass.control.v1.TunnelGrant
-	4,  // 25: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
-	6,  // 26: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
-	5,  // 27: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
-	9,  // 28: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
-	27, // [27:29] is the sub-list for method output_type
-	25, // [25:27] is the sub-list for method input_type
-	25, // [25:25] is the sub-list for extension type_name
-	25, // [25:25] is the sub-list for extension extendee
-	0,  // [0:25] is the sub-list for field type_name
+	26, // 0: nbpass.control.v1.NodeReport.recovery:type_name -> nbpass.control.v1.RecoveryReport
+	24, // 1: nbpass.control.v1.NodeReport.dns_watch_results:type_name -> nbpass.control.v1.DNSWatchResult
+	22, // 2: nbpass.control.v1.NodeReport.rotation:type_name -> nbpass.control.v1.RotationProgress
+	8,  // 3: nbpass.control.v1.NodeReport.probe:type_name -> nbpass.control.v1.ProbeSample
+	12, // 4: nbpass.control.v1.NodeReport.events:type_name -> nbpass.control.v1.Event
+	7,  // 5: nbpass.control.v1.NodeReport.rule_results:type_name -> nbpass.control.v1.RuleApplyResult
+	10, // 6: nbpass.control.v1.NodeReport.traffic:type_name -> nbpass.control.v1.RuleTraffic
+	25, // 7: nbpass.control.v1.ProbeSample.exit_health:type_name -> nbpass.control.v1.ExitHealth
+	28, // 8: nbpass.control.v1.ProbeSample.values:type_name -> nbpass.control.v1.ProbeSample.ValuesEntry
+	23, // 9: nbpass.control.v1.PanelMessage.dns_watch_tasks:type_name -> nbpass.control.v1.DNSWatchTask
+	21, // 10: nbpass.control.v1.PanelMessage.rotation_command:type_name -> nbpass.control.v1.RotationCommand
+	14, // 11: nbpass.control.v1.PanelMessage.snapshot:type_name -> nbpass.control.v1.ConfigSnapshot
+	11, // 12: nbpass.control.v1.PanelMessage.acknowledged_traffic:type_name -> nbpass.control.v1.TrafficAck
+	13, // 13: nbpass.control.v1.Event.gap:type_name -> nbpass.control.v1.EventGap
+	15, // 14: nbpass.control.v1.ConfigSnapshot.rules:type_name -> nbpass.control.v1.ForwardRule
+	17, // 15: nbpass.control.v1.ConfigSnapshot.exit_groups:type_name -> nbpass.control.v1.ExitGroup
+	20, // 16: nbpass.control.v1.ConfigSnapshot.tunnel_server:type_name -> nbpass.control.v1.TunnelServer
+	0,  // 17: nbpass.control.v1.ForwardRule.target_family:type_name -> nbpass.control.v1.AddressFamily
+	1,  // 18: nbpass.control.v1.ForwardRule.kind:type_name -> nbpass.control.v1.RuleKind
+	2,  // 19: nbpass.control.v1.TunnelEndpoint.transport:type_name -> nbpass.control.v1.TunnelTransport
+	3,  // 20: nbpass.control.v1.ExitGroup.strategy:type_name -> nbpass.control.v1.ExitStrategy
+	16, // 21: nbpass.control.v1.ExitGroup.exits:type_name -> nbpass.control.v1.TunnelEndpoint
+	15, // 22: nbpass.control.v1.TunnelGrant.rule:type_name -> nbpass.control.v1.ForwardRule
+	2,  // 23: nbpass.control.v1.TunnelServer.transport:type_name -> nbpass.control.v1.TunnelTransport
+	18, // 24: nbpass.control.v1.TunnelServer.peers:type_name -> nbpass.control.v1.TunnelPeer
+	19, // 25: nbpass.control.v1.TunnelServer.grants:type_name -> nbpass.control.v1.TunnelGrant
+	27, // 26: nbpass.control.v1.RecoveryReport.current:type_name -> nbpass.control.v1.RecoveryRotation
+	27, // 27: nbpass.control.v1.RecoveryReport.actions:type_name -> nbpass.control.v1.RecoveryRotation
+	22, // 28: nbpass.control.v1.RecoveryRotation.progress:type_name -> nbpass.control.v1.RotationProgress
+	4,  // 29: nbpass.control.v1.ControlService.Enroll:input_type -> nbpass.control.v1.EnrollRequest
+	6,  // 30: nbpass.control.v1.ControlService.Connect:input_type -> nbpass.control.v1.NodeReport
+	5,  // 31: nbpass.control.v1.ControlService.Enroll:output_type -> nbpass.control.v1.EnrollResponse
+	9,  // 32: nbpass.control.v1.ControlService.Connect:output_type -> nbpass.control.v1.PanelMessage
+	31, // [31:33] is the sub-list for method output_type
+	29, // [29:31] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_control_v1_control_proto_init() }
@@ -2582,7 +2756,7 @@ func file_control_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_v1_control_proto_rawDesc), len(file_control_v1_control_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   23,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

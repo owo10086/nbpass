@@ -53,6 +53,10 @@ func (p *Panel) acceptSelfChecks(ctx context.Context, nodeID string, batch [][]b
 	if err != nil {
 		return nil, err
 	}
+	var restoredAt int64
+	if err = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(restored_at),0) FROM recovery_state").Scan(&restoredAt); err != nil {
+		return nil, err
+	}
 	currentKey := selfcheck.ConfigKey(selfcheck.Config{Enabled: enabled, Settings: settings})
 	ack := []string{}
 	for _, round := range rounds {
@@ -69,7 +73,7 @@ func (p *Panel) acceptSelfChecks(ctx context.Context, nodeID string, batch [][]b
 			return nil, err
 		}
 		eligible := 0
-		if round.Sequence <= last {
+		if round.Sequence <= last || round.StartedAt.UnixNano() < restoredAt {
 			eligible = -1
 		} else if enabled && round.ConfigKey == currentKey {
 			eligible = 1
@@ -89,7 +93,7 @@ func (p *Panel) acceptSelfChecks(ctx context.Context, nodeID string, batch [][]b
 		last = round.Sequence
 		previousKey = round.ConfigKey
 		// 旧配置结果仍可追查，但不能参与当前配置的判定或解除状态。
-		if !enabled || round.ConfigKey != currentKey {
+		if !enabled || round.ConfigKey != currentKey || round.StartedAt.UnixNano() < restoredAt {
 			consecutive = 0
 			continue
 		}

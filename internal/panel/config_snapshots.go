@@ -134,6 +134,13 @@ func (p *Panel) controlMessage(ctx context.Context, id string) (*controlpb.Panel
 	if err != nil {
 		return nil, err
 	}
+	var pending int
+	if err := p.db.QueryRowContext(ctx, "SELECT count(*) FROM recovery_nodes WHERE node_id=? AND high_water IS NULL", id).Scan(&pending); err != nil {
+		return nil, err
+	}
+	if pending > 0 {
+		data = nil
+	}
 	if len(data) > 0 {
 		m.Snapshot = &controlpb.ConfigSnapshot{}
 		if err := p.decodeSnapshot(id, data, encrypted.Bool, m.Snapshot); err != nil {

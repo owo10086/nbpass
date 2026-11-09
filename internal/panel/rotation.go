@@ -177,6 +177,14 @@ func (p *Panel) startRotation(w http.ResponseWriter, r *http.Request) {
 
 // 调用方持有 controlMu；节点所有用途共用本事务的互斥与额度。
 func (p *Panel) authorizeRotation(ctx context.Context, id string, manual bool) (*rotationAction, error) {
+	allowed, e := p.recoveryNodeAllowed(ctx, p.db, id, !manual)
+	if e != nil {
+		return nil, e
+	}
+	if !allowed {
+		return nil, &forwardingError{409, "从旧备份恢复，节点、入口组或换 IP 历史尚未核对，不签发执行许可"}
+	}
+
 	var ip, secret string
 	var last sql.NullInt64
 	err := p.db.QueryRowContext(ctx, `SELECT COALESCE(r.public_ipv4,''),COALESCE(s.secret_name,''),n.last_seen_at FROM nodes n LEFT JOIN node_regions r ON r.node_id=n.id LEFT JOIN rotation_settings s ON s.node_id=n.id WHERE n.id=?`, id).Scan(&ip, &secret, &last)
@@ -292,6 +300,13 @@ func (p *Panel) rotationCommand(ctx context.Context, id string) (*controlpb.Rota
 	var origin string
 	if err = p.db.QueryRowContext(ctx, "SELECT recheck_config,recheck_revision,origin FROM rotation_actions WHERE id=?", actionID).Scan(&recheck, &revision, &origin); err != nil {
 		return nil, err
+	}
+	allowed, e := p.recoveryNodeAllowed(ctx, p.db, id, origin == "automatic")
+	if e != nil {
+		return nil, e
+	}
+	if !allowed {
+		return nil, nil
 	}
 	session := p.controls[id]
 	if session == nil || !session.rotationRecheckCapable {
@@ -417,6 +432,9 @@ func (p *Panel) acceptRotation(ctx context.Context, id string, result *controlpb
 	}
 	if err == nil {
 		err = p.rotationNotice(ctx, tx, id, a.ID, result.State, message)
+	}
+	if err == nil {
+		_, err = tx.ExecContext(ctx, "UPDATE recovery_rotation_attempts SET state=? WHERE action_id=? AND node_id=?", result.State, a.ID, id)
 	}
 	if err == nil && result.State == "cancelled" {
 		_, err = tx.ExecContext(ctx, "DELETE FROM rotation_quota WHERE action_id=?", a.ID)

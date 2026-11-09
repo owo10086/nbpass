@@ -337,7 +337,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	}()
 	// 单独追踪事件在途批次；无 ACK 的主动快照或探针回包不能消费它。
 	pending := map[string]bool{}
-	drainEvents := false
+	drainEvents := true
 	var response, eventAck, selfAck timing.Timer
 	var checkerAck timing.Timer
 	var checkerAckC <-chan time.Time
@@ -386,6 +386,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		outgoing := proto.Clone(report).(*controlpb.NodeReport)
 		outgoing.Probe, outgoing.ProbeOnly, outgoing.EventsOnly = sample, kind == probeReport, kind == eventReport
 		outgoing.Events, outgoing.PublicIpv4 = nil, ""
+		outgoing.Recovery = nil
 		outgoing.SelfCheckOnly = kind == selfCheckReport
 		outgoing.CheckerOnly = kind == checkerReport
 		outgoing.CheckerResults = nil
@@ -444,6 +445,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			outgoing.AppliedRevision, outgoing.AppliedDigest = 0, ""
 		}
 		if kind == heartbeatReport {
+			outgoing.Recovery = deps.rotations.recoveryReport(engine.State().HighestRevision, clock.Now())
 			queryCtx, queryCancel := timeout(ctx, clock, 5*time.Second)
 			if value, err := deps.PublicIPv4(queryCtx); err == nil && queryCtx.Err() == nil {
 				if !deps.rotations.blocksIPObservation() {
@@ -452,7 +454,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			}
 			queryCancel()
 		}
-		if deps.Events != nil && len(pending) == 0 && (kind == heartbeatReport || kind == eventReport) {
+		if deps.Events != nil && len(pending) == 0 && (kind == eventReport || kind == heartbeatReport && proto.Size(outgoing.Recovery) <= 20<<10) {
 			batch, err := deps.Events.Batch(ctx)
 			if err != nil {
 				return err
@@ -480,6 +482,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			trafficAck = clock.NewTimer(15 * time.Second)
 			trafficAckC = trafficAck.C()
 		}
+		limitRecoveryReport(outgoing)
 		// 发送串行，传输只持有本轮不可变副本；接收持续独立运行。
 		result := make(chan error, 1)
 		timer := clock.NewTimer(15 * time.Second)
@@ -543,7 +546,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			}
 			heartbeat.Stop()
 			heartbeat = clock.NewTimer(nextHeartbeat.Sub(clock.Now()))
-			drainEvents = false
+			drainEvents = true
 		}
 		select {
 		case update := <-updates:

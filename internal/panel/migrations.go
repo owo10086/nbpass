@@ -102,6 +102,7 @@ var migrations = []string{
 	tunnelRotationMigration,
 	retentionMigration,
 	readinessMigration,
+	recoveryMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

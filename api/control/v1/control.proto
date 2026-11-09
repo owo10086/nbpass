@@ -13,6 +13,8 @@ message EnrollResponse { string node_id = 1; string token = 2; }
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 message NodeReport {
+  // 票 36：仅活性报告携带；独立上报中的该载荷不参与恢复核对。
+  RecoveryReport recovery = 200;
   bool rotation_recheck_capable = 180;
   bool checker_only = 140;
   repeated bytes checker_results = 141;
@@ -238,4 +240,19 @@ message ExitHealth {
   string failure_class = 154;
   int64 recovery_since_unix = 155;
   int64 checked_at_unix = 156;
+}
+
+// 只包含恢复所需的去重与额度证据，不包含换 IP 凭据或请求模板。
+message RecoveryReport {
+ int64 observed_at = 203;
+ RecoveryRotation current = 204;
+ uint64 high_water = 200;
+ int64 history_since = 201;
+ repeated RecoveryRotation actions = 202;
+}
+message RecoveryRotation {
+ RotationProgress progress = 203;
+ string action_id = 200;
+ int64 attempted_at = 201;
+ string state = 202;
 }

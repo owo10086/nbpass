@@ -404,6 +404,11 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, status.Error(codes.FailedPrecondition, "旧进程实例报告无效")
 	}
 	session.instance = report.ProcessInstance
+	if !independentNodeReport(report) && report.AttemptedRevision == 0 {
+		if err := p.acceptRecovery(ctx, id, report.Recovery); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "恢复证据无法保存")
+		}
+	}
 	if report.CheckerOnly {
 		ack, err := p.acceptCheckerResults(ctx, id, report.CheckerResults)
 		if err != nil {
