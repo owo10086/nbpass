@@ -1378,6 +1378,7 @@ func (x *ForwardRule) GetExitGroupId() string {
 // 票 08 使用字段号 40–59；授权代次与确认由票 09 扩展。
 type TunnelEndpoint struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
+	AddressVersion         string                 `protobuf:"bytes,220,opt,name=address_version,json=addressVersion,proto3" json:"address_version,omitempty"`
 	RotationId             string                 `protobuf:"bytes,160,opt,name=rotation_id,json=rotationId,proto3" json:"rotation_id,omitempty"`
 	TrustedCertificatesPem [][]byte               `protobuf:"bytes,161,rep,name=trusted_certificates_pem,json=trustedCertificatesPem,proto3" json:"trusted_certificates_pem,omitempty"`
 	NodeId                 string                 `protobuf:"bytes,40,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
@@ -1420,6 +1421,13 @@ func (x *TunnelEndpoint) ProtoReflect() protoreflect.Message {
 // Deprecated: Use TunnelEndpoint.ProtoReflect.Descriptor instead.
 func (*TunnelEndpoint) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *TunnelEndpoint) GetAddressVersion() string {
+	if x != nil {
+		return x.AddressVersion
+	}
+	return ""
 }
 
 func (x *TunnelEndpoint) GetRotationId() string {
@@ -2178,6 +2186,7 @@ func (x *DNSWatchResult) GetFailed() bool {
 // 入口观测的出口链路状态，不代表出口到所有目标的可达性。
 type ExitHealth struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
+	AddressVersion      string                 `protobuf:"bytes,220,opt,name=address_version,json=addressVersion,proto3" json:"address_version,omitempty"`
 	ExitId              string                 `protobuf:"bytes,150,opt,name=exit_id,json=exitId,proto3" json:"exit_id,omitempty"`
 	State               string                 `protobuf:"bytes,151,opt,name=state,proto3" json:"state,omitempty"`
 	ConsecutiveFailures uint32                 `protobuf:"varint,152,opt,name=consecutive_failures,json=consecutiveFailures,proto3" json:"consecutive_failures,omitempty"`
@@ -2217,6 +2226,13 @@ func (x *ExitHealth) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ExitHealth.ProtoReflect.Descriptor instead.
 func (*ExitHealth) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *ExitHealth) GetAddressVersion() string {
+	if x != nil {
+		return x.AddressVersion
+	}
+	return ""
 }
 
 func (x *ExitHealth) GetExitId() string {
@@ -2537,8 +2553,9 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"targetPort\x12#\n" +
 	"\rallow_private\x18\a \x01(\bR\fallowPrivate\x12/\n" +
 	"\x04kind\x18\b \x01(\x0e2\x1b.nbpass.control.v1.RuleKindR\x04kind\x12\"\n" +
-	"\rexit_group_id\x18( \x01(\tR\vexitGroupId\"\xfb\x02\n" +
-	"\x0eTunnelEndpoint\x12 \n" +
+	"\rexit_group_id\x18( \x01(\tR\vexitGroupId\"\xa5\x03\n" +
+	"\x0eTunnelEndpoint\x12(\n" +
+	"\x0faddress_version\x18\xdc\x01 \x01(\tR\x0eaddressVersion\x12 \n" +
 	"\vrotation_id\x18\xa0\x01 \x01(\tR\n" +
 	"rotationId\x129\n" +
 	"\x18trusted_certificates_pem\x18\xa1\x01 \x03(\fR\x16trustedCertificatesPem\x12\x17\n" +
@@ -2618,9 +2635,10 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x0eDNSWatchResult\x12\x17\n" +
 	"\atask_id\x18d \x01(\tR\x06taskId\x12\x10\n" +
 	"\x03ips\x18e \x03(\tR\x03ips\x12\x16\n" +
-	"\x06failed\x18f \x01(\bR\x06failed\"\x91\x02\n" +
+	"\x06failed\x18f \x01(\bR\x06failed\"\xbb\x02\n" +
 	"\n" +
-	"ExitHealth\x12\x18\n" +
+	"ExitHealth\x12(\n" +
+	"\x0faddress_version\x18\xdc\x01 \x01(\tR\x0eaddressVersion\x12\x18\n" +
 	"\aexit_id\x18\x96\x01 \x01(\tR\x06exitId\x12\x15\n" +
 	"\x05state\x18\x97\x01 \x01(\tR\x05state\x122\n" +
 	"\x14consecutive_failures\x18\x98\x01 \x01(\rR\x13consecutiveFailures\x12\x1e\n" +

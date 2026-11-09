@@ -69,7 +69,7 @@ export function NodeRotation({ node, onClose, onError }: { node?: RotationNode; 
   return <Modal title={`换 IP${node ? `：${node.name}` : ''}`} open={!!node} onCancel={close} footer={null} width={720} destroyOnHidden>
     <Alert type="warning" showIcon title="换 IP 可能中断已有连接。" description="观察到公网 IPv4 变化才算换成，可达性仍需复检。换成后通过协调器更新仍使用该节点旧 IP 的受管记录。" />
     {state && <Descriptions column={1} size="small" bordered style={{ marginTop: 12 }} items={[
-      { key: 'automatic', label: '节点自动换 IP 总授权', children: <Space><Switch checked={state.automatic_enabled} disabled={!state.configured || controlling} onChange={value => void policy('automatic', value)} /><Typography.Text type="secondary">由入口组策略①申请</Typography.Text></Space> },
+      { key: 'automatic', label: '节点自动换 IP 总授权', children: <Space><Switch checked={state.automatic_enabled} disabled={!state.configured || controlling} onChange={value => void policy('automatic', value)} /><Typography.Text type="secondary">由入口组策略或出口被墙处理申请</Typography.Text></Space> },
       { key: 'quota', label: '节点共享额度', children: `滚动 1 小时 ${state.quota.used_hour} / 1 次；滚动 24 小时 ${state.quota.used_day} / 3 次（手动也计入）` },
       { key: 'cooldown', label: '自动换 IP 等待', children: `冷却剩余 ${Math.ceil(state.quota.cooldown_seconds / 60)} 分钟；额度最早释放约 ${Math.ceil(state.quota.retry_after_seconds / 60)} 分钟后` },
       { key: 'no-improvement', label: '连续无改善', children: `${state.no_improvement} 次${state.paused ? ' · 自动换 IP 已暂停' : ''}` },

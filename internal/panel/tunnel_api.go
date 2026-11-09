@@ -35,6 +35,7 @@ type exitGroupView struct {
 }
 
 func (p *Panel) tunnelRoutes(mux *http.ServeMux) {
+	p.exitBlockedRoutes(mux)
 	mux.HandleFunc("GET /api/tunnel-exits", p.listTunnelExits)
 	mux.HandleFunc("GET /api/nodes/{id}/exit-health", p.getExitHealth)
 	mux.HandleFunc("POST /api/nodes/{id}/tunnel/rotation", p.startTunnelRotation)
@@ -106,7 +107,7 @@ func (p *Panel) saveTunnelExit(w http.ResponseWriter, r *http.Request) {
 			_, err = tx.ExecContext(r.Context(), "INSERT INTO tunnel_exits(node_id,address,listen_port,transport,server_name,certificate_pem,private_key_ciphertext) VALUES(?,?,?,?,?,?,?)", id, ip.String(), body.ListenPort, body.Transport, name, cert, key)
 			return err
 		}
-		_, err := tx.ExecContext(r.Context(), "UPDATE tunnel_exits SET address=?,listen_port=?,transport=? WHERE node_id=?", ip.String(), body.ListenPort, body.Transport, id)
+		_, err := tx.ExecContext(r.Context(), "UPDATE tunnel_exits SET address_version=CASE WHEN address!=? OR listen_port!=? THEN '' ELSE address_version END,address=?,listen_port=?,transport=? WHERE node_id=?", ip.String(), body.ListenPort, ip.String(), body.ListenPort, body.Transport, id)
 		return err
 	}) {
 		return

@@ -82,6 +82,9 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 	if err := p.compileSelfChecks(ctx, tx, compiled); err != nil {
 		return nil, err
 	}
+	if err := trackExitAddresses(ctx, tx, compiled); err != nil {
+		return nil, err
+	}
 	changed := []string{}
 	for _, n := range nodes {
 		next := compiled[n.id]

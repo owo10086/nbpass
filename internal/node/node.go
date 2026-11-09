@@ -729,7 +729,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				return errors.New("配置快照版本不一致")
 			}
 			revision, digest := engine.Applied()
-			if snapshot.Revision < report.AttemptedRevision || (snapshot.Revision == revision && snapshot.Digest == digest) {
+			if snapshot.Revision < report.AttemptedRevision || (snapshot.Revision == revision && snapshot.Digest == digest && exitAddressVersionsApplied(engine, snapshot)) {
 				continue
 			}
 			report.AttemptedRevision = snapshot.Revision

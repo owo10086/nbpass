@@ -143,7 +143,7 @@ func (p *Panel) startRotationPolicy(ctx context.Context) {
 		defer p.background.Done()
 		for ctx.Err() == nil {
 			p.controlMu.Lock()
-			rows, err := p.db.QueryContext(ctx, `SELECT s.node_id FROM rotation_settings s JOIN node_self_check c ON c.node_id=s.node_id WHERE s.automatic_enabled=1 AND c.enabled=1 AND c.state='blocked' AND EXISTS(SELECT 1 FROM entry_group_members m JOIN entry_groups g ON g.id=m.group_id WHERE m.node_id=s.node_id AND g.blocked_policy='rotate_ip')`)
+			rows, err := p.db.QueryContext(ctx, `SELECT s.node_id FROM rotation_settings s JOIN node_self_check c ON c.node_id=s.node_id WHERE s.automatic_enabled=1 AND c.enabled=1 AND c.state='blocked' AND `+automaticRotationPurpose)
 			var ids []string
 			if err == nil {
 				for rows.Next() {

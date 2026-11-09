@@ -33,16 +33,16 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 		}
 		generations[r.ID] = generation
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT node_id,address,listen_port,transport,server_name,certificate_pem,private_key_ciphertext FROM tunnel_exits ORDER BY node_id")
+	rows, err := tx.QueryContext(ctx, "SELECT node_id,address,listen_port,transport,server_name,certificate_pem,private_key_ciphertext,address_version FROM tunnel_exits ORDER BY node_id")
 	if err != nil {
 		return err
 	}
 	endpoints := map[string]*controlpb.TunnelEndpoint{}
 	for rows.Next() {
-		var id, address, transport, name string
+		var id, address, transport, name, addressVersion string
 		var port uint32
 		var cert, sealed []byte
-		if err := rows.Scan(&id, &address, &port, &transport, &name, &cert, &sealed); err != nil {
+		if err := rows.Scan(&id, &address, &port, &transport, &name, &cert, &sealed, &addressVersion); err != nil {
 			rows.Close()
 			return err
 		}
@@ -52,7 +52,7 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 			return err
 		}
 		compiled[id].TunnelServer = &controlpb.TunnelServer{ListenPort: port, Transport: controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS, ServerName: name, CertificatePem: cert, PrivateKeyPem: key}
-		endpoints[id] = &controlpb.TunnelEndpoint{NodeId: id, Address: address, Port: port, Transport: controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS, ServerName: name, CertificatePem: cert}
+		endpoints[id] = &controlpb.TunnelEndpoint{NodeId: id, Address: address, AddressVersion: addressVersion, Port: port, Transport: controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS, ServerName: name, CertificatePem: cert}
 	}
 	err = rows.Err()
 	rows.Close()

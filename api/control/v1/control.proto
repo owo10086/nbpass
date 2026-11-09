@@ -147,6 +147,7 @@ enum RuleKind { RULE_KIND_UNSPECIFIED = 0; RULE_KIND_DIRECT = 1; RULE_KIND_TUNNE
 
 // 票 08 使用字段号 40–59；授权代次与确认由票 09 扩展。
 message TunnelEndpoint {
+  string address_version = 220;
   string rotation_id = 160;
   repeated bytes trusted_certificates_pem = 161;
   string node_id = 40;
@@ -233,6 +234,7 @@ message DNSWatchResult {
 
 // 入口观测的出口链路状态，不代表出口到所有目标的可达性。
 message ExitHealth {
+  string address_version = 220;
   string exit_id = 150;
   string state = 151;
   uint32 consecutive_failures = 152;
