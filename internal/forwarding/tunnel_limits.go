@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	yamux "github.com/libp2p/go-yamux/v5"
@@ -103,9 +104,24 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 		return
 	}
 	stopHandshakeTimer()
+	check := request.Check != nil
+	if check {
+		if request.RuleID != request.Check.Id {
+			s.rejectStream(stream)
+			return
+		}
+		// 兼容票22旧入口的完整规则对象；认证会话提供入口身份，
+		// 监听端口等元数据不参与跨节点授权。
+		request = streamAuthorization(auth.EntryID, request.Check)
+	}
 	rule := s.authorizeStream(auth, request)
 	if rule == nil || lease != nil && !lease.assignRule(rule.Id) {
 		s.rejectStream(stream)
+		return
+	}
+	if check {
+		// 预检只核验授权，不拨目标；FIN 保留响应，随后 RST 回收流槽。
+		s.finishStream(stream, tunnelResult{OK: true, Ready: true})
 		return
 	}
 	// 在目标拨号前复查授权，撤权同时取消 DNS/拨号并归还共享预算。
@@ -142,11 +158,15 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 }
 
 func (s *tunnelServer) rejectStream(stream net.Conn) {
+	s.finishStream(stream, tunnelResult{})
+}
+
+func (s *tunnelServer) finishStream(stream net.Conn, result tunnelResult) {
 	stream.SetWriteDeadline(time.Now().Add(s.engine.resources.limits.TunnelHandshakeTimeout))
-	if err := writeTunnelMessage(stream, tunnelResult{}); err != nil {
+	if err := writeTunnelMessage(stream, result); err != nil {
 		return
 	}
-	// FIN 先封存拒绝响应，随后生命周期的 RST 仍立即回收流槽。
+	// FIN 先封存控制响应，随后生命周期的 RST 仍立即回收流槽。
 	// 若直接 RST，新 yamux 会丢弃对端尚未读取的响应，破坏既有协议。
 	if half, ok := stream.(interface{ CloseWrite() error }); ok {
 		half.CloseWrite()
@@ -173,7 +193,9 @@ func (e *Engine) yamuxClientConfig() *yamux.Config {
 }
 
 func (c *tunnelClient) openStream(ctx context.Context, session *yamux.Session) (*yamux.Stream, error) {
-	c.openMu.Lock()
+	if err := c.openMu.LockContext(ctx); err != nil {
+		return nil, err
+	}
 	defer c.openMu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -249,3 +271,26 @@ func (e *Engine) tunnelTimeout(parent context.Context, timeout time.Duration) (c
 	}()
 	return ctx, cancel
 }
+
+// 会话重连和开流会串行等待网络；等待锁也必须计入调用方的总期限。
+// 零值可用，关闭客户端仍可不带期限地等待正在进行的有界握手结束。
+type tunnelMutex struct {
+	once sync.Once
+	gate chan struct{}
+}
+
+func (m *tunnelMutex) LockContext(ctx context.Context) error {
+	m.once.Do(func() { m.gate = make(chan struct{}, 1) })
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case m.gate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *tunnelMutex) Lock()   { _ = m.LockContext(context.Background()) }
+func (m *tunnelMutex) Unlock() { <-m.gate }

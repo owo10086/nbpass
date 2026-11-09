@@ -164,6 +164,7 @@ func awaitSelfCheck(t *testing.T, c *clusterharness.Client, id string, count int
 func advanceSelfCheck(t *testing.T, h *clusterharness.Harness, c *clusterharness.Client, id string, count int, state string, consecutive int) map[string]any {
 	t.Helper()
 	for range 12 {
+		awaitControlIdle(t, h)
 		before := nodeRow(t, c, id)["last_seen_at"]
 		h.Clock.Advance(10 * time.Second)
 		awaitNode(t, c, id, func(row map[string]any) bool { return row["last_seen_at"] != before })
@@ -389,7 +390,7 @@ func TestSelfCheckScheduleIgnoresUnrelatedSnapshotRevision(t *testing.T) {
 		}
 	}
 	group := entryGroup(c, id)["id"].(string)
-	c.Do("POST", "/api/rules", directBody(group, freePort(t), "8.8.8.8", 443), 201)
+	c.Do("POST", "/api/rules", directBody(group, h.ReserveTCPPort(), "8.8.8.8", 443), 201)
 	awaitRevision(t, c, id, 1)
 	h.Clock.Advance(5 * time.Second)
 	awaitSelfCheck(t, c, id, 1, "suspected", 1)
@@ -445,6 +446,7 @@ func TestSelfCheckDisabledNodeStopsSampling(t *testing.T) {
 	c.Do("PUT", path, map[string]bool{"enabled": false}, 204)
 	awaitRevision(t, c, id, previous)
 	for range 12 {
+		awaitControlIdle(t, h)
 		before := nodeRow(t, c, id)["last_seen_at"]
 		h.Clock.Advance(10 * time.Second)
 		awaitNode(t, c, id, func(row map[string]any) bool { return row["last_seen_at"] != before })
@@ -495,4 +497,13 @@ func (c *advancingSelfCheckClock) NewTimer(d time.Duration) timing.Timer {
 		c.once.Do(c.advance)
 	}
 	return c.Clock.NewTimer(d)
+}
+
+func awaitControlIdle(t *testing.T, h *clusterharness.Harness) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := h.Clock.WaitForControlIdle(ctx); err != nil {
+		t.Fatalf("在途控制消息尚未处理完成: %v", err)
+	}
 }

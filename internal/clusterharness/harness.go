@@ -36,6 +36,7 @@ type Harness struct {
 	Control                *httptest.Server
 	controlServer          atomic.Pointer[grpc.Server]
 	repeatRotationCommands atomic.Bool
+	ports                  portReservations
 }
 
 type Client struct {
@@ -46,6 +47,7 @@ type Client struct {
 func New(t testing.TB, options ...func(*panel.Dependencies)) *Harness {
 	t.Helper()
 	h := &Harness{t: t, Dir: t.TempDir(), Clock: &Clock{now: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)}}
+	t.Cleanup(h.ports.close)
 	h.Dependencies = panel.Dependencies{
 		Clock: h.Clock,
 		DNSWatchLookup: func(context.Context, string, dnswatch.Resolver) ([]string, error) {

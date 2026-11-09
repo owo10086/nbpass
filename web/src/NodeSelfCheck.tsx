@@ -8,7 +8,8 @@ type Settings = {
 };
 type Connection = { address: string; connected: boolean; error?: string; duration_ms: number };
 type Site = { host: string; addresses: string[]; resolve_attempts: number; resolve_error?: string; result: string; connections: Connection[] };
-type Round = { id: string; sequence: number; started_at: string; finished_at: string; result: string; source: string; final_result: string; evidence_source: string; config_revision: number; sites: Site[] };
+type Arbitration = { target_ip: string; target_port: number; config_revision: number; deadline: string; status: string; checkers: { id: string; checker_id: string; result: { control: Connection; target?: Connection; execution_error?: string; started_at: string; finished_at: string } | null }[] };
+type Round = { id: string; sequence: number; started_at: string; finished_at: string; result: string; source: string; final_result: string; evidence_source: string; config_revision: number; sites: Site[]; arbitration?: Arbitration };
 type View = { enabled: boolean; state: string; consecutive_abnormal: number; rounds: Round[]; next_before: number | null };
 const labels: Record<string, string> = { normal: '正常', abnormal: '异常', unknown: '未知', suspected: '疑似被墙', blocked: '被墙', failed: '连接失败' };
 const colors: Record<string, string> = { normal: 'green', abnormal: 'orange', suspected: 'orange', blocked: 'red' };
@@ -57,21 +58,31 @@ export function NodeSelfCheck({ node, onClose, onError }: { node: { id: string; 
       <Typography.Text>连续异常 {view?.consecutive_abnormal ?? 0} 轮</Typography.Text>
       <Button onClick={() => setSettings(true)}>自测站点与参数</Button>
     </Space>
-    <Alert type="info" showIcon title="依据节点出站自测推定被墙" description="默认约每 2 分钟连接四个国内站点的 TCP 443 端口，至少三个站点连接失败为异常。连续三轮异常认定被墙，未知轮中断计数，一轮正常即可解除。自测不能证明所有国内网络的入站可达性；关闭后保留历史状态与证据。" style={{ marginBottom: 16 }} />
+    <Alert type="info" showIcon title="依据节点出站自测推定被墙" description="默认约每 2 分钟连接四个国内站点的 TCP 443 端口，至少三个站点连接失败为异常。自测未知时，由国内检测点在 60 秒内补判：任一有效点连通为正常，全部有效点连接失败为异常，缺报、执行错误或无有效结果则保持未知。连续三轮最终结果异常认定被墙，未知轮中断计数，一轮正常即可解除。自测不能证明所有国内网络的入站可达性；关闭后保留历史状态与证据。" style={{ marginBottom: 16 }} />
     <Table<Round> rowKey="id" loading={!view} dataSource={view?.rounds} pagination={false} scroll={{ x: 850 }} locale={{ emptyText: '尚无自测结果；离线期间的结果将在重连后补报。' }} columns={[
       { title: '轮次', dataIndex: 'sequence' },
       { title: '开始 / 结束', render: (_, row) => <Space orientation="vertical" size={0}><span>{date(row.started_at)}</span><Typography.Text type="secondary">{date(row.finished_at)}</Typography.Text></Space> },
       { title: '原始结果', render: (_, row) => <Tag color={colors[row.result]}>{labels[row.result]}</Tag> },
       { title: '最终结果', render: (_, row) => labels[row.final_result] },
-      { title: '证据来源', render: (_, row) => row.evidence_source === 'self_check' ? '节点自测' : row.evidence_source },
+      { title: '证据来源', render: (_, row) => row.evidence_source === 'domestic_checker' ? '检测点补判' : row.arbitration?.status === 'pending' ? '等待检测点补判' : '节点自测' },
       { title: '配置版本', dataIndex: 'config_revision' },
-    ]} expandable={{ expandedRowRender: row => <Space orientation="vertical" style={{ width: '100%' }}>{row.sites.map(site => <Descriptions key={site.host} title={`${site.host}:443 · ${labels[site.result]}`} size="small" column={1} items={[
+    ]} expandable={{ expandedRowRender: row => <Space orientation="vertical" style={{ width: '100%' }}>{row.arbitration && <CheckerEvidence value={row.arbitration} />}{row.sites.map(site => <Descriptions key={site.host} title={`${site.host}:443 · ${labels[site.result]}`} size="small" column={1} items={[
       { key: 'dns', label: '解析', children: `${site.resolve_attempts} 次；${site.addresses.join('、') || '无 IPv4'}${site.resolve_error ? `；${site.resolve_error}` : ''}` },
       { key: 'tcp', label: 'TCP 原始结果', children: site.connections.length ? site.connections.map((connection, i) => <div key={i}>{connection.address} · {connection.connected ? '成功' : connection.error || '失败'} · {connection.duration_ms} 毫秒</div>) : '未完成 TCP 连接检测' },
     ]} />)}</Space> }} />
     {view?.next_before && <Button loading={busy} onClick={() => void more()} style={{ marginTop: 16 }}>加载更早轮次</Button>}
     {settings && <SelfCheckSettings onClose={() => setSettings(false)} onError={onError} />}
   </Drawer>;
+}
+
+function CheckerEvidence({ value }: { value: Arbitration }) {
+  const status: Record<string, string> = { pending: '等待补判', completed: '已结束', invalidated: '目标 IP、端口或配置已变化，旧任务作废' };
+  const connection = (c?: Connection) => c ? `${c.address || '未取得地址'} · ${c.connected ? '成功' : c.error || '失败'} · ${c.duration_ms} 毫秒` : '未执行';
+  return <Descriptions title="国内检测点补判 · 本轮固定任务" column={1} size="small" items={[
+    { key: 'target', label: '被测地址', children: `${value.target_ip || '未知 IP'}:${value.target_port}；配置版本 ${value.config_revision}` },
+    { key: 'deadline', label: '截止时间 / 状态', children: `${date(value.deadline)} · ${status[value.status] ?? value.status}` },
+    { key: 'checkers', label: '检测点与原始证据', children: value.checkers.length ? value.checkers.map(c => <div key={c.id} style={{ marginBottom: 8 }}><Typography.Text code>{c.checker_id}</Typography.Text>{c.result ? <><div>对照：{connection(c.result.control)}</div><div>目标：{connection(c.result.target)}</div><div>{c.result.execution_error || (!c.result.control.connected ? '本轮对照未成功，结果无效' : '')}</div><Typography.Text type="secondary">{date(c.result.started_at)} — {date(c.result.finished_at)}</Typography.Text></> : <div>{value.status === 'pending' ? '尚未上报' : '无采纳结果'}</div>}</div>) : '国内覆盖缺失或目标 IP 未知，本轮保持未知' },
+  ]} />;
 }
 
 export function SelfCheckSettings({ onClose, onError }: { onClose: () => void; onError: (error: unknown) => void }) {

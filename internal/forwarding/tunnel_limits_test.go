@@ -213,7 +213,7 @@ func TestTunnelCanceledOpenDoesNotConsumeSessionCapacity(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	for i := 0; i < 100; i++ {
-		stream, err := client.openStream(ctx, session)
+		stream, err := client.openStream(ctx, session.Session)
 		if stream != nil {
 			stream.Reset()
 			t.Fatal("已取消请求仍成功开流")
@@ -521,6 +521,221 @@ func TestTunnelYamuxCompatibilityWithPreviousImplementation(t *testing.T) {
 			data, err := io.ReadAll(conn)
 			if err != nil || string(data) != "reply:body" {
 				t.Fatalf("新旧 yamux 不兼容: %q %v", data, err)
+			}
+		})
+	}
+}
+
+// 预检必须通过入口和出口的同一预算，释放占槽后在原会话恢复，且不拨目标。
+func TestTunnelReadinessSharesResourceBudgets(t *testing.T) {
+	for _, side := range []string{"entry", "exit"} {
+		for _, limit := range []string{"node", "rule", "pending"} {
+			t.Run(side+"/"+limit, func(t *testing.T) {
+				limits := ResourceLimits{}
+				switch limit {
+				case "node":
+					limits.MaxConnections = 1
+				case "rule":
+					limits.MaxConnectionsPerRule = 1
+				case "pending":
+					limits.MaxPendingDials = 1
+				}
+				exit, client, rule := limitedTunnelPair(t, limits)
+				client.engine = NewEngine(Dependencies{Limits: limits})
+				dials := make(chan struct{}, 1)
+				exit.deps.DialTarget = func(context.Context, string) (net.Conn, error) {
+					dials <- struct{}{}
+					return nil, net.ErrClosed
+				}
+				engine := exit
+				if side == "entry" {
+					engine = client.engine
+				}
+				blockedRule := "other"
+				if limit == "rule" {
+					blockedRule = rule.Id
+				}
+				lease := engine.resources.acquire(blockedRule)
+				if lease == nil {
+					t.Fatal("未能预占测试预算")
+				}
+				defer lease.release()
+				if limit != "pending" {
+					lease.dialDone()
+				}
+				if err := client.ready(context.Background(), rule); err == nil {
+					t.Fatal("预检绕过共享预算")
+				}
+				lease.release()
+				waitTunnelResourcesReleased(t, exit)
+				waitTunnelResourcesReleased(t, client.engine)
+				if err := client.ready(context.Background(), rule); err != nil {
+					t.Fatalf("预算释放后预检未恢复: %v", err)
+				}
+				waitTunnelResourcesReleased(t, exit)
+				waitTunnelResourcesReleased(t, client.engine)
+				select {
+				case <-dials:
+					t.Fatal("预检拨了目标")
+				default:
+				}
+			})
+		}
+	}
+}
+
+// 已认证且声明预检能力的出口吞掉响应：入口仍须按配置超时/取消并 Reset。
+func TestTunnelReadinessTimeoutAndCancellationReleaseStream(t *testing.T) {
+	for _, mode := range []string{"dial_timeout", "handshake_timeout", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			a, b := net.Pipe()
+			limits := ResourceLimits{DialTimeout: 10 * time.Second, TunnelHandshakeTimeout: 10 * time.Second}
+			if mode == "dial_timeout" {
+				limits.DialTimeout = 100 * time.Millisecond
+			} else if mode == "handshake_timeout" {
+				limits.TunnelHandshakeTimeout = 100 * time.Millisecond
+			}
+			engine := NewEngine(Dependencies{Limits: limits})
+			session, err := yamux.Client(a, engine.yamuxClientConfig(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := &tunnelClient{engine: engine, endpoint: &controlpb.TunnelEndpoint{EntryId: "entry"}, session: &tunnelSession{Session: session, checkSupported: true}}
+			defer client.close()
+			server, err := yamux.Server(b, engine.yamuxConfig(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer server.Close()
+			requested := make(chan struct{})
+			reset := make(chan error, 1)
+			go func() {
+				stream, err := server.AcceptStream()
+				if err != nil {
+					reset <- err
+					return
+				}
+				defer stream.Reset()
+				var request tunnelRequest
+				if err := readTunnelMessage(stream, &request); err != nil {
+					reset <- err
+					return
+				}
+				close(requested)
+				_, err = stream.Read(make([]byte, 1))
+				reset <- err
+			}()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- client.ready(ctx, &controlpb.ForwardRule{Id: "r"}) }()
+			select {
+			case <-requested:
+			case <-time.After(2 * time.Second):
+				t.Fatal("预检请求未到达出口")
+			}
+			if mode == "cancel" {
+				cancel()
+			}
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("无预检响应仍成功")
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("预检未按期限/取消结束")
+			}
+			select {
+			case err := <-reset:
+				if !errors.Is(err, yamux.ErrStreamReset) {
+					t.Fatalf("失败预检未 Reset: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("出口预检流未回收")
+			}
+			if session.NumStreams() != 0 || session.IsClosed() {
+				t.Fatalf("预检未清理本流或破坏会话: streams=%d closed=%v", session.NumStreams(), session.IsClosed())
+			}
+			waitTunnelResourcesReleased(t, engine)
+		})
+	}
+}
+
+func waitTunnelResourcesReleased(t *testing.T, engine *Engine) {
+	t.Helper()
+	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	for {
+		engine.resources.mu.Lock()
+		empty := engine.resources.connections == 0 && engine.resources.pending == 0 && len(engine.resources.rules) == 0
+		engine.resources.mu.Unlock()
+		if empty {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-deadline.C:
+			t.Fatal("预检结束后节点/规则/待拨号预算未全部回收")
+		}
+	}
+}
+
+func TestTunnelReadinessHonorsSessionStreamLimit(t *testing.T) {
+	exit, client, rule := limitedTunnelPair(t, ResourceLimits{})
+	client.engine = NewEngine(Dependencies{Limits: ResourceLimits{MaxTunnelStreams: 1}})
+	session, err := client.getSession(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := client.openStream(context.Background(), session.Session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Reset()
+	if err := client.ready(context.Background(), rule); !errors.Is(err, errTunnelCapacity) {
+		t.Fatalf("预检绕过会话流数上限: %v", err)
+	}
+	stream.Reset()
+	waitTunnelResourcesReleased(t, exit)
+	if err := client.ready(context.Background(), rule); err != nil {
+		t.Fatalf("归还流槽后预检未恢复: %v", err)
+	}
+	waitTunnelResourcesReleased(t, exit)
+	waitTunnelResourcesReleased(t, client.engine)
+}
+
+// 业务握手或开流占锁时，预检继承的取消/总期限也必须能结束锁等待。
+func TestTunnelCanceledLockWaitDoesNotBlockReadiness(t *testing.T) {
+	for _, sessionLock := range []bool{false, true} {
+		t.Run(map[bool]string{false: "open", true: "session"}[sessionLock], func(t *testing.T) {
+			client := &tunnelClient{engine: NewEngine(Dependencies{}), closed: true}
+			var lock sync.Locker = &client.openMu
+			call := func(ctx context.Context) error {
+				_, err := client.openStream(ctx, nil)
+				return err
+			}
+			if sessionLock {
+				lock = &client.mu
+				call = func(ctx context.Context) error {
+					_, err := client.getSession(ctx)
+					return err
+				}
+			}
+			lock.Lock()
+			defer lock.Unlock()
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- call(ctx) }()
+			select {
+			case err := <-done:
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("超时的锁等待未返回 context.DeadlineExceeded: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("预检取消后仍等待业务释放锁")
 			}
 		})
 	}

@@ -37,10 +37,10 @@ func TestSingleExitTunnelOverWSSYamux(t *testing.T) {
 	})
 	awaitNode(t, c, entryID, connected)
 	awaitNode(t, c, exitID, connected)
-	c.Do("PUT", "/api/nodes/"+exitID+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": freePort(t), "transport": "wss"}, 200)
+	c.Do("PUT", "/api/nodes/"+exitID+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": h.ReserveTCPPort(), "transport": "wss"}, 200)
 	group := c.Do("POST", "/api/exit-groups", map[string]any{"name": "出口组", "members": []string{exitID}, "strategy": "primary_backup"}, 201)
 	gid := entryGroup(c, entryID)["id"].(string)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	body := directBody(gid, port, "exit-only.invalid", echoTarget(t, "T:"))
 	body["kind"], body["exit_group_id"] = "tunnel", group["id"]
 	c.Do("POST", "/api/rules", body, 201)
@@ -181,14 +181,14 @@ func TestTunnelManagementValidationAndGates(t *testing.T) {
 		c.Do("PUT", path, b, 400)
 	}
 	c.Do("POST", "/api/exit-groups", map[string]any{"name": "出口组", "members": []string{id}, "strategy": "primary_backup"}, 400)
-	c.Do("PUT", path, map[string]any{"address": "127.0.0.1", "listen_port": freePort(t), "transport": "wss"}, 200)
+	c.Do("PUT", path, map[string]any{"address": "127.0.0.1", "listen_port": h.ReserveTCPPort(), "transport": "wss"}, 200)
 	for _, b := range []map[string]any{{"name": "", "members": []string{id}, "strategy": "primary_backup"}, {"name": "组", "members": []string{id, id}, "strategy": "primary_backup"}, {"name": "组", "members": []string{id}, "strategy": "least_connections"}, {"name": "组", "members": []string{"missing"}, "strategy": "primary_backup"}} {
 		c.Do("POST", "/api/exit-groups", b, 400)
 	}
 	g := c.Do("POST", "/api/exit-groups", map[string]any{"name": "组", "members": []string{id}, "strategy": "primary_backup"}, 201)
 	c.Do("PUT", "/api/exit-groups/"+g["id"].(string), map[string]any{"name": "重命名", "members": []string{id}, "strategy": "primary_backup"}, 200)
 	gid := entryGroup(c, id)["id"].(string)
-	body := directBody(gid, freePort(t), "127.0.0.1", 443)
+	body := directBody(gid, h.ReserveTCPPort(), "127.0.0.1", 443)
 	body["kind"], body["exit_group_id"] = "tunnel", g["id"]
 	rule := c.Do("POST", "/api/rules", body, 201)
 	c.Do("DELETE", "/api/exit-groups/"+g["id"].(string), nil, 409)

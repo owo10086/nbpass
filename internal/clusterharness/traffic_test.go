@@ -56,7 +56,7 @@ func TestTrafficDirectLifecycleAndOfflineRestart(t *testing.T) {
 	id := created["id"].(string)
 	n := h.StartNode(created["installation_ticket"].(string))
 	awaitNode(t, c, id, connected)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	body := directBody(entryGroup(c, id)["id"].(string), port, "127.0.0.1", echoTarget(t, "A:"))
 	rid := c.Do("POST", "/api/rules", body, 201)["id"].(string)
 	rev := awaitRevision(t, c, id, 0)
@@ -108,7 +108,7 @@ func TestTrafficOfflineBackfillSurvivesMovingRuleToAnotherEntryGroup(t *testing.
 	id := a["id"].(string)
 	n := h.StartNode(a["installation_ticket"].(string))
 	awaitNode(t, c, id, connected)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	body := directBody(entryGroup(c, id)["id"].(string), port, "127.0.0.1", echoTarget(t, "A:"))
 	rid := c.Do("POST", "/api/rules", body, 201)["id"].(string)
 	awaitRevision(t, c, id, 0)
@@ -172,7 +172,7 @@ func TestTrafficReportsDeduplicateAndIsolateAllControlState(t *testing.T) {
 	}
 	report := &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "traffic-test", SoftwareVersion: "original", PublicIpv4: "223.5.5.5", Probe: &controlpb.ProbeSample{Sequence: 1, Values: map[string]float64{"cpu_percent": 10}}}
 	send(report)
-	body := directBody(entryGroup(c, id)["id"].(string), freePort(t), "127.0.0.1", 443)
+	body := directBody(entryGroup(c, id)["id"].(string), h.ReserveTCPPort(), "127.0.0.1", 443)
 	rid := c.Do("POST", "/api/rules", body, 201)["id"].(string)
 	before := nodeRow(t, c, id)
 	events := len(eventRows(c, "?node_id="+id))
@@ -265,7 +265,7 @@ func TestTrafficCheckpointFailureReplayAndTwentyFourHourExpiry(t *testing.T) {
 	store := &retryTrafficStore{FileStore: node.FileStore{Dir: filepath.Join(t.TempDir(), "node"), Random: rand.Reader}}
 	n := h.StartNode(created["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) { d.Store = store })
 	awaitNode(t, c, id, connected)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	rid := c.Do("POST", "/api/rules", directBody(entryGroup(c, id)["id"].(string), port, "127.0.0.1", echoTarget(t, "A:")), 201)["id"].(string)
 	awaitRevision(t, c, id, 0)
 	a := tcpExchange(t, port, "A:")

@@ -34,7 +34,7 @@ func TestConfigValidationRejectsSharedNodePortsAtomically(t *testing.T) {
 	awaitNode(t, c, id, connected)
 	g1 := entryGroup(c, id)["id"].(string)
 	g2 := entryGroup(c, id)["id"].(string)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	body := directBody(g1, port, "127.0.0.1", echoTarget(t, "A:"))
 	first := c.Do("POST", "/api/rules", body, 201)
 	rev := awaitRevision(t, c, id, 0)
@@ -160,7 +160,7 @@ func TestNodeDeletionListsReferencesAndInvalidatesCredentials(t *testing.T) {
 	real := h.StartNode(n["installation_ticket"].(string))
 	awaitNode(t, c, id, connected)
 	g := entryGroup(c, id)["id"].(string)
-	body := directBody(g, freePort(t), "example.com", 443)
+	body := directBody(g, h.ReserveTCPPort(), "example.com", 443)
 	body["enabled"] = false // 停用规则仍是删除引用。
 	rule := c.Do("POST", "/api/rules", body, 201)
 	path := "/api/nodes/" + id

@@ -47,6 +47,11 @@ func directPorts(t *testing.T) (func() int, func(*node.Config, *node.Dependencie
 		return port
 	}
 	option := func(_ *node.Config, d *node.Dependencies) {
+		// 保留测试台的监听器移交路径，兼容 main 预留的真实 socket。
+		fallback := d.Forwarding.Listen
+		if fallback == nil {
+			fallback = net.Listen
+		}
 		d.Forwarding.Listen = func(network, address string) (net.Listener, error) {
 			mu.Lock()
 			file := sockets[address]
@@ -64,7 +69,7 @@ func directPorts(t *testing.T) (func() int, func(*node.Config, *node.Dependencie
 				}
 				return net.FileListener(file)
 			}
-			return net.Listen(network, address)
+			return fallback(network, address)
 		}
 	}
 	return reserve, option

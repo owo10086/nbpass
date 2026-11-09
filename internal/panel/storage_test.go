@@ -210,3 +210,49 @@ func assertStoredCredentialsPresent(t *testing.T, data []byte, credentials ...[]
 		}
 	}
 }
+
+// 从 main 的完整迁移链升级，入口手动切换追加于其后，不改已有迁移序号。
+func TestEntryManualSwitchMigrationPreservesExistingMainData(t *testing.T) {
+	dir := t.TempDir()
+	db, err := diskDependencies(dir).Persistence.Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for version, migration := range migrations[:len(migrations)-1] {
+		if _, err := db.Exec(migration); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(fmt.Sprintf("PRAGMA user_version=%d", version+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO entry_groups(id,name) VALUES('g','既有入口组')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p := openDiskPanel(t, dir)
+	var version, paused int
+	var name string
+	if err := p.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.db.QueryRow("SELECT name,auto_failback_paused FROM entry_groups WHERE id='g'").Scan(&name, &paused); err != nil {
+		t.Fatal(err)
+	}
+	if version != len(migrations) || name != "既有入口组" || paused != 0 {
+		t.Fatalf("升级丢失入口组或暂停默认值错误: version=%d name=%s paused=%d", version, name, paused)
+	}
+	if _, err := p.db.Exec("UPDATE entry_groups SET auto_failback_paused=1 WHERE id='g'"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	p = openDiskPanel(t, dir)
+	if err := p.db.QueryRow("SELECT auto_failback_paused FROM entry_groups WHERE id='g'").Scan(&paused); err != nil || paused != 1 {
+		t.Fatalf("迁移后重启丢失暂停状态: %d %v", paused, err)
+	}
+}

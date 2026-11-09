@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"nbpass/internal/checker"
 	"nbpass/internal/controlpb"
 	"nbpass/internal/dnswatch"
 	"nbpass/internal/forwarding"
@@ -51,6 +52,8 @@ type Config struct {
 }
 
 type Dependencies struct {
+	CheckerLookup       func(context.Context, string) ([]string, error)
+	CheckerDial         func(context.Context, string) (net.Conn, error)
 	SelfCheckLookup     func(context.Context, string) ([]string, error)
 	SelfCheckDial       func(context.Context, string) (net.Conn, error)
 	SelfCheckStore      SelfCheckStore
@@ -199,6 +202,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 	if deps.Forwarding.Clock == nil {
 		deps.Forwarding.Clock = deps.Clock
 	}
+	deps.Forwarding.DefaultCheckPort = 18080
 	engine := forwarding.NewEngine(deps.Forwarding)
 	report := &controlpb.NodeReport{DnsWatchCapable: true, TunnelAuthorizationVersion: 1, NodeId: credential.NodeID, ProcessInstance: base64.RawURLEncoding.EncodeToString(instance), ProtocolVersion: ProtocolVersion, SoftwareVersion: SoftwareVersion}
 	defer func() {
@@ -212,6 +216,9 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 	}()
 	if err := openConfigCache(ctx, credential, &deps, engine); err != nil {
 		return err
+	}
+	if !engine.State().CheckConfigured {
+		_ = engine.ListenCheckPort(18080)
 	}
 	if deps.Connections == nil {
 		deps.Connections = engine
@@ -300,6 +307,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	}()
 	dnsSeen := map[string]bool{}
 	var dnsResult *controlpb.DNSWatchResult
+	checks := newCheckerExchange(onlineCtx, deps, report.NodeId)
 	stream, err := service.Connect(streamCtx)
 	if err != nil {
 		return err
@@ -329,6 +337,9 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 	pending := map[string]bool{}
 	drainEvents := false
 	var response, eventAck, selfAck timing.Timer
+	var checkerAck timing.Timer
+	var checkerAckC <-chan time.Time
+	checkerPending := map[string]bool{}
 	var selfAckC <-chan time.Time
 	selfPending := map[string]bool{}
 	drainSelf := true
@@ -349,6 +360,9 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		if eventAck != nil {
 			eventAck.Stop()
 		}
+		if checkerAck != nil {
+			checkerAck.Stop()
+		}
 		if selfAck != nil {
 			selfAck.Stop()
 		}
@@ -363,12 +377,28 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		selfCheckReport
 		dnsReport
 		trafficReport
+		checkerReport
 	)
+	var checkerResult []byte
 	send := func(kind reportKind, sample *controlpb.ProbeSample) error {
 		outgoing := proto.Clone(report).(*controlpb.NodeReport)
 		outgoing.Probe, outgoing.ProbeOnly, outgoing.EventsOnly = sample, kind == probeReport, kind == eventReport
 		outgoing.Events, outgoing.PublicIpv4 = nil, ""
 		outgoing.SelfCheckOnly = kind == selfCheckReport
+		outgoing.CheckerOnly = kind == checkerReport
+		outgoing.CheckerResults = nil
+		if kind == checkerReport {
+			outgoing.CheckerResults = [][]byte{checkerResult}
+			var result checker.Result
+			if err := json.Unmarshal(checkerResult, &result); err != nil {
+				return err
+			}
+			checkerPending[result.Task.ID] = true
+			if checkerAckC == nil {
+				checkerAck = clock.NewTimer(15 * time.Second)
+				checkerAckC = checkerAck.C()
+			}
+		}
 		outgoing.SelfCheckResults = nil
 		if kind == selfCheckReport {
 			if len(selfPending) > 0 {
@@ -408,7 +438,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		} else if err := limitConfigReport(outgoing); err != nil {
 			return err
 		}
-		if kind == probeReport || kind == eventReport || kind == rotationReport || kind == selfCheckReport || kind == dnsReport || kind == trafficReport {
+		if kind == probeReport || kind == eventReport || kind == rotationReport || kind == selfCheckReport || kind == dnsReport || kind == trafficReport || kind == checkerReport {
 			outgoing.AppliedRevision, outgoing.AppliedDigest = 0, ""
 		}
 		if kind == heartbeatReport {
@@ -450,9 +480,9 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		}
 		// 发送串行，传输只持有本轮不可变副本；接收持续独立运行。
 		result := make(chan error, 1)
-		go func() { result <- stream.Send(outgoing) }()
 		timer := clock.NewTimer(15 * time.Second)
 		defer timer.Stop()
+		go func() { result <- stream.Send(outgoing) }()
 		select {
 		case err := <-result:
 			if err != nil {
@@ -541,6 +571,16 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-checkerAckC:
+			return errors.New("检测点结果确认超时")
+		case result := <-checks.results:
+			if onlineCtx.Err() != nil {
+				continue
+			}
+			checkerResult, _ = json.Marshal(result)
+			if err := send(checkerReport, nil); err != nil {
+				return err
+			}
 		case <-selfAckC:
 			return errors.New("自测确认超时")
 		case <-selfWake:
@@ -661,6 +701,18 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				default:
 				}
 			}
+			for _, id := range m.AcknowledgedCheckerIds {
+				if !checkerPending[id] {
+					return errors.New("检测点确认不属于在途结果")
+				}
+				delete(checkerPending, id)
+				delete(checks.active, id)
+			}
+			if len(checkerPending) == 0 && checkerAck != nil {
+				checkerAck.Stop()
+				checkerAckC = nil
+			}
+			checks.submit(m.CheckerTasks)
 			if m.RotationCommand != nil {
 				deps.rotations.submit(onlineCtx, report.NodeId, m.RotationCommand)
 			}
@@ -682,7 +734,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 				err = deps.selfChecks.apply(ctx, snapshot.SelfCheckConfig, snapshot.Revision)
 			}
 			if err == nil {
-				err = engine.Apply(snapshot)
+				err = engine.ApplyContext(onlineCtx, snapshot)
 			}
 			report.AppliedRevision, report.AppliedDigest = engine.Applied()
 			state := engine.State()

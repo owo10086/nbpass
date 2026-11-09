@@ -16,11 +16,11 @@ func TestTunnelCacheSurvivesOfflineNodeRestart(t *testing.T) {
 	exitNode := h.StartNode(exit["installation_ticket"].(string))
 	awaitNode(t, c, entryID, connected)
 	awaitNode(t, c, exitID, connected)
-	tunnelPort := freePort(t)
+	tunnelPort := h.ReserveTCPPort()
 	c.Do("PUT", "/api/nodes/"+exitID+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": tunnelPort, "transport": "wss"}, 200)
 	xg := c.Do("POST", "/api/exit-groups", map[string]any{"name": "缓存出口组", "members": []string{exitID}, "strategy": "primary_backup"}, 201)
 	gid := entryGroup(c, entryID)["id"].(string)
-	port := freePort(t)
+	port := h.ReserveTCPPort()
 	body := directBody(gid, port, "127.0.0.1", echoTarget(t, "C:"))
 	body["kind"], body["exit_group_id"] = "tunnel", xg["id"]
 	rule := c.Do("POST", "/api/rules", body, 201)

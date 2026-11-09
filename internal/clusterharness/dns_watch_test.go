@@ -87,6 +87,7 @@ func advanceWatch(t *testing.T, h *clusterharness.Harness, c *clusterharness.Cli
 	t.Helper()
 	round := c.Do("GET", "/api/dns-watches/"+id, nil, 200)["round"].(float64)
 	for range 30 {
+		awaitControlIdle(t, h)
 		before := c.Do("GET", "/api/nodes", nil, 200)["nodes"].([]any)
 		h.Clock.Advance(10 * time.Second)
 		if len(before) > 0 {

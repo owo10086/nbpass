@@ -7,6 +7,8 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ type authorizationFixture struct {
 	entry, exit     *clusterharness.Node
 	entryCache      node.ConfigStore
 	port            int
+	listeners       *atomic.Int32
 	body            map[string]any
 }
 
@@ -35,10 +38,19 @@ func newAuthorizationFixtureWithLimits(t *testing.T, limits forwarding.ResourceL
 	h, c := nodeBrowser(t)
 	reservePort, listenOption := directPorts(t)
 	e, x := addNode(c, "授权入口"), addNode(c, "授权出口")
-	f := authorizationFixture{h: h, c: c, entryID: e["id"].(string), exitID: x["id"].(string), port: reservePort()}
+	f := authorizationFixture{h: h, c: c, entryID: e["id"].(string), exitID: x["id"].(string), port: reservePort(), listeners: &atomic.Int32{}}
 	f.entry = h.StartNode(e["installation_ticket"].(string), listenOption, func(_ *node.Config, d *node.Dependencies) {
 		f.entryCache = d.Store.(node.ConfigStore)
 		d.Forwarding.Limits = limits
+		listen := d.Forwarding.Listen
+		d.Forwarding.Listen = func(network, address string) (net.Listener, error) {
+			listener, err := listen(network, address)
+			if err != nil {
+				return nil, err
+			}
+			f.listeners.Add(1)
+			return &authorizationListener{Listener: listener, active: f.listeners}, nil
+		}
 	})
 	exitOptions := []func(*node.Config, *node.Dependencies){listenOption, func(_ *node.Config, d *node.Dependencies) { d.Forwarding.Limits = limits }}
 	f.exit = h.StartNode(x["installation_ticket"].(string), append(exitOptions, options...)...)
@@ -61,12 +73,23 @@ func (f *authorizationFixture) create(t *testing.T) string {
 	return r["id"].(string)
 }
 
-func assertNoAuthorizationListener(t *testing.T, port int) {
+// 预留 socket 仍由测试台持有；核对实际交给节点的监听器数，不能把
+// 预留 socket 的 TCP 握手误认为节点已经启用入口。关闭也必须实际完成。
+type authorizationListener struct {
+	net.Listener
+	active *atomic.Int32
+	once   sync.Once
+}
+
+func (l *authorizationListener) Close() error {
+	err := l.Listener.Close()
+	l.once.Do(func() { l.active.Add(-1) })
+	return err
+}
+func assertNoAuthorizationListener(t *testing.T, f authorizationFixture) {
 	t.Helper()
-	c, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), time.Second)
-	if err == nil {
-		c.Close()
-		t.Fatal("出口尚未确认授权，入口已启用监听")
+	if n := f.listeners.Load(); n != 0 {
+		t.Fatalf("出口尚未确认授权，入口仍持有 %d 个监听器", n)
 	}
 }
 
@@ -80,9 +103,9 @@ func TestTunnelAuthorizationWaitsForDurableExitConfirmation(t *testing.T) {
 	store.fail.Store(true)
 	r := f.c.Do("POST", "/api/rules", f.body, 201)
 	awaitNode(t, f.c, f.exitID, func(v map[string]any) bool { return v["config_status"] == "同步失败" })
-	// 等入口处理完当前快照，再检查实际端口；只检查 TCP 交换失败不足以证明门禁。
+	// 等入口处理完当前快照，再检查实际交接的监听器；TCP 交换失败不足以证明门禁。
 	awaitNode(t, f.c, f.entryID, func(v map[string]any) bool { return v["desired_revision"] == v["applied_revision"] })
-	assertNoAuthorizationListener(t, f.port)
+	assertNoAuthorizationListener(t, f)
 	store.fail.Store(false)
 	f.h.Clock.Advance(10 * time.Second)
 	awaitRule(t, f.c, r["id"].(string), "正常")
@@ -92,7 +115,7 @@ func TestTunnelAuthorizationWaitsForDurableExitConfirmation(t *testing.T) {
 	f.c.Do("PUT", "/api/rules/"+r["id"].(string), f.body, 200)
 	awaitNode(t, f.c, f.exitID, func(v map[string]any) bool { return v["config_status"] == "同步失败" })
 	awaitNode(t, f.c, f.entryID, func(v map[string]any) bool { return v["desired_revision"] == v["applied_revision"] })
-	assertNoAuthorizationListener(t, f.port)
+	assertNoAuthorizationListener(t, f)
 	conn.SetReadDeadline(time.Now().Add(time.Second))
 	if _, err := conn.Read(make([]byte, 1)); err == nil {
 		t.Fatal("变化前的入口流未撤销")
@@ -138,7 +161,7 @@ func TestTunnelAuthorizationRevokedAtOnlineExitWhileEntryOffline(t *testing.T) {
 			}
 			awaitNode(t, f.c, f.entryID, connected)
 			awaitRevision(t, f.c, f.entryID, 0)
-			assertNoAuthorizationListener(t, f.port)
+			assertNoAuthorizationListener(t, f)
 		})
 	}
 }
@@ -149,7 +172,7 @@ func TestTunnelAuthorizationSurvivesUnrelatedConfigAndPanelRestart(t *testing.T)
 	id := f.create(t)
 	conn := tcpExchange(t, f.port, "T:")
 	previous := nodeRow(t, f.c, f.exitID)["desired_revision"].(float64)
-	f.c.Do("POST", "/api/rules", directBody(f.body["entry_group_id"].(string), freePort(t), "127.0.0.1", echoTarget(t, "D:")), 201)
+	f.c.Do("POST", "/api/rules", directBody(f.body["entry_group_id"].(string), f.h.ReserveTCPPort(), "127.0.0.1", echoTarget(t, "D:")), 201)
 	f.body["name"] = "只改名称"
 	f.c.Do("PUT", "/api/rules/"+id, f.body, 200)
 	awaitRule(t, f.c, id, "正常")
@@ -158,7 +181,7 @@ func TestTunnelAuthorizationSurvivesUnrelatedConfigAndPanelRestart(t *testing.T)
 	}
 	// 让出口自身 revision 变化，原有流仍须通过授权复查。
 	exitGroup := entryGroup(f.c, f.exitID)["id"].(string)
-	f.c.Do("POST", "/api/rules", directBody(exitGroup, freePort(t), "127.0.0.1", echoTarget(t, "D:")), 201)
+	f.c.Do("POST", "/api/rules", directBody(exitGroup, f.h.ReserveTCPPort(), "127.0.0.1", echoTarget(t, "D:")), 201)
 	awaitRevision(t, f.c, f.exitID, previous)
 	f.h.Clock.Advance(time.Second)
 	if err := f.h.Restart(); err != nil {
@@ -215,7 +238,7 @@ func TestTunnelCompromisedEntryCannotChangeAuthorization(t *testing.T) {
 			if err := json.Unmarshal(data, &cache); err != nil {
 				t.Fatal(err)
 			}
-			port := freePort(t)
+			port := f.h.ReserveTCPPort()
 			cache.State.Rules[0].ListenPort = uint32(port)
 			switch mutation {
 			case "target":
@@ -236,23 +259,24 @@ func TestTunnelCompromisedEntryCannotChangeAuthorization(t *testing.T) {
 				t.Fatal(err)
 			}
 			// 克隆自身凭据模拟被盗入口；控制连接阻断，防止合法快照覆盖篡改缓存。
+			listening := make(chan struct{}, 1)
 			rogue := f.h.CloneNode(f.entry, "", func(_ *node.Config, d *node.Dependencies) {
+				d.Forwarding.Listen = func(network, address string) (net.Listener, error) {
+					listener, err := f.h.ListenTCP(network, address)
+					if err == nil {
+						listening <- struct{}{}
+					}
+					return listener, err
+				}
 				d.ConfigStore = &forgedAuthorizationCache{data: encoded}
 				d.DialContext = func(context.Context, string) (net.Conn, error) { return nil, errors.New("被盗入口仅持有缓存") }
 			})
 			defer rogue.Stop()
-			// 等待真实监听出现，避免把节点尚未启动误判为拒绝授权。
-			deadline := time.Now().Add(2 * time.Second)
-			for {
-				probe, err := net.DialTimeout("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 20*time.Millisecond)
-				if err == nil {
-					probe.Close()
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("篡改缓存的真实节点未恢复监听")
-				}
-				time.Sleep(time.Millisecond)
+			// 等待节点真正接管预留监听器，不能把预留端口当作缓存已恢复。
+			select {
+			case <-listening:
+			case <-time.After(2 * time.Second):
+				t.Fatal("篡改缓存的真实节点未恢复监听")
 			}
 			assertTCPFailure(t, port)
 		})
@@ -271,7 +295,7 @@ func TestTunnelRevocationKeepsOtherRuleOnSharedSession(t *testing.T) {
 			other[key] = value
 		}
 	}
-	otherPort := freePort(t)
+	otherPort := f.h.ReserveTCPPort()
 	other["listen_port"] = otherPort
 	r := f.c.Do("POST", "/api/rules", other, 201)
 	awaitRule(t, f.c, r["id"].(string), "正常")

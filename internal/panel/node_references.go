@@ -25,6 +25,7 @@ func nodeReferences(ctx context.Context, tx *sql.Tx, id string) ([]nodeReference
 	}
 	queries := []string{
 		`SELECT DISTINCT 'entry_group',g.id,g.name FROM entry_groups g JOIN entry_group_members m ON m.group_id=g.id WHERE m.node_id=?`,
+		`SELECT DISTINCT 'entry_group',g.id,g.name FROM entry_groups g JOIN entry_actions a ON a.group_id=g.id WHERE a.node_id=?`,
 		`SELECT DISTINCT 'rule',r.id,r.name FROM forward_rules r JOIN entry_group_members m ON m.group_id=r.entry_group_id WHERE m.node_id=?`,
 	}
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('exit_groups','exit_group_members')").Scan(&exists); err != nil {
