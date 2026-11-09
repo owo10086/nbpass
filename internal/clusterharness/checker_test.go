@@ -197,6 +197,9 @@ func startUnknownTarget(t *testing.T, h *clusterharness.Harness, c *clusterharne
 func advanceCheckerClock(t *testing.T, h *clusterharness.Harness, c *clusterharness.Client, id string, seconds int) {
 	t.Helper()
 	for range seconds / 10 {
+		// HTTP 活性已落库不代表所有节点已消费响应；快进前等待在途
+		// 控制消息结束，避免把健康检测点的 15 秒确认期限一起触发。
+		awaitControlIdle(t, h)
 		before := nodeRow(t, c, id)["last_seen_at"]
 		h.Clock.Advance(10 * time.Second)
 		awaitNode(t, c, id, func(v map[string]any) bool { return v["last_seen_at"] != before })

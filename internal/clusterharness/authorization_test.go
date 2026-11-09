@@ -30,13 +30,21 @@ type authorizationFixture struct {
 
 func newAuthorizationFixture(t *testing.T, options ...func(*node.Config, *node.Dependencies)) authorizationFixture {
 	t.Helper()
+	return newAuthorizationFixtureWithLimits(t, forwarding.ResourceLimits{}, options...)
+}
+
+func newAuthorizationFixtureWithLimits(t *testing.T, limits forwarding.ResourceLimits, options ...func(*node.Config, *node.Dependencies)) authorizationFixture {
+	t.Helper()
 	h, c := nodeBrowser(t)
+	reservePort, listenOption := directPorts(t)
 	e, x := addNode(c, "授权入口"), addNode(c, "授权出口")
-	f := authorizationFixture{h: h, c: c, entryID: e["id"].(string), exitID: x["id"].(string), port: h.ReserveTCPPort(), listeners: &atomic.Int32{}}
-	f.entry = h.StartNode(e["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) {
+	f := authorizationFixture{h: h, c: c, entryID: e["id"].(string), exitID: x["id"].(string), port: reservePort(), listeners: &atomic.Int32{}}
+	f.entry = h.StartNode(e["installation_ticket"].(string), listenOption, func(_ *node.Config, d *node.Dependencies) {
 		f.entryCache = d.Store.(node.ConfigStore)
+		d.Forwarding.Limits = limits
+		listen := d.Forwarding.Listen
 		d.Forwarding.Listen = func(network, address string) (net.Listener, error) {
-			listener, err := h.ListenTCP(network, address)
+			listener, err := listen(network, address)
 			if err != nil {
 				return nil, err
 			}
@@ -44,10 +52,11 @@ func newAuthorizationFixture(t *testing.T, options ...func(*node.Config, *node.D
 			return &authorizationListener{Listener: listener, active: f.listeners}, nil
 		}
 	})
-	f.exit = h.StartNode(x["installation_ticket"].(string), options...)
+	exitOptions := []func(*node.Config, *node.Dependencies){listenOption, func(_ *node.Config, d *node.Dependencies) { d.Forwarding.Limits = limits }}
+	f.exit = h.StartNode(x["installation_ticket"].(string), append(exitOptions, options...)...)
 	awaitNode(t, c, f.entryID, connected)
 	awaitNode(t, c, f.exitID, connected)
-	c.Do("PUT", "/api/nodes/"+f.exitID+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": h.ReserveTCPPort(), "transport": "wss"}, 200)
+	c.Do("PUT", "/api/nodes/"+f.exitID+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": reservePort(), "transport": "wss"}, 200)
 	awaitRevision(t, c, f.exitID, 0)
 	xg := c.Do("POST", "/api/exit-groups", map[string]any{"name": "授权出口组", "members": []string{f.exitID}, "strategy": "primary_backup"}, 201)
 	f.body = directBody(entryGroup(c, f.entryID)["id"].(string), f.port, "127.0.0.1", echoTarget(t, "T:"))
@@ -314,7 +323,8 @@ func TestTunnelRevocationKeepsOtherRuleOnSharedSession(t *testing.T) {
 
 // 即便两个控制连接均长期离线，缓存授权也没有按时间失效的租约。
 func TestTunnelAuthorizationDoesNotExpireWhileBothNodesOffline(t *testing.T) {
-	f := newAuthorizationFixture(t)
+	// 本场景验证授权不过期；两端空闲期限覆盖 48 小时，空闲清理由票 11 独立验证。
+	f := newAuthorizationFixtureWithLimits(t, forwarding.ResourceLimits{IdleTimeout: 72 * time.Hour})
 	f.create(t)
 	conn := tcpExchange(t, f.port, "T:")
 	f.entry.Disconnect()

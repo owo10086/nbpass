@@ -305,17 +305,7 @@ func (r *listenerRule) accept() {
 			r.acceptDirect(c)
 			continue
 		}
-		if !r.track(c) {
-			return
-		}
-		r.engine.businessConnections.Add(1)
-		r.wg.Add(1)
-		go func() {
-			defer r.wg.Done()
-			defer r.engine.businessConnections.Add(^uint64(0))
-			defer r.untrack(c)
-			r.serve(c)
-		}()
+		r.acceptTunnel(c)
 	}
 }
 func (r *listenerRule) serve(client net.Conn) {

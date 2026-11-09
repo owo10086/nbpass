@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -59,14 +60,15 @@ func (s *retryEventStore) SaveEvents(ctx context.Context, data []byte) error {
 	return s.FileStore.SaveEvents(ctx, data)
 }
 
-func eventNode(t *testing.T, h *clusterharness.Harness, ticket string, limits node.EventLimits) (*clusterharness.Node, *retryEventStore) {
+func eventNode(t *testing.T, h *clusterharness.Harness, ticket string, limits node.EventLimits, options ...func(*node.Config, *node.Dependencies)) (*clusterharness.Node, *retryEventStore) {
 	t.Helper()
 	store := &retryEventStore{FileStore: node.FileStore{Dir: filepath.Join(t.TempDir(), "node"), Random: rand.Reader}}
 	queue, err := node.OpenEventQueue(context.Background(), store, h.Clock, rand.Reader, limits)
 	if err != nil {
 		t.Fatal(err)
 	}
-	n := h.StartNode(ticket, func(_ *node.Config, deps *node.Dependencies) { deps.Store = store; deps.Events = queue })
+	settings := []func(*node.Config, *node.Dependencies){func(_ *node.Config, deps *node.Dependencies) { deps.Store = store; deps.Events = queue }}
+	n := h.StartNode(ticket, append(settings, options...)...)
 	return n, store
 }
 
@@ -111,9 +113,34 @@ func TestEventReplayAfterAckFailureAndPanelRestart(t *testing.T) {
 func TestEventOverflowProducesVisibleGap(t *testing.T) {
 	h, c := nodeBrowser(t)
 	a := addNode(c, "有界队列")
-	n, store := eventNode(t, h, a["installation_ticket"].(string), node.EventLimits{Count: 3})
+	paused, release := make(chan struct{}), make(chan struct{})
+	var armed atomic.Bool
+	var pausedOnce, releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	n, store := eventNode(t, h, a["installation_ticket"].(string), node.EventLimits{Count: 3}, func(_ *node.Config, d *node.Dependencies) {
+		d.PublicIPv4 = func(ctx context.Context) (string, error) {
+			if armed.Load() {
+				pausedOnce.Do(func() { close(paused) })
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+			}
+			return "", errors.New("测试台未配置公网 IP")
+		}
+	})
 	awaitNode(t, c, a["id"].(string), connected)
-	// 控制断开不意味着发送协程已退出；录入期间禁止新批次冻结，准确测试待发区容量。
+	// 在下一轮心跳打包事件前暂停真实核心，再断链并填充离线队列。
+	// 仅等待面板断开不能阻止旧上报流程继续 Batch；也不能用重启新增启动事件。
+	armed.Store(true)
+	h.Clock.Advance(10 * time.Second)
+	select {
+	case <-paused:
+	case <-time.After(2 * time.Second):
+		t.Fatal("未进入事件打包前的查询同步点")
+	}
 	store.pauseBatches.Store(true)
 	n.Disconnect()
 	awaitNode(t, c, a["id"].(string), func(row map[string]any) bool { return row["connected"] == false })
@@ -123,6 +150,7 @@ func TestEventOverflowProducesVisibleGap(t *testing.T) {
 		}
 	}
 	store.pauseBatches.Store(false)
+	unblock()
 	n.Restore()
 	query := "?node_id=" + a["id"].(string)
 	rows := awaitEvents(t, h, c, query+"&type=sync_failed", 3)

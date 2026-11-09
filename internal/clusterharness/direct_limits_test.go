@@ -6,8 +6,10 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
 	"strconv"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -16,33 +18,58 @@ import (
 	"nbpass/internal/node"
 )
 
-// 预先 bind 并把真实监听交给节点，消除释放临时端口到规则应用之间的竞争。
+// 预先 bind 占住端口，节点实际请求 Listen 时才开始监听；既消除端口抢占，
+// 又保留“授权确认前入口不可连接”的真实 TCP 门禁断言。
 func directPorts(t *testing.T) (func() int, func(*node.Config, *node.Dependencies)) {
 	t.Helper()
 	var mu sync.Mutex
-	listeners := map[string]net.Listener{}
+	sockets := map[string]*os.File{}
 	reserve := func() int {
 		t.Helper()
-		l, err := net.Listen("tcp4", "0.0.0.0:0")
+		fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, syscall.IPPROTO_TCP)
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { l.Close() })
+		syscall.CloseOnExec(fd)
+		file := os.NewFile(uintptr(fd), "reserved-tcp")
+		t.Cleanup(func() { file.Close() })
+		if err := syscall.Bind(fd, &syscall.SockaddrInet4{}); err != nil {
+			t.Fatal(err)
+		}
+		address, err := syscall.Getsockname(fd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := address.(*syscall.SockaddrInet4).Port
 		mu.Lock()
-		listeners[l.Addr().String()] = l
+		sockets[net.JoinHostPort("0.0.0.0", strconv.Itoa(port))] = file
 		mu.Unlock()
-		return l.Addr().(*net.TCPAddr).Port
+		return port
 	}
 	option := func(_ *node.Config, d *node.Dependencies) {
+		// 保留测试台的监听器移交路径，兼容 main 预留的真实 socket。
+		fallback := d.Forwarding.Listen
+		if fallback == nil {
+			fallback = net.Listen
+		}
 		d.Forwarding.Listen = func(network, address string) (net.Listener, error) {
 			mu.Lock()
-			l := listeners[address]
-			delete(listeners, address)
+			file := sockets[address]
+			delete(sockets, address)
 			mu.Unlock()
-			if l != nil {
-				return l, nil
+			if file != nil {
+				defer file.Close()
+				if err := syscall.Listen(int(file.Fd()), syscall.SOMAXCONN); err != nil {
+					return nil, err
+				}
+				// Linux 的仅绑定 socket 若提前允许 REUSEADDR，仍可能被其他
+				// 同样设置此选项的监听器抢占；开始监听后再启用正常重绑。
+				if err := syscall.SetsockoptInt(int(file.Fd()), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1); err != nil {
+					return nil, err
+				}
+				return net.FileListener(file)
 			}
-			return net.Listen(network, address)
+			return fallback(network, address)
 		}
 	}
 	return reserve, option

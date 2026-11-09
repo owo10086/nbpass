@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/hashicorp/yamux"
+	legacyyamux "github.com/hashicorp/yamux"
 	"google.golang.org/protobuf/proto"
 	"nbpass/internal/controlpb"
 )
@@ -53,7 +53,11 @@ func TestTunnelRollingUpgradeDoesNotProbeLegacyExit(t *testing.T) {
 				}{true}) != nil {
 					return
 				}
-				session, err := yamux.Server(conn, yamuxConfig())
+				config := legacyyamux.DefaultConfig()
+				config.LogOutput = io.Discard
+				config.StreamOpenTimeout = 3 * time.Second
+				config.ConnectionWriteTimeout = 3 * time.Second
+				session, err := legacyyamux.Server(conn, config)
 				if err != nil {
 					return
 				}
@@ -94,7 +98,7 @@ func TestTunnelRollingUpgradeDoesNotProbeLegacyExit(t *testing.T) {
 							return
 						}
 						stream.SetDeadline(time.Time{})
-						proxyTCP(&tunnelStream{Stream: stream}, target)
+						proxyTCP(&legacyTunnelStream{Stream: stream}, target)
 					}()
 				}
 			}))
@@ -160,7 +164,7 @@ func TestTunnelAcceptsLegacyRuleObjectReadinessCheck(t *testing.T) {
 		if !allowed {
 			check.TargetPort++
 		}
-		stream, err := session.OpenStream()
+		stream, err := session.OpenStream(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -180,4 +184,13 @@ func TestTunnelAcceptsLegacyRuleObjectReadinessCheck(t *testing.T) {
 	if targetDials.Load() != 0 {
 		t.Fatal("旧入口预检创建了目标连接")
 	}
+}
+
+// 保留旧出口的 FIN/Close 语义，不能用新运行时流包装旧 yamux 类型。
+type legacyTunnelStream struct{ *legacyyamux.Stream }
+
+func (s *legacyTunnelStream) CloseWrite() error { return s.Stream.Close() }
+func (s *legacyTunnelStream) Close() error {
+	s.Stream.SetReadDeadline(time.Now())
+	return s.Stream.Close()
 }
