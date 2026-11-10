@@ -50,7 +50,7 @@ export function RulesTransfer({ selectedIDs, onChanged, onSessionExpired }: { se
       <Button loading={busy} disabled={!source || imported} onClick={() => void submit(true)}>整体预检</Button>
       <Button type="primary" loading={busy} disabled={!result?.valid || imported} onClick={() => void submit(false)}>确认{mode === 'create' ? '新增' : '覆盖'}全部规则</Button>
     </Space>}>
-      <Alert type="info" showIcon title="导出仅包含规则定义，不包含凭据或运行状态。" description="入口组和出口组须已存在，跨面板迁移时请先修改 JSON 中的组 ID。预检全部通过后才能确认导入；保存成功后仍须核对各成员的同步状态。" style={{ marginBottom: 16 }} />
+      <Alert type="info" showIcon title="导出仅包含规则定义，不包含凭据或运行状态。" description="支持格式 1、2。入口节点或入口组、出口组须已存在，跨面板迁移时请先修改 JSON 中的节点或组 ID。预检全部通过后才能确认导入；保存成功后仍须核对各成员的同步状态。" style={{ marginBottom: 16 }} />
       <Space orientation="vertical" style={{ width: '100%' }}>
         <Typography.Text>导入方式</Typography.Text>
         <Select value={mode} disabled={busy} style={{ width: '100%' }} onChange={value => { setMode(value); resetPreview(); }} options={[{ value: 'create', label: '新增：分配新规则 ID，保留现有规则' }, { value: 'overwrite', label: '覆盖：按规则 ID 更新已有规则，不自动新增' }]} />
@@ -62,7 +62,7 @@ export function RulesTransfer({ selectedIDs, onChanged, onSessionExpired }: { se
           setBusy(true);
           try { setSource(await file.text()); } catch { setError('无法读取文件。'); } finally { setBusy(false); }
         }} />
-        <Input.TextArea value={source} disabled={busy} rows={10} aria-label="规则 JSON 内容" placeholder='粘贴 {"format_version":1,"rules":[…]}，每批 1–500 条规则' onChange={e => { setSource(e.target.value); resetPreview(); }} />
+        <Input.TextArea value={source} disabled={busy} rows={10} aria-label="规则 JSON 内容" placeholder='粘贴 {"format_version":2,"rules":[…]}，每批 1–500 条规则' onChange={e => { setSource(e.target.value); resetPreview(); }} />
         {error && <Alert type="error" showIcon title={error} />}
         {result && <>
           <Alert showIcon type={imported ? 'success' : result.valid ? 'info' : 'error'} title={imported ? '整批已保存，请核对规则同步状态。' : result.valid ? '全部预检通过，尚未写入。请核对下表后确认导入。' : '预检失败，未写入任何规则。'} />
