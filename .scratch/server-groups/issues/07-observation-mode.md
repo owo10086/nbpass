@@ -21,3 +21,13 @@
 - [ ] 以上行为由测试台通过面板 HTTP API、假 DNSPod 与假换 IP 接口验证
 
 ## Comments
+
+2026-11-10 实施记录（分支 `sg/07`）：
+
+- **迁移 43**：追加 `entryObservationMigration`；入口组新增默认关闭的 `observation_enabled`、用于通知去重的开启代次，新增 `entry_observations` 保存“本来会做的动作”，与协调器队列分离。
+- **接口与页面**：`PUT /api/entry-groups/{id}/observation` 接收 `enabled`；`GET` 同路径返回开关及最近 50 条动作；入口组列表返回 `observation_enabled`。页面显示醒目的“观测中”、开关和最近动作，沿用管理员认证。观测动作同事务记录事件和 Telegram 持久通知待办，同一开启代次、状态和目标去重。
+- **DNS 拦截**：主备切换、回切和偏差写回经 `submitEntryActionTx`；全部发布摘除、加回在改变成员期望前检查，并在 `submitAutomaticMemberActionTx` 复核；逐记录提交经 `submitRecordActionTx`。协调器 `executeRecord` 的写值和启停通过 `dispatchRecordWrite` 最后复核。观测只记录，不创建协调器动作、不推进期望版本。
+- **开关与在途动作**：开启事务作废尚未调用的自动 DNS 记录动作、恢复未执行的成员期望及主备目标和监控期望；不倒退已有版本。已调用的步骤继续读回核对；已改值但尚未启停时，核对改值后作废未调用步骤并结束为部分完成，避免挡住后续手动操作。关闭后仅按当前状态重新判断。
+- **换 IP 拦截**：用途分为申请记录与实际授权两层；`startRotationPolicy`、`authorizeRotation` 在跨组准备和额度占用前记录观测，`automaticRotationPurpose` 在授权事务排除任一观测组成员，`markRotationPermit` 在真正 `RotationCommand` 发送前再次复核。开启时取消未投递自动许可并释放额度；已投递许可保留核对和额度。未投递取消不再阻挡成员加回、策略③再次申请或健康旧 IP 回切。锁序保持 `entryMu → controlMu`；命令发送另由 `rotationDispatchMu` 串行，网络等待不持 `controlMu`。
+- **手动与收尾**：首次发布、手动切换/摘除/加回/换 IP、`sync_address` 和已授权换 IP 的 `address_update` 放行；地址同步保持各记录实际启用状态。
+- **用例与检查**：新增 `internal/clusterharness/entry_observation_test.go` 的 17 个测试台用例，覆盖两种模式、共享节点及出口/单节点用途、偏差、手动操作、许可与 DNS 写前竞争、取消释放额度、重启及已调用动作收尾；为真实 gRPC 发送增加测试台阻塞接缝，并调整既有能力回退单测的投递边界。**按用户要求未运行任何测试**。`gofmt -l internal/`、`go build ./...`、`go vet ./internal/panel ./internal/clusterharness`、`web` 下 `npx tsc --noEmit` 均通过；只读代码审查指出的并发边界问题已修正，最终静态复核未发现剩余确定缺陷。前端先安装锁定依赖后完成类型检查，未改锁文件，未生成或提交 `web/dist`、`internal/nodebundle`。验收用例的运行结果和浏览器人工验收尚待后续执行。
