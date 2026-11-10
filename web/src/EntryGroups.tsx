@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag } from 'antd';
+import { Alert, Button, Form, Input, Modal, Popconfirm, Select, Space, Switch, Table, Tag } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
 import { ManagedDNS } from './ManagedDNS';
@@ -10,7 +10,7 @@ import { EntryReadiness, type EntryMemberState } from './EntryReadiness';
 import { PageHeader } from './PageHeader';
 import { useFocusRow } from './route';
 
-type EntryGroup = { publication_mode: string; member_records?: AllMember[]; id: string; name: string; members: string[]; publication_status: string; sync_status: string; sync_members: GroupSyncMember[]; member_states: EntryMemberState[] };
+type EntryGroup = { observation_enabled: boolean; publication_mode: string; member_records?: AllMember[]; id: string; name: string; members: string[]; publication_status: string; sync_status: string; sync_members: GroupSyncMember[]; member_states: EntryMemberState[] };
 type Member = { id: string; name: string };
 
 export function EntryGroups({ focus, onSessionExpired }: { focus?: string; onSessionExpired: () => void }) {
@@ -59,8 +59,9 @@ export function EntryGroups({ focus, onSessionExpired }: { focus?: string; onSes
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建入口组</Button>
     </PageHeader>
     {error && <Alert title={error} type="error" showIcon className="message" />}
-    <div className="panel"><Table<EntryGroup> rowKey="id" dataSource={rows} loading={!loaded && !error} pagination={false} rowClassName={row => rowClassName(row.id)} scroll={{ x: 800 }} locale={{ emptyText: '暂无入口组，请先添加节点，再创建入口组。' }} expandable={{ defaultExpandedRowKeys: focus ? [focus] : [], expandedRowRender: row => <Space orientation="vertical" size="middle" style={{ width: '100%' }}><EntryReadiness members={row.member_states} />{row.publication_mode === 'all' && <MemberRecords members={row.member_records ?? []} nodes={nodes} />}<GroupSyncDetails members={row.sync_members} /></Space> }} columns={[
+    <div className="panel"><Table<EntryGroup> rowKey="id" dataSource={rows} loading={!loaded && !error} pagination={false} rowClassName={row => rowClassName(row.id)} scroll={{ x: 800 }} locale={{ emptyText: '暂无入口组，请先添加节点，再创建入口组。' }} expandable={{ defaultExpandedRowKeys: focus ? [focus] : [], expandedRowRender: row => <Space orientation="vertical" size="middle" style={{ width: '100%' }}><EntryReadiness members={row.member_states} />{row.publication_mode === 'all' && <MemberRecords members={row.member_records ?? []} nodes={nodes} />}<ObservationDetails group={row.id} onFailure={failed} /><GroupSyncDetails members={row.sync_members} /></Space> }} columns={[
       { title: '入口组', dataIndex: 'name', render: value => <span className="node-name">{value}</span> },
+      { title: '观测模式', render: (_, row) => <Space>{row.observation_enabled && <Tag color="orange">观测中</Tag>}<Switch checked={row.observation_enabled} checkedChildren="开启" unCheckedChildren="关闭" aria-label={`${row.name}观测模式`} onChange={enabled => { void api(`/entry-groups/${row.id}/observation`, 'PUT', { enabled }).then(load).catch(failed); }} /></Space> },
       { title: '发布模式', render: (_, row) => row.publication_mode === 'all' ? '全部发布' : '主备' },
       { title: '成员', render: (_, row) => row.members.map((id, i) => `${nodes.find(n => n.id === id)?.name ?? id}${i === 0 && row.publication_mode !== 'all' ? '（首选入口）' : ''}`).join('、') },
       { title: '受管记录', render: (_, row) => <Tag>{row.publication_status}</Tag> },
@@ -79,4 +80,31 @@ export function EntryGroups({ focus, onSessionExpired }: { focus?: string; onSes
       </Form>
     </Modal>
   </>;
+}
+
+
+type ObservationAction = { id: string; node_id: string; kind: string; message: string; created_at: string };
+
+function ObservationDetails({ group, onFailure }: { group: string; onFailure: (e: unknown) => void }) {
+  const [actions, setActions] = useState<ObservationAction[]>([]);
+  const failed = useRef(onFailure); failed.current = onFailure;
+  useEffect(() => {
+    let active = true;
+    async function load() {
+      try {
+        const view = await api<{ actions: ObservationAction[] }>(`/entry-groups/${group}/observation`);
+        if (active) setActions(view.actions);
+      } catch (e) { if (active) failed.current(e); }
+    }
+    void load();
+    const timer = window.setInterval(() => void load(), 10_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [group]);
+  return <Space orientation="vertical" style={{ width: '100%' }}>
+    <Alert type="info" showIcon title="本来会做的动作" description="开启观测后，自动动作只记录并通知。手动操作照常执行；已下发的换 IP 继续核对和同步地址。关闭后按当前状态重新判断。" />
+    <Table<ObservationAction> size="small" rowKey="id" dataSource={actions} pagination={{ pageSize: 5, hideOnSinglePage: true }} locale={{ emptyText: '暂无观测动作' }} columns={[
+      { title: '时间', dataIndex: 'created_at', render: value => new Date(value).toLocaleString() },
+      { title: '本来会做什么', dataIndex: 'message' },
+    ]} />
+  </Space>;
 }
