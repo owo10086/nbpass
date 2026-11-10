@@ -22,8 +22,9 @@ type ruleSyncMember struct {
 
 type ruleView struct {
 	forwarding.Rule
-	SyncStatus  string           `json:"sync_status"`
-	SyncMembers []ruleSyncMember `json:"sync_members"`
+	EntryStates []entryMemberState `json:"entry_states"`
+	SyncStatus  string             `json:"sync_status"`
+	SyncMembers []ruleSyncMember   `json:"sync_members"`
 }
 
 type groupRuleSync struct {
@@ -100,21 +101,7 @@ func (p *Panel) loadSyncNodes(ctx context.Context) (map[string]*syncNode, map[st
 	if err != nil {
 		return nil, nil, err
 	}
-	rows, err = p.db.QueryContext(ctx, "SELECT group_id,node_id FROM entry_group_members ORDER BY position,node_id")
-	if err != nil {
-		return nil, nil, err
-	}
-	groups := map[string][]string{}
-	for rows.Next() {
-		var group, id string
-		if err := rows.Scan(&group, &id); err != nil {
-			rows.Close()
-			return nil, nil, err
-		}
-		groups[group] = append(groups[group], id)
-	}
-	err = rows.Err()
-	rows.Close()
+	groups, err := loadEntryGroupMembers(ctx, p.db)
 	return nodes, groups, err
 }
 
@@ -137,7 +124,7 @@ func buildRuleViews(rules []forwarding.Rule, nodes map[string]*syncNode, groups 
 	for _, r := range rules {
 		view := ruleView{Rule: r, SyncMembers: []ruleSyncMember{}}
 		statuses := []string{}
-		for _, id := range groups[r.EntryGroupID] {
+		for _, id := range forwarding.RuleEntryNodes(r, groups) {
 			n := nodes[id]
 			if n == nil {
 				continue

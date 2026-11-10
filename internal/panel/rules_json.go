@@ -16,7 +16,7 @@ import (
 	"nbpass/internal/forwarding"
 )
 
-const rulesFormatVersion = 1
+const rulesFormatVersion = 2
 
 // 只导出规则定义，不从含运行状态、授权及凭据的视图或快照序列化。
 func (p *Panel) exportRules(w http.ResponseWriter, r *http.Request) {
@@ -103,8 +103,8 @@ func (p *Panel) importRules(w http.ResponseWriter, r *http.Request) {
 		problem(w, 400, "须明确选择新增（create）或覆盖（overwrite）")
 		return
 	}
-	if body.Document.FormatVersion != rulesFormatVersion || len(body.Document.Rules) < 1 || len(body.Document.Rules) > 500 {
-		problem(w, 400, "仅支持格式版本 1，每批须包含 1–500 条规则")
+	if (body.Document.FormatVersion != 1 && body.Document.FormatVersion != rulesFormatVersion) || len(body.Document.Rules) < 1 || len(body.Document.Rules) > 500 {
+		problem(w, 400, "仅支持格式版本 1 或 2，每批须包含 1–500 条规则")
 		return
 	}
 	result := ruleImportResult{Mode: body.Mode, Results: make([]ruleImportRow, len(body.Document.Rules))}
@@ -202,7 +202,7 @@ func decodeImportedRule(data []byte, rule *forwarding.Rule) error {
 	if err := json.Unmarshal(data, &fields); err != nil {
 		return errors.New("规则必须为 JSON 对象")
 	}
-	for _, field := range []string{"name", "entry_group_id", "kind", "listen_port", "target_address", "target_family", "target_port", "allow_private", "enabled"} {
+	for _, field := range []string{"name", "kind", "listen_port", "target_address", "target_family", "target_port", "allow_private", "enabled"} {
 		if len(fields[field]) == 0 || bytes.Equal(fields[field], []byte("null")) {
 			return errors.New("缺少必填字段或字段为 null：" + field)
 		}
@@ -228,6 +228,16 @@ func (p *Panel) preflightRuleImport(ctx context.Context, tx *sql.Tx, body ruleIm
 		if err := decodeImportedRule(raw, rule); err != nil {
 			row.Errors = append(row.Errors, err.Error())
 		}
+		if body.Document.FormatVersion == 1 && (rule.EntryNodeID != "" || rule.EntryGroupID == "") {
+			row.Errors = append(row.Errors, "格式版本 1 仅支持入口组")
+		}
+		if err := validateRuleEntry(ctx, tx, *rule); err != nil {
+			var invalid *forwardingError
+			if !errors.As(err, &invalid) {
+				return nil, err
+			}
+			row.Errors = append(row.Errors, invalid.message)
+		}
 		row.Name, row.ID = rule.Name, rule.ID
 		if rule.ID != "" {
 			if first, ok := seen[rule.ID]; ok {
@@ -247,7 +257,7 @@ func (p *Panel) preflightRuleImport(ctx context.Context, tx *sql.Tx, body ruleIm
 			}
 			row.ID = rule.ID
 		}
-		for _, ref := range []struct{ table, id, label string }{{"entry_groups", rule.EntryGroupID, "入口组"}, {"exit_groups", rule.ExitGroupID, "出口组"}} {
+		for _, ref := range []struct{ table, id, label string }{{"exit_groups", rule.ExitGroupID, "出口组"}} {
 			if ref.table == "exit_groups" && rule.Kind != forwarding.Tunnel {
 				continue
 			}
@@ -270,21 +280,7 @@ func (p *Panel) preflightRuleImport(ctx context.Context, tx *sql.Tx, body ruleIm
 			byID[rule.ID], indices[rule.ID] = rule, i
 		}
 	}
-	members := map[string][]string{}
-	rows, err := tx.QueryContext(ctx, "SELECT group_id,node_id FROM entry_group_members ORDER BY group_id,position")
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var group, node string
-		if err := rows.Scan(&group, &node); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		members[group] = append(members[group], node)
-	}
-	err = rows.Err()
-	rows.Close()
+	members, err := loadEntryGroupMembers(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
@@ -336,10 +332,10 @@ func (p *Panel) preflightRuleImport(ctx context.Context, tx *sql.Tx, body ruleIm
 }
 
 func storeRule(ctx context.Context, tx *sql.Tx, rule forwarding.Rule, creating bool) error {
-	args := []any{rule.Name, rule.EntryGroupID, rule.Kind, rule.ListenPort, rule.TargetAddress, rule.TargetFamily, rule.TargetPort, rule.AllowPrivate, rule.Enabled, rule.ExitGroupID, rule.ID}
+	args := []any{rule.Name, nullableRuleEntry(rule.EntryGroupID), nullableRuleEntry(rule.EntryNodeID), rule.Kind, rule.ListenPort, rule.TargetAddress, rule.TargetFamily, rule.TargetPort, rule.AllowPrivate, rule.Enabled, rule.ExitGroupID, rule.ID}
 	if creating {
-		_, err := tx.ExecContext(ctx, `INSERT INTO forward_rules(name,entry_group_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled,exit_group_id,id) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, args...)
+		_, err := tx.ExecContext(ctx, `INSERT INTO forward_rules(name,entry_group_id,entry_node_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled,exit_group_id,id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, args...)
 		return err
 	}
-	return missingResult(tx.ExecContext(ctx, `UPDATE forward_rules SET name=?,entry_group_id=?,kind=?,listen_port=?,target_address=?,target_family=?,target_port=?,allow_private=?,enabled=?,exit_group_id=? WHERE id=?`, args...))
+	return missingResult(tx.ExecContext(ctx, `UPDATE forward_rules SET name=?,entry_group_id=?,entry_node_id=?,kind=?,listen_port=?,target_address=?,target_family=?,target_port=?,allow_private=?,enabled=?,exit_group_id=? WHERE id=?`, args...))
 }

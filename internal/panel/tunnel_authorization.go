@@ -40,7 +40,8 @@ func authorizationFingerprint(r forwarding.Rule, entries, exits []string) string
 		Port                          int
 		AllowPrivate                  bool
 		Entries, Exits                []string
-	}{r.Kind, r.Enabled, r.EntryGroupID, r.ExitGroupID, r.TargetAddress, r.TargetFamily, r.TargetPort, r.AllowPrivate, entries, exits})
+		EntryNode                     string `json:",omitempty"`
+	}{r.Kind, r.Enabled, r.EntryGroupID, r.ExitGroupID, r.TargetAddress, r.TargetFamily, r.TargetPort, r.AllowPrivate, entries, exits, r.EntryNodeID})
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
 }

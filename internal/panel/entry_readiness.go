@@ -33,6 +33,30 @@ type entryMemberState struct {
 	DomesticEvidence *domesticEvidence  `json:"domestic_evidence"`
 }
 
+// 单节点入口以独立命名空间分桶，既不借用也不污染该节点所属入口组的就绪。
+// 同一节点的全部单节点规则共享一个入口，就绪仍逐条检查启用规则。
+func ruleEntryKey(r forwarding.Rule) string {
+	if r.EntryNodeID != "" {
+		return "node:" + r.EntryNodeID
+	}
+	return r.EntryGroupID
+}
+
+// 读取状态不制造候选样本；与入口组页面使用同一新鲜度边界。
+func (p *Panel) entryStateView(key, id, name string) entryMemberState {
+	state, ok := p.entryChecks[[2]string{key, id}]
+	now := p.deps.Clock.Now()
+	if !ok {
+		return pendingEntryState(id, name, "check_pending", "等待下一次入口检查")
+	}
+	if state.CheckedAt == nil || now.Before(*state.CheckedAt) || now.Sub(*state.CheckedAt) > entryCandidateInterval {
+		checked := state.CheckedAt
+		state = pendingEntryState(id, name, "check_stale", "入口检查已过期，等待重新检查")
+		state.CheckedAt = checked
+	}
+	return state
+}
+
 func pendingEntryState(id, name, code, message string) entryMemberState {
 	reason := []entryStateReason{{Code: code, Message: message}}
 	return entryMemberState{NodeID: id, NodeName: name, ReadinessStatus: "unknown", ReadinessReasons: reason, CandidateStatus: "unknown", CandidateReasons: reason}
@@ -41,7 +65,6 @@ func pendingEntryState(id, name, code, message string) entryMemberState {
 // 页面读取不会制造候选成功样本；后续自动切换/回切复用这份定时采样。
 // 调用者持有controlMu，快照一次替换，不能混用不同轮的成员状态。
 func (p *Panel) attachEntryStates(groups []entryGroupView, nodes map[string]*syncNode) {
-	now := p.deps.Clock.Now()
 	for i := range groups {
 		g := &groups[i]
 		g.MemberStates = []entryMemberState{}
@@ -50,15 +73,7 @@ func (p *Panel) attachEntryStates(groups []entryGroupView, nodes map[string]*syn
 			if n := nodes[id]; n != nil {
 				name = n.name
 			}
-			state, ok := p.entryChecks[[2]string{g.ID, id}]
-			if !ok {
-				state = pendingEntryState(id, name, "check_pending", "等待下一次候选检查")
-			} else if state.CheckedAt == nil || now.Before(*state.CheckedAt) || now.Sub(*state.CheckedAt) > entryCandidateInterval {
-				checked := state.CheckedAt
-				state = pendingEntryState(id, name, "check_stale", "候选检查已过期，等待重新检查")
-				state.CheckedAt = checked
-			}
-			g.MemberStates = append(g.MemberStates, state)
+			g.MemberStates = append(g.MemberStates, p.entryStateView(g.ID, id, name))
 		}
 	}
 }
@@ -103,6 +118,12 @@ func (p *Panel) checkEntryCandidates(ctx context.Context) (map[[2]string]entryMe
 	if err != nil {
 		return nil, err
 	}
+	// 空规则组仍保留原有候选语义；单节点入口按实际节点集合追加独立分桶。
+	for _, r := range rules {
+		if r.EntryNodeID != "" {
+			groups[ruleEntryKey(r)] = forwarding.RuleEntryNodes(r, groups)
+		}
+	}
 	now := p.deps.Clock.Now().UTC()
 	states := map[[2]string]entryMemberState{}
 	// 一个节点的隧道/国内证据只读取一次，所有入口组共享同一轮物理观测。
@@ -123,7 +144,7 @@ func (p *Panel) checkEntryCandidates(ctx context.Context) (map[[2]string]entryMe
 		for _, group := range owned {
 			state := entryMemberState{NodeID: id, NodeName: n.name, CheckedAt: &now, Ready: true, ReadinessStatus: "ready", ReadinessReasons: []entryStateReason{}, CandidateReasons: []entryStateReason{}, DomesticEvidence: inputs.domestic}
 			for _, r := range rules {
-				if !r.Enabled || r.EntryGroupID != group {
+				if !r.Enabled || ruleEntryKey(r) != group {
 					continue
 				}
 				result, exists := n.results[r.ID]
@@ -141,7 +162,7 @@ func (p *Panel) checkEntryCandidates(ctx context.Context) (map[[2]string]entryMe
 			if len(state.ReadinessReasons) > 0 {
 				state.Ready = false
 				state.ReadinessStatus = "not_ready"
-				state.CandidateReasons = append(state.CandidateReasons, entryStateReason{Code: "not_ready", Message: "本入口组未就绪，请查看逐规则原因"})
+				state.CandidateReasons = append(state.CandidateReasons, entryStateReason{Code: "not_ready", Message: "本入口未就绪，请查看逐规则原因"})
 			}
 			if !n.connected || !inputs.sessionLive {
 				state.CandidateReasons = append(state.CandidateReasons, entryStateReason{Code: "control_offline", Message: "控制离线或连接已中断"})

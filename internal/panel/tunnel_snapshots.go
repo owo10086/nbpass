@@ -27,7 +27,7 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 	}
 	generations := map[string]uint64{}
 	for _, r := range rules {
-		generation, err := updateAuthorizationGeneration(ctx, tx, r, members[r.EntryGroupID], byGroup[r.ExitGroupID].Members)
+		generation, err := updateAuthorizationGeneration(ctx, tx, r, forwarding.RuleEntryNodes(r, members), byGroup[r.ExitGroupID].Members)
 		if err != nil {
 			return err
 		}
@@ -61,7 +61,7 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 	}
 	legacy := map[[3]string]bool{}
 	if len(endpoints) > 0 {
-		legacy, err = p.legacyTunnelAuthorizations(ctx, tx, rules)
+		legacy, err = p.legacyTunnelAuthorizations(ctx, tx, rules, members)
 		if err != nil {
 			return err
 		}
@@ -85,7 +85,7 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 		if !ok {
 			return errors.New("隧道规则引用的出口组不存在")
 		}
-		for _, entry := range members[r.EntryGroupID] {
+		for _, entry := range forwarding.RuleEntryNodes(r, members) {
 			if len(g.Members) > 1 && !failoverCapable[entry] {
 				continue
 			}

@@ -245,13 +245,13 @@ func (p *Panel) deleteEntryGroup(w http.ResponseWriter, r *http.Request) {
 	respond(w, 204, nil)
 }
 
-const ruleColumns = "r.id,r.name,r.entry_group_id,r.kind,r.listen_port,r.target_address,r.target_family,r.target_port,r.allow_private,r.enabled,r.exit_group_id"
+const ruleColumns = "r.id,r.name,coalesce(r.entry_group_id,''),coalesce(r.entry_node_id,''),r.kind,r.listen_port,r.target_address,r.target_family,r.target_port,r.allow_private,r.enabled,r.exit_group_id"
 
 type scanner interface{ Scan(...any) error }
 
 func scanRule(row scanner) (forwarding.Rule, error) {
 	var r forwarding.Rule
-	err := row.Scan(&r.ID, &r.Name, &r.EntryGroupID, &r.Kind, &r.ListenPort, &r.TargetAddress, &r.TargetFamily, &r.TargetPort, &r.AllowPrivate, &r.Enabled, &r.ExitGroupID)
+	err := row.Scan(&r.ID, &r.Name, &r.EntryGroupID, &r.EntryNodeID, &r.Kind, &r.ListenPort, &r.TargetAddress, &r.TargetFamily, &r.TargetPort, &r.AllowPrivate, &r.Enabled, &r.ExitGroupID)
 	return r, err
 }
 func (p *Panel) listRules(w http.ResponseWriter, r *http.Request) {
@@ -279,7 +279,17 @@ func (p *Panel) ruleSyncViews(ctx context.Context) ([]ruleView, error) {
 	if err != nil {
 		return nil, err
 	}
-	return buildRuleViews(rules, nodes, groups), nil
+	views := buildRuleViews(rules, nodes, groups)
+	for i := range views {
+		view := &views[i]
+		view.EntryStates = []entryMemberState{}
+		for _, id := range forwarding.RuleEntryNodes(view.Rule, groups) {
+			if n := nodes[id]; n != nil {
+				view.EntryStates = append(view.EntryStates, p.entryStateView(ruleEntryKey(view.Rule), id, n.name))
+			}
+		}
+	}
+	return views, nil
 }
 
 type queryer interface {
@@ -333,13 +343,10 @@ func (p *Panel) saveRule(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
-		var n int
-		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM entry_groups WHERE id=?", body.EntryGroupID).Scan(&n); err != nil {
+		if err := validateRuleEntry(r.Context(), tx, body); err != nil {
 			return err
 		}
-		if n != 1 {
-			return &forwardingError{400, "入口组不存在"}
-		}
+		var n int
 		if body.Kind == forwarding.Tunnel {
 			if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM exit_groups WHERE id=?", body.ExitGroupID).Scan(&n); err != nil {
 				return err
@@ -349,7 +356,7 @@ func (p *Panel) saveRule(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if input.RandomPort {
-			port, err := p.randomRulePort(r.Context(), tx, body.EntryGroupID)
+			port, err := p.randomRulePort(r.Context(), tx, body)
 			if err != nil {
 				return err
 			}

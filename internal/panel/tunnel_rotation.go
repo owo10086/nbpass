@@ -83,13 +83,18 @@ func (p *Panel) startTunnelRotation(w http.ResponseWriter, r *http.Request) {
 			return &forwardingError{409, "该出口已有进行中的轮换"}
 		}
 		// 使用当前关联规则，历史上已解除关联的节点对不参与确认。
-		if err := tx.QueryRowContext(r.Context(), `SELECT count(*) FROM nodes n WHERE n.tunnel_rotation_version<>1 AND n.id IN (
-   SELECT em.node_id FROM entry_group_members em JOIN forward_rules r ON r.entry_group_id=em.group_id JOIN exit_group_members xm ON xm.group_id=r.exit_group_id
-   WHERE r.enabled=1 AND r.kind='tunnel' AND xm.node_id=?)`, exit).Scan(&count); err != nil {
+		entries, err := tunnelEntryNodes(r.Context(), tx, exit)
+		if err != nil {
 			return err
 		}
-		if count > 0 {
-			return &forwardingError{409, "请先升级所有相关入口节点以支持无中断轮换"}
+		for entry := range entries {
+			var version int
+			if err := tx.QueryRowContext(r.Context(), "SELECT tunnel_rotation_version FROM nodes WHERE id=?", entry).Scan(&version); err != nil {
+				return err
+			}
+			if version != 1 {
+				return &forwardingError{409, "请先升级所有相关入口节点以支持无中断轮换"}
+			}
 		}
 		id, _, err := p.randomCredential()
 		if err != nil {
@@ -190,10 +195,34 @@ func (p *Panel) compileTunnelRotations(ctx context.Context, tx *sql.Tx, compiled
 			continue
 		}
 		// 当前已解除关联的入口不再参与确认，包括旧信任清理阶段。
-		if _, err := tx.ExecContext(ctx, `DELETE FROM tunnel_rotation_pairs WHERE exit_id=? AND entry_id NOT IN (
-         SELECT em.node_id FROM entry_group_members em JOIN forward_rules r ON r.entry_group_id=em.group_id
-         JOIN exit_group_members xm ON xm.group_id=r.exit_group_id WHERE r.enabled=1 AND r.kind='tunnel' AND xm.node_id=?)`, v.ExitID, v.ExitID); err != nil {
+		entries, err := tunnelEntryNodes(ctx, tx, v.ExitID)
+		if err != nil {
 			return err
+		}
+		rows, err := tx.QueryContext(ctx, "SELECT entry_id FROM tunnel_rotation_pairs WHERE exit_id=?", v.ExitID)
+		if err != nil {
+			return err
+		}
+		var removed []string
+		for rows.Next() {
+			var entry string
+			if err := rows.Scan(&entry); err != nil {
+				rows.Close()
+				return err
+			}
+			if !entries[entry] {
+				removed = append(removed, entry)
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		for _, entry := range removed {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM tunnel_rotation_pairs WHERE exit_id=? AND entry_id=?", v.ExitID, entry); err != nil {
+				return err
+			}
 		}
 		if v.Phase == "cleaning" {
 			for _, peer := range server.Peers {
