@@ -107,6 +107,13 @@ func (p *Panel) SubmitEntryAction(ctx context.Context, req EntryActionRequest) (
 // 同一数据库事务串行维护期望版本；普通提交持 entryMu，地址确认持 controlMu。
 // 地址确认不再获取 entryMu，避免与入口组配置的 entryMu → controlMu 次序反转。
 func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryActionRequest) (EntryAction, error) {
+	var mode string
+	if err := tx.QueryRowContext(ctx, "SELECT publication_mode FROM entry_groups WHERE id=?", req.GroupID).Scan(&mode); err != nil {
+		return EntryAction{}, err
+	}
+	if mode != "primary_backup" {
+		return EntryAction{}, &forwardingError{409, "全部发布组不使用活动入口或首选入口回切"}
+	}
 	allowed, e := recoveryGroupAllowed(ctx, tx, req.GroupID)
 	if e != nil {
 		return EntryAction{}, e

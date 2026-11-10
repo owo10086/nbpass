@@ -131,7 +131,7 @@ func (c *entryCoordinator) executeRecord(a EntryAction, r EntryActionRecord) err
 		}
 		if !r.NewEnabled && a.MinimumEnabled > 0 {
 			var remaining int
-			err := p.db.QueryRowContext(c.ctx, `SELECT count(*) FROM managed_records WHERE group_id=? AND id<>? AND current_enabled=1`, a.GroupID, r.ManagedRecordID).Scan(&remaining)
+			err := p.db.QueryRowContext(c.ctx, `SELECT count(*) FROM managed_records m WHERE group_id=? AND id<>? AND current_enabled=1 AND NOT EXISTS(SELECT 1 FROM entry_action_records r WHERE r.managed_record_id=m.id AND r.binding_generation=m.binding_generation AND r.new_enabled=0 AND r.status_started=1 AND r.stage IN `+pendingRecordStages+`)`, a.GroupID, r.ManagedRecordID).Scan(&remaining)
 			if err != nil {
 				return err
 			}
@@ -234,6 +234,9 @@ func (c *entryCoordinator) recordResult(a EntryAction, r EntryActionRecord, stag
 	if err != nil {
 		return err
 	}
+	if stage == EntryFailed {
+		_, err = tx.ExecContext(c.ctx, `UPDATE entry_member_publications SET last_action_error=?,reason=CASE WHEN ? THEN '启用失败' ELSE '暂停失败' END WHERE group_id=? AND node_id=(SELECT node_id FROM managed_records WHERE id=?)`, message, r.NewEnabled, a.GroupID, r.ManagedRecordID)
+	}
 	if stage == EntryWritten {
 		_, err = tx.ExecContext(c.ctx, `UPDATE managed_records SET current_value=CASE WHEN ?='' THEN current_value ELSE ? END,current_ttl=?,current_enabled=? WHERE id=? AND binding_generation=? AND provider=? AND domain=? AND record_id=?`, r.NewValue, r.NewValue, r.NewTTL, r.NewEnabled, r.ManagedRecordID, r.BindingGeneration, r.Provider, r.Domain, r.RecordID)
 	}
@@ -312,7 +315,19 @@ func (c *entryCoordinator) aggregate(a EntryAction) error {
 	if err == nil {
 		err = p.actionEvent(c.ctx, tx, a, stage)
 	}
-	// 只有主备组沿用单地址传播；全部发布的集合传播由后续票接入。
+	if err == nil && a.GroupID != "" {
+		var mode string
+		err = tx.QueryRowContext(c.ctx, "SELECT publication_mode FROM entry_groups WHERE id=?", a.GroupID).Scan(&mode)
+		if err == nil && mode == "all" {
+			if confirmed > 0 {
+				_, err = tx.ExecContext(c.ctx, `UPDATE entry_groups SET first_published_at=coalesce(first_published_at,?) WHERE id=? AND EXISTS(SELECT 1 FROM entry_action_records WHERE action_id=? AND new_enabled=1 AND stage=?)`, now.UnixNano(), a.GroupID, a.ID, EntryWritten)
+			}
+			if err == nil {
+				err = p.refreshAllWatchTx(c.ctx, tx, a, now)
+			}
+		}
+	}
+	// 主备组沿用单地址传播。
 	if err == nil && stage == EntryWritten && a.GroupID != "" && a.NewValue != "" {
 		err = p.beginEntryPropagation(c.ctx, tx, a, now)
 	}
@@ -321,6 +336,7 @@ func (c *entryCoordinator) aggregate(a EntryAction) error {
 	}
 	if err == nil {
 		p.wakeDNSWatch()
+		p.finishAllMemberRemovals(c.ctx)
 	}
 	return err
 }

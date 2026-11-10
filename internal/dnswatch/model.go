@@ -58,8 +58,8 @@ func Domain(value string) (string, error) {
 }
 
 func Addresses(values []string) ([]string, error) {
-	if len(values) > 32 {
-		return nil, errors.New("IPv4 地址最多 32 个")
+	if len(values) > 64 {
+		return nil, errors.New("IPv4 地址最多 64 个")
 	}
 	result := []string{}
 	for _, value := range values {

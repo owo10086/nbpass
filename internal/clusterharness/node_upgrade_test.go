@@ -153,7 +153,10 @@ func TestUpgradeMaintenanceSuppressesFailoverAndRestartsOfflineEvidence(t *testi
 	defer close(gate)
 	service = f.h.AttachUpdater(f.active, clusterharness.UpdateEnvironment{Gate: gate})
 	_ = service
-	awaitNode(t, f.c, f.a, connected)
+	// 重启后的连接须已上报升级能力，旧连接的在线状态不能作为升级前置条件。
+	awaitNode(t, f.c, f.a, func(v map[string]any) bool {
+		return connected(v) && v["upgrade_capable"] == true
+	})
 	f.c.Do("POST", "/api/nodes/"+f.a+"/upgrade", nil, 202)
 	startChecker(t, f.h, f.c, 0, 1, nil)
 	f.active.Disconnect()

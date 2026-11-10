@@ -63,6 +63,9 @@ func entryActionPolicy(ctx context.Context, tx *sql.Tx, req EntryActionRequest) 
 }
 
 func (p *Panel) resumeEntryFailback(w http.ResponseWriter, r *http.Request) {
+	if !p.requireGroupMode(w, r, "primary_backup") {
+		return
+	}
 	var body struct {
 		ExpectedVersion *int64 `json:"expected_version"`
 	}

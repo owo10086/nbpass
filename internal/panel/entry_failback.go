@@ -26,7 +26,7 @@ type entryFailbackPublication struct {
 }
 
 const failbackPublicationColumns = `s.group_id,m.node_id,s.active_node_id,s.desired_version,s.written_at,g.auto_failback_paused`
-const failbackPublicationFrom = ` FROM entry_publications s JOIN entry_groups g ON g.id=s.group_id
+const failbackPublicationFrom = ` FROM entry_publications s JOIN entry_groups g ON g.id=s.group_id AND g.publication_mode='primary_backup'
  JOIN entry_group_members m ON m.group_id=s.group_id AND m.position=(SELECT MIN(position) FROM entry_group_members WHERE group_id=s.group_id)`
 
 func scanFailbackPublication(row scanner) (entryFailbackPublication, error) {

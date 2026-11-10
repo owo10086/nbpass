@@ -124,11 +124,11 @@ func (p *Panel) submitNodeRecordAddressTx(ctx context.Context, tx *sql.Tx, b man
 		if err := tx.QueryRowContext(ctx, "SELECT coalesce((SELECT desired_version FROM node_publications WHERE node_id=?),0)", b.NodeID).Scan(&req.ExpectedVersion); err != nil {
 			return EntryAction{}, err
 		}
-	} else {
-		req.GroupID = b.GroupID
-		if err := tx.QueryRowContext(ctx, "SELECT desired_version FROM entry_publications WHERE group_id=?", b.GroupID).Scan(&req.ExpectedVersion); err != nil {
-			return EntryAction{}, err
-		}
+		return p.submitRecordActionTx(ctx, tx, req)
 	}
-	return p.submitRecordActionTx(ctx, tx, req)
+	if err := tx.QueryRowContext(ctx, "SELECT desired_version FROM entry_publications WHERE group_id=?", b.GroupID).Scan(&req.ExpectedVersion); err != nil {
+		return EntryAction{}, err
+	}
+	// 成员记录走全部发布的成员动作接缝，同事务刷新集合期望与偏差审计。
+	return p.submitMemberActionTx(ctx, tx, b.GroupID, b.NodeID, kind, req.ExpectedVersion, req.Records)
 }

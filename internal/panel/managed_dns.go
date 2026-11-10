@@ -65,6 +65,7 @@ type dnsCredentials struct {
 
 func (p *Panel) managedDNSRoutes(mux *http.ServeMux) {
 	p.entryNodeRecordRoutes(mux)
+	p.allPublishRoutes(mux)
 	mux.HandleFunc("GET /api/entry-groups/{id}/dns-watch", p.getEntryDomainWatch)
 	p.entryManualRoutes(mux)
 	mux.HandleFunc("POST /api/entry-groups/{id}/publish", p.publishEntryGroup)
