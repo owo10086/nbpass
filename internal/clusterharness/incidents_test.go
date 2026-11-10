@@ -2,6 +2,7 @@ package clusterharness_test
 
 import (
 	"nbpass/internal/clusterharness"
+	"nbpass/internal/panel"
 	"net"
 	"strings"
 	"testing"
@@ -147,5 +148,33 @@ func TestIncidentsRuleFailureEndsAsConfigurationChange(t *testing.T) {
 		if ref["kind"] == "rule" && ref["exists"] != false {
 			t.Fatal("已删除规则未保留历史快照")
 		}
+	}
+}
+
+func TestIncidentsDNSFailureTracksWatchAndNewExpectation(t *testing.T) {
+	fake := clusterharness.NewDNSResolver()
+	provider := clusterharness.NewDNSPod()
+	h := clusterharness.New(t, func(d *panel.Dependencies) {
+		d.Passwords = nodePasswords{}
+		d.DNSWatchLookup = fake.Lookup
+		d.DNSProvider = provider
+	})
+	c := h.Client()
+	setup(c)
+	login(c)
+	c.Do("PUT", "/api/settings/dns-watch", map[string]any{"resolvers": []map[string]string{{"kind": "doh", "address": "https://dns.example/dns-query"}}}, 200)
+	id := c.Do("POST", "/api/dns-watches", map[string]any{"domain": "incident.example", "expected_ips": []string{"8.8.8.8"}}, 201)["id"].(string)
+	watchResult(t, c, id, func(r map[string]any) bool { return r["status"] == "采样失败" })
+	incident := awaitIncident(t, h, c, "dns")
+	awaitIncidentEntry(t, h, c, incident["id"].(string), func(e map[string]any) bool { return e["stage"] == "采样失败" })
+	if incident["impact"] != "unknown" {
+		t.Fatal("采样失败推断业务中断")
+	}
+	c.Do("PUT", "/api/dns-watches/"+id, map[string]any{"expected_ips": []string{"1.1.1.1"}}, 200)
+	awaitIncidentEntry(t, h, c, incident["id"].(string), func(e map[string]any) bool { return e["stage"] == "新版本替代" })
+	c.Do("GET", "/api/incidents?watch_id="+id+"&kind=dns", nil, 200)
+	c.Do("DELETE", "/api/dns-watches/"+id, nil, 204)
+	if provider.Writes() != 0 {
+		t.Fatal("故障追踪增加 DNS 写入")
 	}
 }

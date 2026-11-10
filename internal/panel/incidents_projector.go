@@ -37,6 +37,10 @@ func (p *Panel) projectIncidents(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	checkers, err := p.dnsWatchCheckers(ctx)
+	if err != nil {
+		return err
+	}
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -83,6 +87,10 @@ func (p *Panel) projectIncidents(ctx context.Context) error {
 		return err
 	}
 	observations = append(observations, collectRuleIncidents(view)...)
+	observations, err = collectDNSIncidents(ctx, tx, observations, view, checkers)
+	if err != nil {
+		return err
+	}
 	observations, err = reconcileIncidentSources(ctx, tx, observations, view)
 	if err != nil {
 		return err
