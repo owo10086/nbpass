@@ -17,6 +17,7 @@ func (p *Panel) dnsWatchRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/dns-watches", p.listDNSWatches)
 	mux.HandleFunc("POST /api/dns-watches", p.addDNSWatch)
 	mux.HandleFunc("GET /api/dns-watches/{id}", p.getDNSWatch)
+	mux.HandleFunc("GET /api/dns-watches/{id}/switches", p.getDNSWatchSwitches)
 	mux.HandleFunc("PUT /api/dns-watches/{id}", p.putDNSWatch)
 	mux.HandleFunc("DELETE /api/dns-watches/{id}", p.deleteDNSWatch)
 }
@@ -256,6 +257,8 @@ type dnsWatchView struct {
 	Status              string            `json:"status"`
 	ChangeCount         int               `json:"change_count"`
 	DifferentIPCount    int               `json:"different_ip_count"`
+	TodaySwitches       int               `json:"today_switches"`
+	YesterdaySwitches   int               `json:"yesterday_switches"`
 	Paths               []dnsWatchPath    `json:"paths"`
 	History             []dnsWatchHistory `json:"history,omitempty"`
 	NextBefore          *int64            `json:"next_before,omitempty"`
@@ -276,6 +279,11 @@ func (p *Panel) readDNSWatches(w http.ResponseWriter, r *http.Request, detail bo
 			problem(w, 400, "历史分页游标无效")
 			return
 		}
+	}
+	zone, ok := dnsWatchZone(r)
+	if !ok {
+		problem(w, 400, "时区偏移无效")
+		return
 	}
 	p.dnsWatchMu.Lock()
 
@@ -324,6 +332,9 @@ func (p *Panel) readDNSWatches(w http.ResponseWriter, r *http.Request, detail bo
 		err = p.db.QueryRowContext(r.Context(), "SELECT count(*) FROM dns_watch_history WHERE watch_id=? AND changed=1", v.ID).Scan(&v.ChangeCount)
 		if err == nil {
 			err = p.db.QueryRowContext(r.Context(), "SELECT count(*) FROM dns_watch_ips WHERE watch_id=?", v.ID).Scan(&v.DifferentIPCount)
+		}
+		if err == nil {
+			v.TodaySwitches, v.YesterdaySwitches, err = p.dnsWatchRecentSwitches(r, v.ID, zone)
 		}
 		if err != nil {
 			break

@@ -7,6 +7,7 @@ import (
 	"nbpass/internal/dnswatch"
 	"nbpass/internal/node"
 	"nbpass/internal/panel"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -257,6 +258,65 @@ func TestDNSWatchHistoryCountsSetsAndSurvivesRestart(t *testing.T) {
 	if row["change_count"] != float64(1) || row["different_ip_count"] != float64(3) || len(row["history"].([]any)) != 2 {
 		t.Fatalf("历史重建丢失: %v", row)
 	}
+}
+
+// 多条路径先后看到同一次切换只记一次，按请求时区分天统计今日、昨日并按天列出首尾相接的切换。
+func TestDNSWatchSwitchesMergePathsAndGroupByDay(t *testing.T) {
+	fake := clusterharness.NewDNSResolver()
+	domain := "switch.example"
+	first, second := "https://a.example/dns-query", "https://b.example/dns-query"
+	fake.Set(domain, first, "8.8.8.8")
+	fake.Set(domain, second, "8.8.8.8")
+	h := clusterharness.New(t, func(d *panel.Dependencies) { d.Passwords = nodePasswords{}; d.DNSWatchLookup = fake.Lookup })
+	c := h.Client()
+	setup(c)
+	login(c)
+	c.Do("PUT", "/api/settings/dns-watch", map[string]any{"resolvers": []map[string]string{{"kind": "doh", "address": first}, {"kind": "doh", "address": second}}}, 200)
+	id := c.Do("POST", "/api/dns-watches", map[string]any{"domain": domain}, 201)["id"].(string)
+	watchResult(t, c, id, func(r map[string]any) bool { return sampledPaths(r, 2) })
+	sample := func(after time.Duration) {
+		old := c.Do("GET", "/api/dns-watches/"+id, nil, 200)["round"].(float64)
+		h.Clock.Advance(after)
+		if after > time.Hour {
+			login(c)
+		}
+		nextWatchRound(t, h, c, id, old, 2)
+	}
+	fake.Set(domain, first, "9.9.9.9")
+	sample(5 * time.Minute)
+	fake.Set(domain, second, "9.9.9.9")
+	sample(5 * time.Minute)
+	fake.Set(domain, first, "1.1.1.1")
+	fake.Set(domain, second, "1.1.1.1")
+	sample(5 * time.Minute)
+	fake.Set(domain, first, "2.2.2.2")
+	sample(24 * time.Hour)
+	list := c.Do("GET", "/api/dns-watches?utc_offset=0", nil, 200)["watches"].([]any)[0].(map[string]any)
+	if list["today_switches"] != float64(1) || list["yesterday_switches"] != float64(2) {
+		t.Fatalf("今日昨日切换: %v", list)
+	}
+	days := c.Do("GET", "/api/dns-watches/"+id+"/switches?utc_offset=0", nil, 200)["days"].([]any)
+	got := []string{}
+	for _, item := range days {
+		day := item.(map[string]any)
+		for _, s := range day["switches"].([]any) {
+			sw := s.(map[string]any)
+			got = append(got, fmt.Sprintf("%s %v→%v", day["date"], sw["old_ips"], sw["ips"]))
+		}
+		if int(day["count"].(float64)) != len(day["switches"].([]any)) {
+			t.Fatalf("当天计数与列表不一致: %v", day)
+		}
+	}
+	want := []string{"2030-01-02 [1.1.1.1]→[2.2.2.2]", "2030-01-01 [9.9.9.9]→[1.1.1.1]", "2030-01-01 [8.8.8.8]→[9.9.9.9]"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("按天切换: %v", got)
+	}
+	earlier := c.Do("GET", "/api/dns-watches/"+id+"/switches?utc_offset=-60&before=2030-01-01", nil, 200)["days"].([]any)
+	if len(earlier) != 1 || earlier[0].(map[string]any)["date"] != "2029-12-31" || earlier[0].(map[string]any)["count"] != float64(2) {
+		t.Fatalf("时区分天或日期游标: %v", earlier)
+	}
+	c.Do("GET", "/api/dns-watches/"+id+"/switches?utc_offset=999", nil, 400)
+	c.Do("GET", "/api/dns-watches/missing/switches", nil, 404)
 }
 
 // 在途旧期望和旧解析器结果不能进入新版本或重新建立旧路径。
