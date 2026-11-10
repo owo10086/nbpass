@@ -25,6 +25,9 @@ func (p *Panel) requireGroupMode(w http.ResponseWriter, r *http.Request, mode st
 	return true
 }
 func (p *Panel) allPublishRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("PUT /api/entry-groups/{id}/minimum-kept", p.setAllMinimumKept)
+	mux.HandleFunc("POST /api/entry-groups/{id}/members/{node}/withdraw", p.manualAllMemberAction)
+	mux.HandleFunc("POST /api/entry-groups/{id}/members/{node}/restore", p.manualAllMemberAction)
 	mux.HandleFunc("DELETE /api/entry-groups/{id}/members/{node}", p.removeAllMember)
 	mux.HandleFunc("PUT /api/entry-groups/{id}/members/{node}/managed-record", p.bindMemberRecord)
 	mux.HandleFunc("GET /api/entry-groups/{id}/members/{node}/managed-record", p.getMemberRecord)

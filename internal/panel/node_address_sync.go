@@ -129,6 +129,9 @@ func (p *Panel) submitNodeRecordAddressTx(ctx context.Context, tx *sql.Tx, b man
 	if err := tx.QueryRowContext(ctx, "SELECT desired_version FROM entry_publications WHERE group_id=?", b.GroupID).Scan(&req.ExpectedVersion); err != nil {
 		return EntryAction{}, err
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE entry_member_publications SET expected_value=?,address_pending=0 WHERE group_id=? AND node_id=?`, address, b.GroupID, b.NodeID); err != nil {
+		return EntryAction{}, err
+	}
 	// 成员记录走全部发布的成员动作接缝，同事务刷新集合期望与偏差审计。
 	return p.submitMemberActionTx(ctx, tx, b.GroupID, b.NodeID, kind, req.ExpectedVersion, req.Records)
 }

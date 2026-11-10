@@ -10,6 +10,8 @@ import (
 )
 
 type allMemberPublication struct {
+	RestoreGeneration int64          `json:"-"`
+	WithdrawnAt       *time.Time     `json:"withdrawn_at"`
 	LastError         string         `json:"last_error"`
 	NodeID            string         `json:"node_id"`
 	Record            *managedRecord `json:"record"`
@@ -26,15 +28,20 @@ func loadAllMembers(ctx context.Context, q interface {
 	recoveryQuerier
 	queryer
 }, g string) ([]allMemberPublication, error) {
-	rows, err := q.QueryContext(ctx, `SELECT m.node_id,coalesce(s.expected_value,''),coalesce(s.expected_enabled,0),coalesce(s.address_pending,1),coalesce(s.reason,'未绑定记录'),coalesce(s.manual_locked,0),coalesce(s.removal_action_id,''),coalesce(s.propagation_status,''),coalesce(s.last_action_error,'') FROM entry_group_members m LEFT JOIN entry_member_publications s ON s.group_id=m.group_id AND s.node_id=m.node_id WHERE m.group_id=? ORDER BY m.position`, g)
+	rows, err := q.QueryContext(ctx, `SELECT m.node_id,coalesce(s.expected_value,''),coalesce(s.expected_enabled,0),coalesce(s.address_pending,1),coalesce(s.reason,'未绑定记录'),coalesce(s.manual_locked,0),coalesce(s.removal_action_id,''),coalesce(s.propagation_status,''),coalesce(s.last_action_error,''),s.withdrawn_at,coalesce(s.restore_generation,0) FROM entry_group_members m LEFT JOIN entry_member_publications s ON s.group_id=m.group_id AND s.node_id=m.node_id WHERE m.group_id=? ORDER BY m.position`, g)
 	if err != nil {
 		return nil, err
 	}
 	members := []allMemberPublication{}
 	for rows.Next() {
 		var m allMemberPublication
-		if err = rows.Scan(&m.NodeID, &m.ExpectedValue, &m.ExpectedEnabled, &m.AddressPending, &m.Reason, &m.ManualLocked, &m.RemovalActionID, &m.PropagationStatus, &m.LastError); err != nil {
+		var withdrawn sql.NullInt64
+		if err = rows.Scan(&m.NodeID, &m.ExpectedValue, &m.ExpectedEnabled, &m.AddressPending, &m.Reason, &m.ManualLocked, &m.RemovalActionID, &m.PropagationStatus, &m.LastError, &withdrawn, &m.RestoreGeneration); err != nil {
 			break
+		}
+		if withdrawn.Valid {
+			at := time.Unix(0, withdrawn.Int64).UTC()
+			m.WithdrawnAt = &at
 		}
 		members = append(members, m)
 	}
@@ -211,6 +218,8 @@ func (p *Panel) publishAllGroup(w http.ResponseWriter, r *http.Request, addresse
 }
 
 func (p *Panel) getAllPublication(w http.ResponseWriter, r *http.Request) {
+	p.controlMu.Lock()
+	defer p.controlMu.Unlock()
 	tx, err := p.db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		problem(w, 503, "无法读取发布状态")
@@ -220,9 +229,10 @@ func (p *Panel) getAllPublication(w http.ResponseWriter, r *http.Request) {
 	g := r.PathValue("id")
 	var version int64
 	var published bool
+	var minimum int
 	var actionID string
 	var written sql.NullInt64
-	err = tx.QueryRowContext(r.Context(), `SELECT coalesce(s.desired_version,0),g.first_published_at IS NOT NULL,coalesce(s.current_action_id,''),s.written_at FROM entry_groups g LEFT JOIN entry_publications s ON s.group_id=g.id WHERE g.id=?`, g).Scan(&version, &published, &actionID, &written)
+	err = tx.QueryRowContext(r.Context(), `SELECT coalesce(s.desired_version,0),g.first_published_at IS NOT NULL,coalesce(s.current_action_id,''),s.written_at,g.minimum_kept FROM entry_groups g LEFT JOIN entry_publications s ON s.group_id=g.id WHERE g.id=?`, g).Scan(&version, &published, &actionID, &written, &minimum)
 	var members []allMemberPublication
 	var a *EntryAction
 	if err == nil {
@@ -248,5 +258,9 @@ func (p *Panel) getAllPublication(w http.ResponseWriter, r *http.Request) {
 		v := time.Unix(0, written.Int64).UTC()
 		at = &v
 	}
-	respond(w, 200, map[string]any{"group_id": g, "publication_mode": "all", "desired_version": version, "first_published": published, "members": members, "action": a, "written_at": at})
+	states := []entryMemberState{}
+	for _, m := range members {
+		states = append(states, p.entryStateView(g, m.NodeID, m.NodeID))
+	}
+	respond(w, 200, map[string]any{"group_id": g, "publication_mode": "all", "desired_version": version, "first_published": published, "members": members, "member_states": states, "minimum_kept": minimum, "effective_minimum_kept": min(minimum, len(members)), "action": a, "written_at": at})
 }

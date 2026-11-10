@@ -12,10 +12,21 @@ const (
 )
 
 type entryFailbackWindow struct {
-	node, ip  string
-	version   int64
-	slot      time.Time
-	successes int
+	node, ip   string
+	version    int64
+	generation int64
+	slot       time.Time
+	successes  int
+}
+
+// 主备回切与全部发布加回共用连续候选样本口径，不补齐跳过的十秒时段。
+func advanceEntrySuccessWindow(w entryFailbackWindow, node, ip string, version int64, checked time.Time) entryFailbackWindow {
+	slot := checked.Truncate(entryCandidateInterval)
+	if w.node != node || w.ip != ip || w.version != version || !slot.Equal(w.slot.Add(entryCandidateInterval)) {
+		w = entryFailbackWindow{node: node, ip: ip, version: version}
+	}
+	w.slot, w.successes = slot, min(w.successes+1, entryFailbackSuccesses)
+	return w
 }
 
 type entryFailbackPublication struct {
@@ -74,13 +85,8 @@ func (p *Panel) checkEntryFailbacks(ctx context.Context, states map[[2]string]en
 		}
 		// 每个十秒采样时段最多一次。跳过的时段不会补样本；按时段比较
 		// 而非纳秒级间隔，避免正常调度抖动把相邻检查误判为缺样。
-		slot := state.CheckedAt.Truncate(entryCandidateInterval)
-		w := previous[v.group]
 		ip := state.DomesticEvidence.PublicIPv4
-		if w.node != v.preferred || w.ip != ip || w.version != v.version || !slot.Equal(w.slot.Add(entryCandidateInterval)) {
-			w = entryFailbackWindow{node: v.preferred, ip: ip, version: v.version}
-		}
-		w.slot, w.successes = slot, min(w.successes+1, entryFailbackSuccesses)
+		w := advanceEntrySuccessWindow(previous[v.group], v.preferred, ip, v.version, *state.CheckedAt)
 		next[v.group] = w
 		if w.successes < entryFailbackSuccesses || v.paused || !v.written.Valid || now.Sub(time.Unix(0, v.written.Int64)) < entryMinimumResidence {
 			continue
