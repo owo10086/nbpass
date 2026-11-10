@@ -116,6 +116,7 @@ var migrations = []string{
 	managedRecordModelMigration,
 	entryNodeRecordMigration,
 	allPublishMigration,
+	allPublishPolicyMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

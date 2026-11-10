@@ -240,6 +240,11 @@ func (c *entryCoordinator) recordResult(a EntryAction, r EntryActionRecord, stag
 	if stage == EntryWritten {
 		_, err = tx.ExecContext(c.ctx, `UPDATE managed_records SET current_value=CASE WHEN ?='' THEN current_value ELSE ? END,current_ttl=?,current_enabled=? WHERE id=? AND binding_generation=? AND provider=? AND domain=? AND record_id=?`, r.NewValue, r.NewValue, r.NewTTL, r.NewEnabled, r.ManagedRecordID, r.BindingGeneration, r.Provider, r.Domain, r.RecordID)
 	}
+	if err == nil && stage == EntryWritten && r.preserveEnabled {
+		// 同步按执行时读回的实际状态改地址；成员期望也须采用这个状态，
+		// 避免审计把保留的暂停误当偏差重新启用。迟到旧动作不得覆盖新期望。
+		_, err = tx.ExecContext(c.ctx, `UPDATE entry_member_publications SET reason=CASE WHEN expected_enabled<>? THEN CASE WHEN ? THEN '已发布' ELSE '暂停待加回' END ELSE reason END,expected_enabled=? WHERE group_id=? AND node_id=(SELECT node_id FROM managed_records WHERE id=? AND binding_generation=? AND owner_kind='member') AND EXISTS(SELECT 1 FROM entry_publications s WHERE s.group_id=entry_member_publications.group_id AND s.desired_version=? AND s.current_action_id=?)`, r.NewEnabled, r.NewEnabled, r.NewEnabled, a.GroupID, r.ManagedRecordID, r.BindingGeneration, a.Version, a.ID)
+	}
 	if err != nil {
 		return err
 	}
