@@ -3,14 +3,20 @@ package clusterharness_test
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"nbpass/internal/clusterharness"
+	"nbpass/internal/compatibility"
 	"nbpass/internal/node"
 )
 
@@ -336,6 +342,67 @@ func TestEnrollmentOnlyPersistsCredentialsAndCanReplaceResetToken(t *testing.T) 
 	awaitEnrollment(t, reinstalled, false)
 	h.CloneNode(reinstalled, "")
 	awaitNode(t, c, id, connected)
+}
+
+// 同一台机器换成另一个节点身份重装：旧身份的配置缓存不能卡住新节点，旧事件也不能记到新节点名下。
+// 已按旧版本装成“新凭据 + 旧缓存”的机器，重置 token 重跑安装后也必须恢复。
+func TestReinstallAsAnotherNodeDiscardsPreviousIdentityState(t *testing.T) {
+	h, c := nodeBrowser(t)
+	ctx := context.Background()
+	store := node.FileStore{Dir: filepath.Join(t.TempDir(), "node"), Random: rand.Reader}
+	useStore := func(_ *node.Config, deps *node.Dependencies) { deps.Store = store }
+	enroll := func(ticket string) {
+		t.Helper()
+		awaitEnrollment(t, h.StartNode(ticket, useStore, func(config *node.Config, _ *node.Dependencies) { config.EnrollOnly = true }), false)
+	}
+	leaveOldIdentityState := func(id string) {
+		t.Helper()
+		cache, _ := json.Marshal(map[string]any{"version": compatibility.StateCurrent, "node_id": id, "control_url": h.Control.URL, "state": map[string]any{}})
+		if err := store.SaveConfig(ctx, cache); err != nil {
+			t.Fatal(err)
+		}
+		queue, err := node.OpenEventQueue(ctx, store, h.Clock, rand.Reader, node.EventLimits{})
+		if err == nil {
+			err = queue.Record(ctx, "sync_failed", "旧身份遗留事件", 0)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := addNode(c, "旧身份")
+	oldID := first["id"].(string)
+	enroll(first["installation_ticket"].(string))
+	old := h.StartNode("", useStore)
+	awaitNode(t, c, oldID, connected)
+	old.Stop()
+	leaveOldIdentityState(oldID)
+
+	second := addNode(c, "新身份")
+	newID := second["id"].(string)
+	enroll(second["installation_ticket"].(string))
+	running := h.StartNode("", useStore)
+	awaitNode(t, c, newID, connected)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		events := fmt.Sprint(c.Do("GET", "/api/events?node_id="+newID, nil, 200)["events"])
+		if strings.Contains(events, "旧身份遗留事件") {
+			t.Fatalf("旧身份事件记到新节点: %s", events)
+		}
+		if strings.Contains(events, "节点进程启动") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("新节点启动事件未上报: %s", events)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	running.Stop()
+
+	leaveOldIdentityState(oldID)
+	reset := c.Do("POST", "/api/nodes/"+newID+"/token/reset", nil, 200)
+	enroll(reset["installation_ticket"].(string))
+	h.StartNode("", useStore)
+	awaitNode(t, c, newID, connected)
 }
 
 type failedNodeStore struct{}

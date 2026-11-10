@@ -82,10 +82,10 @@ sudo sh scripts/install-panel.sh -binary ./bin/nbpass-linux-amd64 -public-origin
 
 1. 配置反向代理：网页域名转发到 `:8080`，控制域名用 `grpc_pass` 转发到 `:8081`。完整 Nginx 配置见 [部署文档第 2 节](./docs/deploy-linux.md)。
 2. 访问 `https://panel.example.com`，首次设置管理员密码（12–72 字节）并登录。
-3. 在网页中添加节点，复制面板生成的安装命令，到 Linux amd64 节点上执行。命令形式如下：
+3. 在网页中添加节点，复制面板生成的安装命令，以 root 身份到 Linux amd64 节点上执行（非 root 用户先执行 `sudo -i`）。命令形式如下：
 
 ```sh
-curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL 'https://panel.example.com/install-node.sh' | sudo sh -s -- -control-url 'https://control.example.com' -ticket '网页生成的43字符一次性票据'
+curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL 'https://panel.example.com/install-node.sh' | sh -s -- -control-url 'https://control.example.com' -ticket '网页生成的43字符一次性票据'
 ```
 
 4. 确认节点服务已运行。之后节点会在面板中显示为在线，即可创建转发规则：

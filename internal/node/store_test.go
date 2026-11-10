@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -63,5 +64,56 @@ func TestFileStoreEncryptsCredentialsAndRejectsUnsafeFiles(t *testing.T) {
 	}
 	if err := reopened.Save(ctx, value); err == nil {
 		t.Fatal("覆盖了符号链接")
+	}
+}
+
+// 同一身份重装须保留全部缓存；换节点、换控制地址或凭据缺失时只清身份状态，不动密钥与凭据。
+func TestEnrollmentClearsOnlyForeignIdentityState(t *testing.T) {
+	ctx := context.Background()
+	current := Credentials{ControlURL: "https://control.example", NodeID: "node-a", Token: "a"}
+	identityFiles := []string{"config.enc", "events.enc", "rotation.enc", "self-check.enc", "traffic.enc"}
+	prepare := func(t *testing.T, cacheOwner Credentials) FileStore {
+		store := FileStore{Dir: filepath.Join(t.TempDir(), "node"), Random: rand.Reader}
+		if err := store.Save(ctx, current); err != nil {
+			t.Fatal(err)
+		}
+		cache, _ := json.Marshal(configCache{Version: 1, NodeID: cacheOwner.NodeID, ControlURL: cacheOwner.ControlURL})
+		if err := store.SaveConfig(ctx, cache); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range identityFiles[1:] {
+			if err := os.WriteFile(filepath.Join(store.Dir, name), []byte("x"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return store
+	}
+	for _, c := range []struct {
+		name        string
+		hasPrevious bool
+		cacheOwner  Credentials
+		next        Credentials
+		cleared     bool
+	}{
+		{"同一身份重置 token", true, current, Credentials{ControlURL: current.ControlURL, NodeID: "node-a", Token: "b"}, false},
+		{"换节点", true, current, Credentials{ControlURL: current.ControlURL, NodeID: "node-b", Token: "b"}, true},
+		{"换控制地址", true, current, Credentials{ControlURL: "https://control-2.example", NodeID: "node-a", Token: "b"}, true},
+		{"凭据缺失", false, current, Credentials{ControlURL: current.ControlURL, NodeID: "node-a", Token: "b"}, true},
+		{"凭据已是新身份但缓存属旧身份", true, Credentials{ControlURL: current.ControlURL, NodeID: "node-old"}, Credentials{ControlURL: current.ControlURL, NodeID: "node-a", Token: "b"}, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			store := prepare(t, c.cacheOwner)
+			if err := clearForeignState(ctx, Dependencies{Store: store}, c.hasPrevious, current, c.next); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range identityFiles {
+				if _, err := os.Stat(filepath.Join(store.Dir, name)); os.IsNotExist(err) != c.cleared {
+					t.Fatalf("%s 清理结果应为 %v: %v", name, c.cleared, err)
+				}
+			}
+			if loaded, err := store.Load(ctx); err != nil || loaded != current {
+				t.Fatalf("凭据或本机密钥被清理: %v %v", loaded, err)
+			}
+		})
 	}
 }

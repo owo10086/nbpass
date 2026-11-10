@@ -14,7 +14,7 @@ const metrics = [
   ['uptime_seconds', '节点进程运行时长', 's'],
 ] as const;
 
-function format(value: number | null | undefined, unit: string) {
+export function format(value: number | null | undefined, unit: string) {
   if (value == null) return '—';
   if (unit === 'B' || unit === 'B/s') {
     const index = Math.min(4, Math.max(0, Math.floor(Math.log2(Math.max(1, value)) / 10)));

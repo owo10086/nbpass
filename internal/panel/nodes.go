@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"nbpass/internal/probe"
 )
 
 func (p *Panel) randomCredential() (string, []byte, error) {
@@ -24,7 +26,7 @@ func (p *Panel) randomCredential() (string, []byte, error) {
 func (p *Panel) installation(id, ticket string, expires time.Time) map[string]any {
 	return map[string]any{
 		"id": id, "installation_ticket": ticket, "ticket_expires_at": expires.UTC().Format(time.RFC3339),
-		"installation_command": "curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL " + shellQuote(p.config.PublicOrigin+"/install-node.sh") + " | sudo sh -s -- -control-url " + shellQuote(p.config.ControlURL) + " -ticket " + shellQuote(ticket),
+		"installation_command": "curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL " + shellQuote(p.config.PublicOrigin+"/install-node.sh") + " | sh -s -- -control-url " + shellQuote(p.config.ControlURL) + " -ticket " + shellQuote(ticket),
 	}
 }
 
@@ -75,21 +77,22 @@ func (p *Panel) addNode(w http.ResponseWriter, r *http.Request) {
 type nodeView struct {
 	nodeUpgradeView
 	nodeRegionView
-	ID               string     `json:"id"`
-	Name             string     `json:"name"`
-	Status           string     `json:"status"`
-	StatusLabel      string     `json:"status_label"`
-	Connected        bool       `json:"connected"`
-	LastSeenAt       *time.Time `json:"last_seen_at"`
-	MaintenanceUntil *time.Time `json:"maintenance_until"`
-	DesiredRevision  int64      `json:"desired_revision"`
-	AppliedRevision  int64      `json:"applied_revision"`
-	ConfigStatus     string     `json:"config_status"`
-	ApplyError       string     `json:"apply_error"`
-	AppliedDigest    string     `json:"applied_digest"`
-	DesiredDigest    string     `json:"desired_digest"`
-	SoftwareVersion  string     `json:"software_version"`
-	ProcessInstance  string     `json:"process_instance"`
+	ID               string       `json:"id"`
+	Name             string       `json:"name"`
+	Status           string       `json:"status"`
+	StatusLabel      string       `json:"status_label"`
+	Connected        bool         `json:"connected"`
+	LastSeenAt       *time.Time   `json:"last_seen_at"`
+	MaintenanceUntil *time.Time   `json:"maintenance_until"`
+	DesiredRevision  int64        `json:"desired_revision"`
+	AppliedRevision  int64        `json:"applied_revision"`
+	ConfigStatus     string       `json:"config_status"`
+	ApplyError       string       `json:"apply_error"`
+	AppliedDigest    string       `json:"applied_digest"`
+	DesiredDigest    string       `json:"desired_digest"`
+	SoftwareVersion  string       `json:"software_version"`
+	ProcessInstance  string       `json:"process_instance"`
+	Probe            probe.Values `json:"probe"`
 }
 
 func nullableTime(value sql.NullInt64) *time.Time {
@@ -150,6 +153,17 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows.Close()
+	snapshots, err := p.probeSnapshots(r.Context())
+	if err != nil {
+		problem(w, 503, "探针存储暂不可用")
+		return
+	}
+	for i := range nodes {
+		n := &nodes[i]
+		if s, ok := snapshots[n.ID]; ok && probeFresh(p.liveSession(n.ID), n.ProcessInstance, s.instance, n.LastSeenAt, s.received, now) {
+			n.Probe = s.values
+		}
+	}
 	for i := range nodes {
 		view, err := p.upgradeView(r.Context(), nodes[i].ID, nodes[i].SoftwareVersion)
 		if err != nil {

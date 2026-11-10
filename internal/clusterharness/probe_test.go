@@ -181,6 +181,32 @@ func TestProbeMinuteAverageMaximumMissingFieldsAndPersistence(t *testing.T) {
 	}
 }
 
+// 若节点列表不带探针实时值、缺测被补零或把旧样本标实时时失败。
+func TestNodeListCarriesProbeSummary(t *testing.T) {
+	h, c := nodeBrowser(t)
+	created := addNode(c, "入口 B")
+	id := created["id"].(string)
+	if row := nodeRow(t, c, id); row["probe"] != nil {
+		t.Fatalf("待接入节点不应有探针实时值: %v", row["probe"])
+	}
+	f := &probeFixture{values: probe.Values{"cpu_percent": 20, "memory_used_bytes": 200, "memory_total_bytes": 1000, "disk_used_bytes": 400}, business: 3, tunnel: 1}
+	n := startProbeNode(h, created["installation_ticket"].(string), f)
+	awaitUptime(t, c, id, 0)
+	rt := nodeRow(t, c, id)["probe"].(map[string]any)
+	if rt["cpu_percent"] != float64(20) || rt["memory_total_bytes"] != float64(1000) || rt["business_connections"] != float64(3) || rt["uptime_seconds"] != float64(0) || rt["disk_used_bytes"] != float64(400) || rt["disk_total_bytes"] != nil {
+		t.Fatalf("列表实时值错误: %v", rt)
+	}
+	n.Stop()
+	if err := h.Restart(); err != nil {
+		t.Fatal(err)
+	}
+	c = h.Client()
+	login(c)
+	if row := nodeRow(t, c, id); row["probe"] != nil {
+		t.Fatalf("重启后旧样本不可标实时: %v", row["probe"])
+	}
+}
+
 // 若离线被补零、重连补报历史探针、重连重置进程运行时长或节点重启不重置时失败。
 func TestProbeOfflineGapsRecoveryProcessUptimeAndTwentyFourHourWindow(t *testing.T) {
 	h, c := nodeBrowser(t)

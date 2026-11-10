@@ -3,7 +3,7 @@ set -eu
 umask 077
 
 [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || { echo '仅支持 Linux amd64' >&2; exit 1; }
-[ "$(id -u)" = 0 ] || { echo '请以 root 运行安装命令' >&2; exit 1; }
+[ "$(id -u)" = 0 ] || { echo '请以 root 运行安装命令（非 root 用户先执行 sudo -i）' >&2; exit 1; }
 command -v systemctl >/dev/null
 command -v curl >/dev/null
 command -v useradd >/dev/null

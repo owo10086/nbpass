@@ -149,6 +149,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 	defer client.Close()
 	service := controlpb.NewControlServiceClient(client)
 	credential, err := deps.Store.Load(ctx)
+	previous, hasPrevious := credential, err == nil
 	if err == nil && config.EnrollOnly && config.InstallationTicket != "" {
 		err = os.ErrNotExist
 	}
@@ -163,6 +164,10 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 			return errors.New("安装票据兑换失败，请检查票据有效性与控制地址证书")
 		}
 		credential = Credentials{ControlURL: config.ControlURL, NodeID: response.NodeId, Token: response.Token}
+		// 先清旧身份状态再落盘凭据：中途失败时凭据仍是旧身份，重置 token 重跑会再次清理。
+		if err := clearForeignState(ctx, deps, hasPrevious, previous, credential); err != nil {
+			return errors.New("无法清理旧节点身份的本地缓存，请在面板重置 token 后重新接入")
+		}
 		if err := deps.Store.Save(ctx, credential); err != nil {
 			return errors.New("节点凭据持久化失败，请在面板重置 token 后重新接入")
 		}

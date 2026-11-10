@@ -43,6 +43,34 @@ func openConfigCache(ctx context.Context, credential Credentials, deps *Dependen
 	return engine.Restore(cache.State)
 }
 
+// 换节点或换控制地址重装时，旧身份的配置、事件、流量、换 IP 与自测缓存不能带入新身份。
+// 同一身份重置 token 重装全部保留；凭据缺失时无法证明缓存归属，一并清理。
+// 已是“新凭据 + 旧配置缓存”的机器按缓存身份判断，重跑安装即可恢复。
+func clearForeignState(ctx context.Context, deps Dependencies, hasPrevious bool, previous, next Credentials) error {
+	store, ok := deps.Store.(NodeStateStore)
+	if !ok {
+		return nil
+	}
+	foreign := !hasPrevious || previous.NodeID != next.NodeID || previous.ControlURL != next.ControlURL
+	configs := deps.ConfigStore
+	if configs == nil {
+		configs, _ = deps.Store.(ConfigStore)
+	}
+	if !foreign && configs != nil {
+		// 读不出或格式不符的缓存留给启动校验报错，不在这里当作他人身份删除。
+		if data, err := configs.LoadConfig(ctx); err == nil {
+			var cache configCache
+			if json.Unmarshal(data, &cache) == nil {
+				foreign = cache.NodeID != next.NodeID || cache.ControlURL != next.ControlURL
+			}
+		}
+	}
+	if !foreign {
+		return nil
+	}
+	return store.ClearNodeState(ctx)
+}
+
 func (s FileStore) LoadConfig(ctx context.Context) ([]byte, error) {
 	path := filepath.Join(s.Dir, "config.enc")
 	if err := safeCredential(path); err != nil {

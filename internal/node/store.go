@@ -44,6 +44,31 @@ func (s FileStore) aead(ctx context.Context) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
+// NodeStateStore 清除绑定节点身份的本地状态；node.key 与凭据不在其中。
+type NodeStateStore interface {
+	ClearNodeState(context.Context) error
+}
+
+func (s FileStore) ClearNodeState(ctx context.Context) error {
+	for _, name := range []string{"config.enc", "events.enc", "rotation.enc", "self-check.enc", "traffic.enc"} {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := os.Remove(filepath.Join(s.Dir, name)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	directory, err := os.Open(s.Dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
+}
+
 func safeCredential(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {

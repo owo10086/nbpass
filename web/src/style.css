@@ -192,3 +192,19 @@ body .ant-descriptions .ant-descriptions-item-content { font-variant-numeric: ta
 .switch-list li + li { border-top: 1px solid var(--line); }
 .switch-list time { color: var(--text-3); font-size: 12.5px; }
 .switch-list .mono { overflow-wrap: anywhere; }
+
+/* 节点列表：实时资源，进度条颜色与 komari 一致（60% 橙，80% 红） */
+.usage { display: inline-flex; align-items: center; gap: 8px; }
+.usage-track { width: 56px; height: 6px; border-radius: 3px; background: var(--bg-hover); overflow: hidden; flex: none; }
+.usage-fill { display: block; height: 100%; border-radius: inherit; transition: width .3s ease, background-color .3s ease; }
+.usage-fill.ok { background: var(--ok); }
+.usage-fill.warn { background: var(--warn); }
+.usage-fill.danger { background: var(--danger); }
+.usage-value { min-width: 42px; }
+.metric-line { display: block; white-space: nowrap; }
+.metric-cell { display: inline-block; vertical-align: middle; cursor: default; border-radius: 4px; }
+.metric-tip { margin: 0; display: grid; gap: 4px; font-size: 12.5px; }
+.metric-tip > div { display: flex; justify-content: space-between; gap: 16px; }
+.metric-tip dt { color: rgb(255 255 255 / 65%); }
+.metric-tip dd { margin: 0; white-space: nowrap; }
+@media (prefers-reduced-motion: reduce) { .usage-fill { transition: none; } }

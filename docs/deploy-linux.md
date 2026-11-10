@@ -109,17 +109,17 @@ openssl s_client -connect control.example.com:443 -servername control.example.co
 
 ## 3. 安装节点与独立更新服务
 
-在网页添加节点，复制面板生成的完整命令，到 Linux amd64 节点执行。命令形式为：
+在网页添加节点，复制面板生成的完整命令，以 root 身份到 Linux amd64 节点执行（非 root 用户先执行 `sudo -i`）。命令形式为：
 
 ```sh
-curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL 'https://panel.example.com/install-node.sh' | sudo sh -s -- -control-url 'https://control.example.com' -ticket '网页生成的43字符一次性票据'
+curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL 'https://panel.example.com/install-node.sh' | sh -s -- -control-url 'https://control.example.com' -ticket '网页生成的43字符一次性票据'
 ```
 
 票据只有 30 分钟有效且只能兑换一次；命令不含长期 token。脚本下载面板内嵌节点，通过经过 TLS 验证的 gRPC 兑换并加密保存凭据，之后才替换程序、注册 unit。下载或兑换失败时不覆盖原有程序和 unit。兑换后若本地写入失败，应在面板重置 token 领取新票据，不能反复重用已消费票据。
 
 脚本同时安装 `nbpass-node.service` 和独立的 `nbpass-update.service`，并启用开机启动。节点以 `nbpass-node` 用户运行，仅保留低端口监听能力；更新器以 root 运行，通过固定 Unix socket 接受清单，并从**网页源**获取更新文件。节点机必须同时能访问网页源、控制源和需要的目标/检测站点。新装或重新安装会中断已有业务连接。
 
-重跑需在网页重置 token 获取新命令，原 node.key、实际配置缓存、事件/流量/换 IP 日志与更新进度保留；仅凭据会重新兑换。原票据重跑会失败，服务普通重启无需票据。脚本重写两个基础 unit，自定义参数或 CA 应放在 `systemctl edit` 的 drop-in 中，重跑会保留 drop-in；不要在基础 unit 中保留手工改动。
+重跑需在网页重置 token 获取新命令，原 node.key、实际配置缓存、事件/流量/换 IP 日志与更新进度保留；仅凭据会重新兑换。若换成另一个节点身份重装（同一台机器在面板新建节点后安装，或改了控制地址），兑换时会清除旧身份的配置缓存、事件、流量、换 IP 与自测记录，保留 node.key；旧身份未上报的记录不会转到新节点名下。原票据重跑会失败，服务普通重启无需票据。脚本重写两个基础 unit，自定义参数或 CA 应放在 `systemctl edit` 的 drop-in 中，重跑会保留 drop-in；不要在基础 unit 中保留手工改动。
 
 ```sh
 sudo systemctl is-active nbpass-node.service nbpass-update.service

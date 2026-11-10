@@ -10,11 +10,13 @@ import { NodeRotation } from './NodeRotation';
 import { NodeSelfCheck, SelfCheckSettings } from './NodeSelfCheck';
 import { useFocusRow } from './route';
 import { PageHeader } from './PageHeader';
+import { ConnectionsCell, CpuCell, MemoryCell, memoryPercent, NetworkCell, networkRate, uptime, type NodeProbe } from './NodeMetrics';
 
 type NodeRow = NodeRegionFields & NodeUpgradeFields & {
   id: string; name: string; status: string; status_label: string; connected: boolean;
   last_seen_at: string | null; maintenance_until: string | null;
   desired_revision: number; applied_revision: number; config_status: string; software_version: string; apply_error: string;
+  probe: NodeProbe;
 };
 type Installation = { id: string; installation_command: string; ticket_expires_at: string };
 type Filter = 'all' | 'online' | 'offline' | 'maintenance' | 'pending';
@@ -29,6 +31,15 @@ function tone(row: NodeRow) {
   if (row.status === 'offline') return 'danger';
   if (row.status === 'maintenance') return 'warn';
   return '';
+}
+
+// 没有实时值的节点无论升序降序都排在最后；antd 降序时会把比较结果取反。
+function byMetric(value: (row: NodeRow) => number | null | undefined) {
+  return (a: NodeRow, b: NodeRow, order?: string | null) => {
+    const x = value(a), y = value(b);
+    if (x == null || y == null) return x == null && y == null ? 0 : (x == null) === (order === 'ascend') ? 1 : -1;
+    return x - y;
+  };
 }
 
 function ago(value: string) {
@@ -114,11 +125,13 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
 
   const counts = Object.fromEntries(filters.map(f => [f.value, f.value === 'all' ? rows.length : rows.filter(row => row.status === f.value).length]));
   const needle = query.trim().toLowerCase();
-  const visible = rows.filter(row => (filter === 'all' || row.status === filter) && (!needle || row.name.toLowerCase().includes(needle) || row.public_ipv4.includes(needle)));
+  // 默认保持添加顺序，离线节点排到最后。
+  const visible = rows.filter(row => (filter === 'all' || row.status === filter) && (!needle || row.name.toLowerCase().includes(needle) || row.public_ipv4.includes(needle)))
+    .sort((a, b) => Number(a.status === 'offline') - Number(b.status === 'offline'));
   const validationNode = rows.find(row => row.id === validation?.id);
 
   return <>
-    <PageHeader title="节点" description="控制连接、最近活性与配置版本。每 10 秒刷新。">
+    <PageHeader title="节点" description="控制连接、实时资源与配置版本。每 10 秒刷新。">
       <Button icon={<SettingOutlined />} onClick={() => setSelfCheckSettings(true)}>自测设置</Button>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => setAdding(true)}>添加节点</Button>
     </PageHeader>
@@ -130,17 +143,21 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
       <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
     </div>
     <div className="panel">
-      <Table<NodeRow> rowKey="id" dataSource={visible} loading={!loaded && !error} rowClassName={row => rowClassName(row.id)} pagination={visible.length > 50 ? { pageSize: 50, showSizeChanger: false } : false} scroll={{ x: 1120 }}
+      <Table<NodeRow> rowKey="id" dataSource={visible} loading={!loaded && !error} rowClassName={row => rowClassName(row.id)} pagination={visible.length > 50 ? { pageSize: 50, showSizeChanger: false } : false} scroll={{ x: 1590 }}
         locale={{ emptyText: rows.length ? '没有符合条件的节点' : '暂无节点。添加节点后，把安装命令复制到服务器执行。' }} columns={[
           { title: '节点', key: 'name', fixed: 'left', width: 190, render: (_, row) => <>
             <span className="status"><span className={`dot ${tone(row)}`} /><span className="node-name">{row.name}</span></span>
-            <span className="cell-sub mono">{row.software_version || '尚未接入'}</span>
+            <span className="cell-sub">{row.probe?.uptime_seconds != null ? <>运行 <span className="num">{uptime(row.probe.uptime_seconds)}</span></> : row.software_version ? '—' : '尚未接入'}</span>
           </> },
           { title: '状态', key: 'status', width: 120, render: (_, row) => <>
             {row.status_label}
             {row.status === 'online' && !row.connected && <span className="cell-danger">控制连接已中断</span>}
             {row.status === 'maintenance' && row.maintenance_until && <span className="cell-sub">至 <span className="num">{new Date(row.maintenance_until).toLocaleTimeString()}</span></span>}
           </> },
+          { title: 'CPU', key: 'cpu', width: 130, sortDirections: ['descend', 'ascend'], sorter: byMetric(row => row.probe?.cpu_percent), render: (_, row) => <CpuCell probe={row.probe} /> },
+          { title: '内存', key: 'memory', width: 130, sortDirections: ['descend', 'ascend'], sorter: byMetric(row => memoryPercent(row.probe)), render: (_, row) => <MemoryCell probe={row.probe} /> },
+          { title: '网络', key: 'network', width: 130, sortDirections: ['descend', 'ascend'], sorter: byMetric(row => networkRate(row.probe)), render: (_, row) => <NetworkCell probe={row.probe} /> },
+          { title: '连接', key: 'connections', width: 80, sortDirections: ['descend', 'ascend'], sorter: byMetric(row => row.probe?.business_connections), render: (_, row) => <ConnectionsCell probe={row.probe} /> },
           { title: '地区 / IP', key: 'region', width: 170, render: (_, row) => <>
             {row.region.name}{row.region_source === 'manual' && <span className="muted">（人工）</span>}
             <span className="cell-sub mono">{row.public_ipv4 || '尚未查询到 IP'}</span>
@@ -152,7 +169,10 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
             <span className="cell-sub mono">已应用 {row.applied_revision} / 期望 {row.desired_revision}</span>
             {row.apply_error && <span className="cell-danger">{row.apply_error}</span>}
           </> },
-          { title: '版本', key: 'upgrade', width: 170, render: (_, row) => <NodeUpgrade node={row} onSaved={load} onError={failed} /> },
+          { title: '版本', key: 'upgrade', width: 170, render: (_, row) => <>
+            {row.software_version && <div className="mono">{row.software_version}</div>}
+            <NodeUpgrade node={row} onSaved={load} onError={failed} />
+          </> },
           { title: '', key: 'actions', fixed: 'right', width: 130, render: (_, row) => <div className="row-actions">
             <Button size="small" type="text" onClick={() => setProbeNode(row.id)}>探针</Button>
             <Button size="small" type="text" onClick={() => setSelfCheckNode(row.id)}>自测</Button>
@@ -184,7 +204,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
       </Form>
     </Modal>
     <Modal title="安装节点" open={!!installation} onCancel={() => setInstallation(undefined)} footer={<Button type="primary" onClick={() => setInstallation(undefined)}>完成</Button>} width={760} destroyOnHidden>
-      <Typography.Paragraph>在 Linux amd64 服务器执行以下命令，安装后回到列表确认在线状态。</Typography.Paragraph>
+      <Typography.Paragraph>以 root 身份在 Linux amd64 服务器执行以下命令（非 root 用户先执行 <code>sudo -i</code>），安装后回到列表确认在线状态。</Typography.Paragraph>
       <Alert type="info" showIcon title="安装票据只能使用一次，30 分钟后失效。" description={installation ? `有效至 ${new Date(installation.ticket_expires_at).toLocaleString()}` : ''} />
       <Typography.Paragraph className="installation-command" copyable={{ text: installation?.installation_command }}><code>{installation?.installation_command}</code></Typography.Paragraph>
     </Modal>

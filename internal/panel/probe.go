@@ -85,6 +85,57 @@ func (p *Panel) storeProbe(ctx context.Context, id, instance string, sample *con
 	return tx.Commit()
 }
 
+// 实时值只在当前进程实例仍保持控制连接、且最近一次采样未过期时可信。
+func probeFresh(connected bool, instance, sampledInstance string, lastSeen *time.Time, sampledAt, now time.Time) bool {
+	return connected && sampledInstance == instance && lastSeen != nil && now.Sub(*lastSeen) < 90*time.Second && now.Sub(sampledAt) < 2*probe.IntervalSeconds*time.Second
+}
+
+// 调用方已持有 controlMu。
+func (p *Panel) liveSession(id string) bool {
+	session := p.controls[id]
+	if session == nil {
+		return false
+	}
+	select {
+	case <-session.done:
+		return false
+	default:
+		return true
+	}
+}
+
+// 节点列表的实时值（含悬停明细）；入库前已清洗，缺失的指标直接省略。
+type probeSnapshot struct {
+	instance string
+	received time.Time
+	values   probe.Values
+}
+
+// 调用方已持有 controlMu。
+func (p *Panel) probeSnapshots(ctx context.Context) (map[string]probeSnapshot, error) {
+	snapshots := map[string]probeSnapshot{}
+	rows, err := p.db.QueryContext(ctx, "SELECT node_id, process_instance, received_at, values_json FROM probe_realtime")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var s probeSnapshot
+		var received int64
+		var raw []byte
+		if err := rows.Scan(&id, &s.instance, &received, &raw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &s.values); err != nil {
+			return nil, err
+		}
+		s.received = time.Unix(0, received).UTC()
+		snapshots[id] = s
+	}
+	return snapshots, rows.Err()
+}
+
 type probeMinute struct {
 	Minute  time.Time           `json:"minute"`
 	Samples int                 `json:"samples"`
@@ -96,7 +147,7 @@ type probeMinute struct {
 func (p *Panel) getProbe(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	p.controlMu.Lock()
-	session := p.controls[id]
+	connected := p.liveSession(id)
 	var instance string
 	var last sql.NullInt64
 	err := p.db.QueryRowContext(r.Context(), "SELECT process_instance, last_seen_at FROM nodes WHERE id = ?", id).Scan(&instance, &last)
@@ -171,15 +222,7 @@ func (p *Panel) getProbe(w http.ResponseWriter, r *http.Request) {
 	if probeErr == nil {
 		t := time.Unix(0, received).UTC()
 		sampledAt = &t
-		connected := session != nil
-		if connected {
-			select {
-			case <-session.done:
-				connected = false
-			default:
-			}
-		}
-		fresh = connected && sampledInstance == instance && last.Valid && now.Sub(time.Unix(0, last.Int64)) < 90*time.Second && now.Sub(t) < 2*probe.IntervalSeconds*time.Second
+		fresh = probeFresh(connected, instance, sampledInstance, nullableTime(last), t, now)
 		if fresh {
 			values := probe.Values{}
 			if err = json.Unmarshal(raw, &values); err != nil {
