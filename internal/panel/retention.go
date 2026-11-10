@@ -19,6 +19,7 @@ func (p *Panel) cleanHistoryBatch(ctx context.Context) (bool, error) {
  SELECT sequence FROM events
  WHERE occurred_at < ? - (SELECT event_days FROM retention_settings WHERE id=1) * ?
  ORDER BY occurred_at LIMIT ?)`, []any{now.UnixNano(), int64(24 * time.Hour), retentionBatchSize}},
+		{`DELETE FROM operation_incidents WHERE sequence IN (SELECT sequence FROM operation_incidents WHERE ended_at IS NOT NULL AND ended_at < ? - (SELECT event_days FROM retention_settings WHERE id=1) * ? ORDER BY ended_at LIMIT ?)`, []any{now.UnixNano(), int64(24 * time.Hour), retentionBatchSize}},
 		{`DELETE FROM probe_minutes WHERE rowid IN (
  SELECT rowid FROM probe_minutes
  WHERE minute < ? - (SELECT probe_hours FROM retention_settings WHERE id=1) * 3600

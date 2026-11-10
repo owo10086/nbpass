@@ -1,124 +1,53 @@
-import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Skeleton } from 'antd';
-import { CheckCircleOutlined, RightOutlined } from '@ant-design/icons';
-import { api, APIError } from './api';
-import { eventLabels } from './Events';
-import type { EntryMemberState } from './EntryReadiness';
-import { go, type Page } from './route';
+import { Alert, Button, Empty, Skeleton, Space, Table, Tag } from 'antd';
+import { go } from './route';
+import { handlingLabels, impactLabels, type Incident } from './Incidents';
 import { PageHeader } from './PageHeader';
+import { operationLabels, type OperationRule, type OperationsState } from './Operations';
 
-export type OverviewNode = {
-  id: string; name: string; status: string; status_label: string; connected: boolean;
-  last_seen_at: string | null; maintenance_until: string | null; apply_error: string;
-  version_mismatch: boolean; panel_version: string; upgrade?: { state: string; error?: string; manifest: { version: string } };
-};
-export type OverviewEntryGroup = { id: string; name: string; member_states: EntryMemberState[] | null };
-type Rule = { id: string; enabled: boolean };
-type EventRow = { sequence: number; node_id: string; node_name: string; type: string; occurred_at: string; message: string };
-
-export type Tone = 'danger' | 'warn' | 'muted';
-export type Attention = { key: string; tone: Tone; title: string; subject: string; detail: string[]; page: Page; focus?: string };
-
-const time = (value: string) => new Date(value).toLocaleString();
-
-// 只整理 API 已经给出的状态与原因，不在前端推算新的判定。
-export function collectAttention(nodes: OverviewNode[], groups: OverviewEntryGroup[]): Attention[] {
-  const items: Attention[] = [];
-  for (const node of nodes) {
-    const at = { subject: node.name, page: 'nodes' as const, focus: node.id };
-    if (node.status === 'offline') items.push({ ...at, key: `offline:${node.id}`, tone: 'danger', title: node.status_label, detail: [node.last_seen_at ? `最近活性 ${time(node.last_seen_at)}` : '从未上报活性'] });
-    if (node.status === 'online' && !node.connected) items.push({ ...at, key: `link:${node.id}`, tone: 'danger', title: '控制连接已中断', detail: node.last_seen_at ? [`最近活性 ${time(node.last_seen_at)}`] : [] });
-    if (node.apply_error) items.push({ ...at, key: `apply:${node.id}`, tone: 'danger', title: '配置应用失败', detail: [node.apply_error] });
-    if (node.upgrade && (node.upgrade.state === 'failed' || node.upgrade.state === 'rolled_back')) items.push({ ...at, key: `upgrade:${node.id}`, tone: 'warn', title: node.upgrade.state === 'failed' ? `升级至 ${node.upgrade.manifest.version} 失败` : `升级至 ${node.upgrade.manifest.version} 已回滚`, detail: node.upgrade.error ? [node.upgrade.error] : [] });
-    else if (node.version_mismatch) items.push({ ...at, key: `version:${node.id}`, tone: 'warn', title: `与面板 ${node.panel_version} 版本不一致`, detail: [] });
-    if (node.status === 'maintenance') items.push({ ...at, key: `maintenance:${node.id}`, tone: 'muted', title: node.status_label, detail: node.maintenance_until ? [`至 ${time(node.maintenance_until)}`] : [] });
-  }
-  // 待接入通常是批量添加后尚未安装，合并成一条，避免挤占真正的异常。
-  const pending = nodes.filter(node => node.status === 'pending');
-  if (pending.length) items.push({ key: 'pending', tone: 'muted', title: `${pending.length} 个节点待接入`, subject: pending.map(node => node.name).join('、'), detail: ['复制安装命令到服务器执行后上线'], page: 'nodes', focus: pending.length === 1 ? pending[0].id : undefined });
-  for (const group of groups) {
-    const waiting = (group.member_states ?? []).filter(member => member.readiness_status === 'not_ready');
-    if (!waiting.length) continue;
-    items.push({
-      key: `entry:${group.id}`, tone: 'warn', title: `${waiting.length} 个成员未就绪`, subject: `入口组 ${group.name}`, page: 'entry-groups', focus: group.id,
-      detail: waiting.flatMap(member => member.readiness_reasons.slice(0, 2).map(reason => `${member.node_name}：${reason.message}`)),
-    });
-  }
-  const order: Record<Tone, number> = { danger: 0, warn: 1, muted: 2 };
-  return items.sort((a, b) => order[a.tone] - order[b.tone]);
-}
-
-export function Overview({ onSessionExpired }: { onSessionExpired: () => void }) {
-  const [nodes, setNodes] = useState<OverviewNode[]>();
-  const [groups, setGroups] = useState<OverviewEntryGroup[]>([]);
-  const [rules, setRules] = useState<Rule[]>([]);
-  const [events, setEvents] = useState<EventRow[]>([]);
-  const [updated, setUpdated] = useState<Date>();
-  const [error, setError] = useState('');
-  const expired = useRef(onSessionExpired);
-  expired.current = onSessionExpired;
-
-  async function load() {
-    try {
-      const [n, g, r, e] = await Promise.all([
-        api<{ nodes: OverviewNode[] }>('/nodes'),
-        api<{ entry_groups: OverviewEntryGroup[] }>('/entry-groups'),
-        api<{ rules: Rule[] }>('/rules'),
-        api<{ events: EventRow[] }>('/events?limit=12'),
-      ]);
-      setNodes(n.nodes); setGroups(g.entry_groups); setRules(r.rules); setEvents(e.events); setUpdated(new Date()); setError('');
-    } catch (e) {
-      if (e instanceof APIError && (e.status === 401 || e.status === 428)) expired.current();
-      else setError((e as Error).message);
-    }
-  }
-
-  useEffect(() => {
-    void load();
-    const timer = window.setInterval(() => void load(), 10_000);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  const attention = nodes ? collectAttention(nodes, groups) : [];
-  const urgent = attention.filter(item => item.tone !== 'muted').length;
-  const online = nodes?.filter(node => node.status === 'online').length ?? 0;
-  const readyGroups = groups.filter(group => (group.member_states ?? []).length > 0 && group.member_states!.every(member => member.ready)).length;
-  const enabledRules = rules.filter(rule => rule.enabled).length;
-
+export function Overview({ state }: { state: OperationsState }) {
+  const { data, error } = state;
+  const counts = data?.counts;
+  const name = (id: string) => data?.nodes.find(n => n.id === id)?.name || id || '待确认';
   return <>
-    <PageHeader title="概览" description="哪里异常、自动处理做了什么、结果如何。">
-      <span className="muted">{updated ? <>每 10 秒刷新 · 更新于 <span className="num">{updated.toLocaleTimeString()}</span></> : '正在读取'}</span>
+    <PageHeader title="概览" description="根据当前证据查看规则影响、冗余与自动处理进度。">
+      <span className="muted">每 10 秒刷新 · {data ? `更新于 ${new Date(data.generated_at).toLocaleString()}` : '等待数据'}</span>
     </PageHeader>
-    {error && <Alert title={error} type="error" showIcon className="message" action={<Button size="small" onClick={() => void load()}>重试</Button>} />}
-    <div className="stats">
-      <button type="button" className="stat" onClick={() => go('nodes')}><div className="stat-label"><span className={`dot ${nodes && online === nodes.length && nodes.length ? 'ok' : ''}`} />节点在线</div><div className="stat-value">{nodes ? <>{online}<small>/ {nodes.length}</small></> : '—'}</div></button>
-      <button type="button" className="stat" onClick={() => document.getElementById('attention')?.scrollIntoView({ behavior: 'smooth' })}><div className="stat-label"><span className={`dot ${!nodes ? '' : urgent ? 'danger' : 'ok'}`} />需要处理</div><div className="stat-value">{nodes ? urgent : '—'}</div></button>
-      <button type="button" className="stat" onClick={() => go('entry-groups')}><div className="stat-label">入口组就绪</div><div className="stat-value">{nodes ? <>{readyGroups}<small>/ {groups.length}</small></> : '—'}</div></button>
-      <button type="button" className="stat" onClick={() => go('rules')}><div className="stat-label">转发规则启用</div><div className="stat-value">{nodes ? <>{enabledRules}<small>/ {rules.length}</small></> : '—'}</div></button>
-    </div>
-    <div className="overview-grid">
-      <section className="panel" id="attention">
-        <div className="panel-head"><h2>需要关注</h2><span className="muted num">{attention.length ? `${attention.length} 项` : ''}</span></div>
-        {!nodes ? <div style={{ padding: 16 }}><Skeleton active paragraph={{ rows: 4 }} title={false} /></div>
-          : attention.length === 0 ? <div className="all-clear"><CheckCircleOutlined style={{ color: 'var(--ok)', fontSize: 16 }} />所有节点在线，入口组成员均已就绪。</div>
-          : <ul className="attention">{attention.map(item => <li key={item.key}>
-            <button type="button" className="attention-item" onClick={() => go(item.page, item.focus)}>
-              <span className={`dot ${item.tone}`} />
-              <span><span className="attention-title">{item.title}</span> <span className="attention-subject">· {item.subject}</span>
-                {item.detail.length > 0 && <ul className="attention-detail">{item.detail.map((line, i) => <li key={i}>{line}</li>)}</ul>}</span>
-              <span className="attention-go">{item.page === 'nodes' ? '查看节点' : '查看入口组'} <RightOutlined style={{ fontSize: 10 }} /></span>
-            </button>
-          </li>)}</ul>}
-      </section>
+    {error && <Alert title={`读取失败：${error}`} description="保留上次数据；显示值可能已过期。" type="error" showIcon className="message" />}
+    {data?.incident_error && <Alert title={data.incident_error} description={data.incident_sync ? `最近整理：${new Date(data.incident_sync).toLocaleString()}` : '故障记录尚未完成首次整理'} type="warning" showIcon className="message" />}
+    <div className="stats">{[
+      ['检测到转发异常的规则', counts?.abnormal_rules], ['影响待确认的规则', counts?.unknown_rules],
+      ['冗余下降的入口组', counts?.degraded_groups], ['需要人工介入的故障', counts?.manual_incidents ?? '未采集'],
+    ].map(([label, value]) => <div className="stat" key={label}><div className="stat-label">{label}</div><div className="stat-value">{value ?? '—'}</div></div>)}</div>
+    <p className="muted">节点 {counts?.nodes ?? '—'} · 启用规则 {counts?.enabled_rules ?? '—'} / {counts?.rules ?? '—'}。控制离线不等于业务中断；未发现异常不代表已验证目标业务。</p>
+    {!data ? <Skeleton active /> : <>
+      {[
+        { title: '当前异常与自动处理', rows: data.current_incidents }, { title: '最近结束的故障', rows: data.recent_incidents },
+      ].map(({title, rows}) => <section className="panel" style={{ marginBottom: 20 }} key={title}>
+        <div className="panel-head"><h2>{title}</h2><Button onClick={() => go('incidents')}>全部故障与筛选</Button></div>
+        <Table<Incident> rowKey="id" dataSource={rows} pagination={false} scroll={{ x: 600 }} locale={{ emptyText: data.incident_error ? '整理状态待确认，请稍后刷新' : '当前没有记录' }} columns={[
+          { title: '故障', render: (_, r) => <Button type="link" onClick={() => go('incidents', r.id)}>{r.title}</Button> },
+          { title: '影响 / 处理', render: (_, r) => <>{impactLabels[r.impact]}<span className="cell-sub">{handlingLabels[r.handling]}{r.closure && ` · ${r.closure}`}</span></> },
+          { title: '关联入口组', render: (_, r) => r.refs.filter(ref => ref.kind === 'group').map(ref => ref.name).join('、') || '—' },
+          { title: '最近更新', render: (_, r) => new Date(r.updated_at).toLocaleString() },
+        ]} />
+      </section>)}
       <section className="panel">
-        <div className="panel-head"><h2>最近事件</h2><Button type="link" size="small" onClick={() => go('events')}>全部事件</Button></div>
-        {!nodes ? <div style={{ padding: 16 }}><Skeleton active paragraph={{ rows: 5 }} title={false} /></div>
-          : events.length === 0 ? <div className="all-clear">暂无事件。节点上线、被墙判定、换 IP 等动作会记录在这里。</div>
-          : <ul className="events-list">{events.map(event => <li key={event.sequence}>
-            <time dateTime={event.occurred_at} title={time(event.occurred_at)}>{new Date(event.occurred_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
-            <div><span className="what">{eventLabels[event.type] ?? event.type}</span> <span className="where">· {event.node_name || '面板'}</span><div className="where">{event.message}</div></div>
-          </li>)}</ul>}
+        <div className="panel-head"><h2>规则影响与证据</h2></div>
+        <Table<OperationRule> rowKey="id" dataSource={data.rules} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 700 }} locale={{ emptyText: <Empty description="暂无规则，请先添加节点并创建转发规则" /> }} columns={[
+          { title: '规则', render: (_, r) => <><strong>{r.name}</strong><div className="muted">{r.group_id ? data.groups.find(g => g.id === r.group_id)?.name : name(r.node_id || '')}</div></> },
+          { title: '当前判断', render: (_, r) => <Tag color={r.status === 'abnormal' ? 'red' : r.status === 'unknown' ? 'orange' : undefined}>{operationLabels[r.status] || r.status}</Tag> },
+          { title: '原因 / 证据', render: (_, r) => <Space orientation="vertical" size={2}>{r.reasons.map((reason, i) => <span key={i}>{reason.node_id && `${name(reason.node_id)}：`}{reason.message}<span className="cell-sub">{reason.source} · {reason.observed_at ? new Date(reason.observed_at).toLocaleString() : '时间待确认'}</span></span>)}{r.reasons.length === 0 && <span className="muted">{r.enabled ? '当前规则应用及所需隧道证据未显示异常' : '停用规则不计入异常统计'}</span>}</Space> },
+          { title: '', render: (_, r) => <Space><Button size="small" onClick={() => go('rules', r.id)}>查看规则</Button>{r.incident_id && <Button size="small" onClick={() => go('incidents', r.incident_id)}>追查故障</Button>}</Space> },
+        ]} />
       </section>
-    </div>
+      <section className="panel" style={{ marginTop: 20 }}><div className="panel-head"><h2>入口组发布与冗余</h2></div>
+        <Table rowKey="id" dataSource={data.groups} pagination={false} scroll={{ x: 700 }} columns={[
+          { title: '入口组', render: (_, g) => <Button type="link" onClick={() => go('entry-groups', g.id)}>{g.name}</Button> },
+          { title: '期望', render: (_, g) => <>{name(g.desired_node)}<div className="mono">{g.expected_ip || '未发布'} · 版本 {g.desired_version}</div></> },
+          { title: '服务商最后确认', render: (_, g) => <>{g.confirmed_ip || '待确认'}<span className="cell-sub">{g.confirmed_node ? name(g.confirmed_node) : '对应成员待确认'} · {g.confirmed_at ? new Date(g.confirmed_at).toLocaleString() : '确认时间未知'}</span></> },
+          { title: '发布 / 冗余', render: (_, g) => <>{g.stage} · {g.propagation || '传播状态待确认'}<span className="cell-sub">{g.redundancy}{g.reasons.map(r => `；${r.message}`).join('')}</span></> },
+        ]} />
+      </section>
+    </>}
   </>;
 }

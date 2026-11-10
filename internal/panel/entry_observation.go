@@ -14,7 +14,7 @@ import (
 	"nbpass/internal/eventlog"
 )
 
-// 迁移 43：观测历史与协调器队列分离；每次开启使用新的去重代次。
+// 迁移 44：观测历史与协调器队列分离；每次开启使用新的去重代次。
 const entryObservationMigration = `ALTER TABLE entry_groups ADD COLUMN observation_enabled INTEGER NOT NULL DEFAULT 0 CHECK(observation_enabled IN (0,1));
 ALTER TABLE entry_groups ADD COLUMN observation_generation INTEGER NOT NULL DEFAULT 0;
 CREATE TABLE entry_observations (

@@ -18,3 +18,5 @@
 ## Comments
 
 - 实现（集成者记录）：成员被墙时换 IP 授权前先经票 05 的唯一提交点完成摘除或保留判定，许可保存各全部发布组的记录身份、绑定代次与保留数决定（迁移 42 `rotation_member_barriers`），首次投递前复核；新地址确认后经 `syncNodeRecordsTx` 改值并保持启用状态；本次换 IP 复检恢复前周期自测不能触发加回。换 IP 用途判定 `allMemberRotationPurpose`（`exit_blocked.go`）是票 07 的拦截点。按用户要求跳过测试运行，仅编译与 vet 通过。
+
+- 集成者：合并 main（生产已在第 37 版 `incidentsMigration`）后，服务器组迁移整体后移一位，本票迁移现为第 43 版。

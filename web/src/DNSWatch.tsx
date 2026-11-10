@@ -18,10 +18,11 @@ const date = (value?: string | null) => value ? new Date(value).toLocaleString()
 const ips = (values: string[]) => values.length ? values.join('、') : '无 A 记录';
 const color = (status: string) => status === '疑似污染' || status === '期望不符' ? 'red' : status === '采样失败' ? 'orange' : status === '正常' || status === '符合期望' ? 'green' : 'default';
 
-export function DNSWatch({ onSessionExpired }: { onSessionExpired: () => void }) {
+export function DNSWatch({ focus, onSessionExpired }: { focus?: string; onSessionExpired: () => void }) {
   const [rows, setRows] = useState<Watch[]>([]);
   const [nodes, setNodes] = useState<Record<string, string>>({});
-  const [selected, setSelected] = useState<string>();
+  const [selected, setSelected] = useState<string | undefined>(focus);
+  useEffect(() => { setSelected(focus); }, [focus]);
   const [detail, setDetail] = useState<Watch>();
   const [editing, setEditing] = useState<Watch | 'new'>();
   const [settings, setSettings] = useState(false);

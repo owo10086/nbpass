@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 
-export type Page = 'overview' | 'nodes' | 'entry-groups' | 'exit-groups' | 'rules' | 'dns-watch' | 'events' | 'telegram' | 'security' | 'retention';
+export type Page = 'overview' | 'nodes' | 'entry-groups' | 'exit-groups' | 'rules' | 'dns-watch' | 'incidents' | 'events' | 'telegram' | 'security' | 'retention';
 export type Route = { page: Page; focus?: string };
 
-const pages: Page[] = ['overview', 'nodes', 'entry-groups', 'exit-groups', 'rules', 'dns-watch', 'events', 'telegram', 'security', 'retention'];
+const pages: Page[] = ['overview', 'nodes', 'entry-groups', 'exit-groups', 'rules', 'dns-watch', 'incidents', 'events', 'telegram', 'security', 'retention'];
 
 // 地址形如 #/nodes?focus=<节点 ID>；focus 让目标页把对应行滚动到可见处并短暂高亮。
 function parse(): Route {

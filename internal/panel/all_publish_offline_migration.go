@@ -1,6 +1,6 @@
 package panel
 
-// 迁移 41：全部发布的离线证据绑定成员记录，组版本仅保留为历史信息。
+// 迁移 42：全部发布的离线证据绑定成员记录，组版本仅保留为历史信息。
 const allPublishOfflineMigration = `ALTER TABLE entry_offline_checks ADD COLUMN managed_record_id TEXT NOT NULL DEFAULT '';
 ALTER TABLE entry_offline_checks ADD COLUMN binding_generation INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX entry_offline_member ON entry_offline_checks(group_id,node_id,incident_id,managed_record_id,binding_generation,issued_at);

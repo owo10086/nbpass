@@ -353,7 +353,6 @@ func (p *Panel) readDNSWatches(w http.ResponseWriter, r *http.Request, detail bo
 			err = e
 			break
 		}
-		matched, bad, failed, sampled := false, false, false, false
 		for paths.Next() {
 			var path dnsWatchPath
 			var encoded string
@@ -365,46 +364,13 @@ func (p *Panel) readDNSWatches(w http.ResponseWriter, r *http.Request, detail bo
 				break
 			}
 			path.SampledAt = nullableTime(at)
-			valid := path.NodeID == "" || checkers[path.NodeID] != ""
-			if !valid {
-				path.Status = "覆盖缺失"
-			} else if at.Valid && p.deps.Clock.Now().Sub(time.Unix(0, at.Int64)) > 5*time.Minute+30*time.Second {
-				path.Status = "采样失败"
-				path.ConsecutiveMismatches, path.ConsecutiveMatches = 0, 0
-			}
-			if valid {
-				if path.NodeID != "" && v.CoverageLabel == "国内覆盖缺失" {
-					v.CoverageLabel = "国内等待采样"
-				}
-				matched = matched || path.Status == "符合期望"
-				bad = bad || path.Status == "期望不符"
-				failed = failed || path.Status == "采样失败"
-				sampled = sampled || at.Valid
-				if path.NodeID != "" && at.Valid && path.Status != "采样失败" {
-					v.CoverageLabel = "国内已有采样"
-				}
-			}
 			v.Paths = append(v.Paths, path)
 		}
 		if err == nil {
 			err = paths.Err()
 		}
 		paths.Close()
-		if sampled {
-			v.Status = "观察中"
-		}
-		if failed {
-			v.Status = "采样失败"
-		}
-		if matched && !failed {
-			v.Status = "正常"
-		}
-		if bad {
-			v.Status = "期望不符"
-		}
-		if bad && matched {
-			v.Status = "疑似污染"
-		}
+		summarizeDNSWatch(v, checkers, p.deps.Clock.Now())
 		if detail && err == nil {
 			history, e := p.db.QueryContext(r.Context(), "SELECT sequence,path_id,sampled_at,old_ips,ips,status,changed FROM dns_watch_history WHERE watch_id=? AND sequence<? ORDER BY sequence DESC LIMIT 101", v.ID, before)
 			if e != nil {

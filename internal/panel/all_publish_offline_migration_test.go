@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// 用第 40 版 SQL 安排升级输入，历史检测、任务与发布状态经 HTTP 核对。
+// 用第 41 版 SQL 安排升级输入，历史检测、任务与发布状态经 HTTP 核对。
 func TestAllPublishOfflineMigrationPreservesPrimaryEvidenceAndInvalidatesUnboundMemberEvidence(t *testing.T) {
 	dir := t.TempDir()
 	db, err := diskDependencies(dir).Persistence.Open(context.Background())
@@ -15,7 +15,7 @@ func TestAllPublishOfflineMigrationPreservesPrimaryEvidenceAndInvalidatesUnbound
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for i, m := range migrations[:40] {
+	for i, m := range migrations[:41] {
 		if _, err = db.Exec(m); err != nil {
 			t.Fatal(err)
 		}

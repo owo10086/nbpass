@@ -13,12 +13,14 @@ import { EntryGroups } from './EntryGroups';
 import { ExitGroups } from './ExitGroups';
 import { Rules } from './Rules';
 import { Nodes } from './Nodes';
+import { Incidents } from './Incidents';
 import { Events } from './Events';
 import { Security } from './Security';
 import { Telegram } from './Telegram';
 import { DNSWatch } from './DNSWatch';
 import { Retention } from './Retention';
-import { collectAttention, Overview, type OverviewEntryGroup, type OverviewNode } from './Overview';
+import { Overview } from './Overview';
+import { useOperations } from './Operations';
 import { useRoute, type Page } from './route';
 
 type AuthStatus = { setup_required: boolean; authenticated: boolean };
@@ -34,6 +36,7 @@ const navigation: { title?: string; items: { page: Page; label: string; icon: Re
   ] },
   { title: '监控', items: [
     { page: 'dns-watch', label: '解析监控', icon: <GlobalOutlined /> },
+    { page: 'incidents', label: '故障', icon: <HistoryOutlined /> },
     { page: 'events', label: '事件日志', icon: <UnorderedListOutlined /> },
   ] },
   { title: '设置', items: [
@@ -42,33 +45,6 @@ const navigation: { title?: string; items: { page: Page; label: string; icon: Re
     { page: 'retention', label: '保留期设置', icon: <HistoryOutlined /> },
   ] },
 ];
-
-// 侧栏数量与概览告警数，独立于各页面自己的刷新。
-function useCounts(enabled: boolean, onSessionExpired: () => void) {
-  const [counts, setCounts] = useState<Counts>();
-  useEffect(() => {
-    if (!enabled) return;
-    let active = true;
-    async function load() {
-      try {
-        const [n, g, e, r] = await Promise.all([
-          api<{ nodes: OverviewNode[] }>('/nodes'),
-          api<{ entry_groups: OverviewEntryGroup[] }>('/entry-groups'),
-          api<{ exit_groups: unknown[] }>('/exit-groups'),
-          api<{ rules: unknown[] }>('/rules'),
-        ]);
-        const alerts = collectAttention(n.nodes, g.entry_groups).filter(item => item.tone !== 'muted').length;
-        if (active) setCounts({ nodes: n.nodes.length, entry: g.entry_groups.length, exit: e.exit_groups.length, rules: r.rules.length, alerts });
-      } catch (e) {
-        if (active && e instanceof APIError && (e.status === 401 || e.status === 428)) onSessionExpired();
-      }
-    }
-    void load();
-    const timer = window.setInterval(() => void load(), 15_000);
-    return () => { active = false; window.clearInterval(timer); };
-  }, [enabled]);
-  return counts;
-}
 
 function App() {
   const [status, setStatus] = useState<AuthStatus>();
@@ -86,7 +62,8 @@ function App() {
 
   useEffect(() => { void refresh(); }, []);
   useEffect(() => { form.resetFields(); }, [status?.setup_required, form]);
-  const counts = useCounts(!!status?.authenticated, () => void refresh());
+  const operations = useOperations(!!status?.authenticated, () => void refresh());
+  const counts = operations.data?.counts;
 
   async function submit(values: { password: string }) {
     setBusy(true);
@@ -156,12 +133,13 @@ function App() {
         <main className="main">
           <div className="page" key={page}>
             {error && <Alert title={error} type="error" showIcon className="message" />}
-            {page === 'overview' ? <Overview onSessionExpired={expired} />
+            {page === 'overview' ? <Overview state={operations} />
               : page === 'nodes' ? <Nodes focus={route.focus} onSessionExpired={expired} />
               : page === 'entry-groups' ? <EntryGroups focus={route.focus} onSessionExpired={expired} />
               : page === 'exit-groups' ? <ExitGroups onSessionExpired={expired} />
-              : page === 'rules' ? <Rules onSessionExpired={expired} />
-              : page === 'dns-watch' ? <DNSWatch onSessionExpired={expired} />
+              : page === 'rules' ? <Rules focus={route.focus} onSessionExpired={expired} />
+              : page === 'dns-watch' ? <DNSWatch focus={route.focus} onSessionExpired={expired} />
+              : page === 'incidents' ? <Incidents focus={route.focus} operations={operations.data} onSessionExpired={expired} />
               : page === 'events' ? <Events onSessionExpired={expired} />
               : page === 'telegram' ? <Telegram onSessionExpired={expired} />
               : page === 'retention' ? <Retention onSessionExpired={expired} />

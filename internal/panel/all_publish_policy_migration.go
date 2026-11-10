@@ -1,6 +1,6 @@
 package panel
 
-// 迁移 40：摘除时间与可重入通知；候选样本重启后重新累计。
+// 迁移 41：摘除时间与可重入通知；候选样本重启后重新累计。
 const allPublishPolicyMigration = `ALTER TABLE entry_member_publications ADD COLUMN withdrawn_at INTEGER;
 ALTER TABLE entry_groups ADD COLUMN minimum_kept_generation INTEGER NOT NULL DEFAULT 0;
 CREATE TRIGGER entry_minimum_kept_generation AFTER UPDATE OF minimum_kept ON entry_groups
