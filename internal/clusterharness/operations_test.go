@@ -86,3 +86,30 @@ func TestOperationsKeepsRuleFailureSeparateFromMissingEvidence(t *testing.T) {
 		t.Fatalf("控制失联抹掉已知失败或假报正常: %v", view)
 	}
 }
+
+func TestOperationsPublicationSeparatesConfirmedAddressAndRedundancy(t *testing.T) {
+	f := offlineEntry(t, true)
+	find := func() map[string]any {
+		for _, value := range operations(t, f.c)["groups"].([]any) {
+			g := value.(map[string]any)
+			if g["id"] == f.group {
+				return g
+			}
+		}
+		t.Fatal("缺少入口组")
+		return nil
+	}
+	g := find()
+	if g["confirmed_ip"] != "8.8.8.8" || g["desired_node"] != f.a {
+		t.Fatalf("服务商确认与期望未展示: %v", g)
+	}
+	f.c.Do("PUT", "/api/nodes/"+f.b+"/maintenance", map[string]bool{"enabled": true}, 204)
+	f.advance(t, 11)
+	g = find()
+	if g["redundancy"] != "冗余下降" {
+		t.Fatalf("备用维护未标记冗余下降: %v", g)
+	}
+	if g["confirmed_node"] != f.a {
+		t.Fatalf("备用失败污染活动入口: %v", g)
+	}
+}

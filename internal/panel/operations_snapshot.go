@@ -97,17 +97,6 @@ func (p *Panel) operationsSnapshot(ctx context.Context) (operationsView, error) 
 	if err != nil {
 		return view, err
 	}
-	for _, r := range rules {
-		item := operationRule{ID: r.ID, Name: r.Name, GroupID: r.EntryGroupID, NodeID: r.EntryNodeID, Enabled: r.Enabled, Status: "unknown", Reasons: []operationReason{}, Members: forwarding.RuleEntryNodes(r, members)}
-		if item.Members == nil {
-			item.Members = []string{}
-		}
-		for _, id := range item.Members {
-			item.Revision = max(item.Revision, nodes[id].Revision)
-		}
-		evaluateOperationRule(&item, checks, nodes, now)
-		view.Rules = append(view.Rules, item)
-	}
 	view.Counts.Nodes = len(nodes)
 	view.Counts.Rules = len(rules)
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM exit_groups").Scan(&view.Counts.Exit); err != nil {
@@ -127,6 +116,21 @@ func (p *Panel) operationsSnapshot(ctx context.Context) (operationsView, error) 
 	})
 	if err != nil {
 		return view, err
+	}
+	if err = attachOperationPublications(ctx, tx, &view, checks, nodes, now); err != nil {
+		return view, err
+	}
+	for _, r := range rules {
+		item := operationRule{ID: r.ID, Name: r.Name, GroupID: r.EntryGroupID, NodeID: r.EntryNodeID, Enabled: r.Enabled, Status: "unknown", Reasons: []operationReason{}, Members: forwarding.RuleEntryNodes(r, members)}
+		if item.Members == nil {
+			item.Members = []string{}
+		}
+		for _, id := range item.Members {
+			item.Revision = max(item.Revision, nodes[id].Revision)
+		}
+		evaluateOperationRule(&item, checks, nodes, now)
+		scopeOperationRule(&item, view.Groups)
+		view.Rules = append(view.Rules, item)
 	}
 	view.Counts.Entry = len(view.Groups)
 	for _, r := range view.Rules {
