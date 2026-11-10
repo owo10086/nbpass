@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Form, Input, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
 import { EntryDomainWatch } from './EntryDomainWatch';
+import type { EntryMemberState } from './EntryReadiness';
 
 type Node = { id: string; name: string };
 type RecordBinding = { id: string; account_id: string; domain: string; record_id: string; line_id: string; hostname: string; current_value: string; current_enabled: boolean; warnings: string[] };
-export type AllMember = { node_id: string; record: RecordBinding | null; expected_value: string; expected_enabled: boolean; address_pending: boolean; reason: string; last_error: string; manual_locked: boolean; removal_action_id: string; propagation_status: string };
+export type AllMember = { node_id: string; record: RecordBinding | null; expected_value: string; expected_enabled: boolean; address_pending: boolean; reason: string; withdrawn_at: string | null; last_error: string; manual_locked: boolean; removal_action_id: string; propagation_status: string };
 type ActionRecord = { managed_record_id: string; record_id: string; new_value: string; new_enabled: boolean; stage: string; last_error: string; propagation_status: string; propagation_note: string };
-type Publication = { first_published: boolean; desired_version: number; members: AllMember[]; action: { id: string; stage: string; records: ActionRecord[] } | null };
+type Publication = { first_published: boolean; desired_version: number; minimum_kept: number; effective_minimum_kept: number; members: AllMember[]; member_states: EntryMemberState[]; action: { id: string; stage: string; records: ActionRecord[] } | null };
 type Account = { id: string; name: string };
 
 export function MemberRecords({ members, nodes }: { members: AllMember[]; nodes: Node[] }) {
@@ -16,6 +17,7 @@ export function MemberRecords({ members, nodes }: { members: AllMember[]; nodes:
     { title: '受管记录', render: (_, m) => m.record ? `${m.record.hostname} / ${m.record.record_id}` : '未绑定' },
     { title: '服务商最近确认', render: (_, m) => m.record ? <>{m.record.current_value} <Tag>{m.record.current_enabled ? '启用' : '暂停'}</Tag></> : '—' },
     { title: '成员状态', render: (_, m) => <>{m.reason}{m.manual_locked && ' · 手动锁定'}{m.last_error && <Alert type="warning" title={m.last_error} />}</> },
+    { title: '摘除时间', render: (_, m) => m.withdrawn_at ? new Date(m.withdrawn_at).toLocaleString() : '—' },
     { title: '地址传播', render: (_, m) => m.propagation_status || '尚未发布' },
   ]} />;
 }
@@ -27,6 +29,7 @@ export function AllPublishDNS({ group, nodes, onClose, onSessionExpired }: { gro
   const [addingAccount, setAddingAccount] = useState(false);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [minimumDraft, setMinimumDraft] = useState<number | null>(null);
   const [bindingForm] = Form.useForm();
   const [accountForm] = Form.useForm();
   const [publishForm] = Form.useForm();
@@ -57,11 +60,24 @@ export function AllPublishDNS({ group, nodes, onClose, onSessionExpired }: { gro
       {error && <Alert type="error" title={error} showIcon />}
       <Alert type="info" showIcon title="每个成员绑定一条已有的同名、同线路 A 记录。" description="首次发布前不自动改 DNS。首次发布后新增成员会先暂停，等待加回；面板不创建或删除 DNSPod 记录。" />
       <MemberRecords members={members} nodes={nodes} />
+      {publication && <Card size="small" title="自动摘除与加回">
+        <Space wrap>
+          <span>最少保留数</span>
+          <InputNumber aria-label="最少保留数" min={1} precision={0} value={minimumDraft ?? publication.minimum_kept} onChange={setMinimumDraft} />
+          <Button disabled={saving || !!pending} onClick={() => run(async () => { await api(`${path}/minimum-kept`, 'PUT', { minimum_kept: minimumDraft ?? publication.minimum_kept }); setMinimumDraft(null); })}>保存</Button>
+          <span>当前按 {publication.effective_minimum_kept} 条记录保留</span>
+        </Space>
+        <Typography.Paragraph type="secondary">自动摘除优先保留仍启用的成员，再按组内顺序选择；不会为凑数加回暂停成员。恢复须连续六次十秒检查成功且地址一致。手动摘除会锁定成员，手动加回后恢复自动规则。</Typography.Paragraph>
+      </Card>}
       <Space wrap>
         <Button onClick={() => setAddingAccount(true)}>添加 DNSPod 账号</Button>
         {members.map(m => <Space key={m.node_id}>
           {!m.record && <Button disabled={!!pending} onClick={() => { bindingForm.resetFields(); bindingForm.setFieldsValue({ line_id: '0' }); setBindingMember(m.node_id); }}>绑定 {name(m.node_id)} 的记录</Button>}
           {m.record && !pending && <Button onClick={() => { bindingForm.setFieldsValue(m.record); setBindingMember(m.node_id); }}>更换 {name(m.node_id)} 的记录</Button>}
+          {m.record && publication?.first_published && <>
+            <Popconfirm title={`手动摘除 ${name(m.node_id)}？`} description="暂停记录并锁定，之后不会自动加回。不能摘除最后一条启用记录。" onConfirm={() => run(() => api(`${path}/members/${m.node_id}/withdraw`, 'POST', { expected_version: publication.desired_version }))}><Button disabled={saving || !!pending || (m.manual_locked && !m.record.current_enabled && !m.last_error)}>摘除 {name(m.node_id)}</Button></Popconfirm>
+            <Popconfirm title={`手动加回 ${name(m.node_id)}？`} description={publication.member_states.find(s => s.node_id === m.node_id)?.candidate ? '立即启用记录并解除手动锁，恢复自动规则。' : '警示：该成员当前异常或健康条件尚未确认。仍继续将立即启用并解锁，之后可能被再次自动摘除；请先核对成员状态及记录地址。'} onConfirm={() => run(() => api(`${path}/members/${m.node_id}/restore`, 'POST', { expected_version: publication.desired_version }))}><Button disabled={saving || !!pending || (m.record.current_enabled && !m.manual_locked && !m.last_error)}>加回 {name(m.node_id)}</Button></Popconfirm>
+          </>}
           {m.record && <Popconfirm title={`移出 ${name(m.node_id)}？`} description="先暂停记录，服务商确认后解绑并移出。唯一启用记录不能移出。" onConfirm={() => run(() => api(`${path}/members/${m.node_id}`, 'DELETE'))}><Button danger disabled={saving || !!pending}>移出 {name(m.node_id)}</Button></Popconfirm>}
         </Space>)}
       </Space>
