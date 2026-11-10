@@ -30,7 +30,7 @@ CREATE TABLE operation_projection (
  id INTEGER PRIMARY KEY CHECK(id=1),synced_at INTEGER NOT NULL DEFAULT 0
 );
 INSERT INTO operation_projection(id) VALUES(1);
-CREATE TABLE operation_processed (source_key TEXT PRIMARY KEY,fingerprint TEXT NOT NULL);
+CREATE TABLE operation_processed (source_key TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,ended INTEGER NOT NULL DEFAULT 0);
 `
 const incidentColumns = `sequence,source_key,kind,title,impact,handling,started_at,updated_at,ended_at,closure,refs,reasons`
 
@@ -91,11 +91,12 @@ func saveIncidentObservation(ctx context.Context, tx *sql.Tx, o incidentObservat
 	}
 	fingerprint := incidentFingerprint(stable)
 	var old string
-	err = tx.QueryRowContext(ctx, "SELECT fingerprint FROM operation_processed WHERE source_key=?", o.Key).Scan(&old)
+	var processedEnd bool
+	err = tx.QueryRowContext(ctx, "SELECT fingerprint,ended FROM operation_processed WHERE source_key=?", o.Key).Scan(&old, &processedEnd)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if old == fingerprint {
+	if old == fingerprint || (missing && processedEnd && (strings.HasPrefix(o.Key, "blocked:") || strings.HasPrefix(o.Key, "rotation:"))) {
 		return nil
 	}
 	if !missing && r.EndedAt != nil && o.Closure == "" {
@@ -143,7 +144,7 @@ func saveIncidentObservation(ctx context.Context, tx *sql.Tx, o incidentObservat
 			return err
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO operation_processed(source_key,fingerprint) VALUES(?,?) ON CONFLICT(source_key) DO UPDATE SET fingerprint=excluded.fingerprint`, o.Key, fingerprint)
+	_, err = tx.ExecContext(ctx, `INSERT INTO operation_processed(source_key,fingerprint,ended) VALUES(?,?,?) ON CONFLICT(source_key) DO UPDATE SET fingerprint=excluded.fingerprint,ended=excluded.ended`, o.Key, fingerprint, o.Closure != "")
 	return err
 }
 

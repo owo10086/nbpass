@@ -137,8 +137,8 @@ function App() {
               : page === 'nodes' ? <Nodes focus={route.focus} onSessionExpired={expired} />
               : page === 'entry-groups' ? <EntryGroups focus={route.focus} onSessionExpired={expired} />
               : page === 'exit-groups' ? <ExitGroups onSessionExpired={expired} />
-              : page === 'rules' ? <Rules onSessionExpired={expired} />
-              : page === 'dns-watch' ? <DNSWatch onSessionExpired={expired} />
+              : page === 'rules' ? <Rules focus={route.focus} onSessionExpired={expired} />
+              : page === 'dns-watch' ? <DNSWatch focus={route.focus} onSessionExpired={expired} />
               : page === 'incidents' ? <Incidents focus={route.focus} operations={operations.data} onSessionExpired={expired} />
               : page === 'events' ? <Events onSessionExpired={expired} />
               : page === 'telegram' ? <Telegram onSessionExpired={expired} />

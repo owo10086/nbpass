@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, APIError } from './api';
+import type { Incident } from './Incidents';
 
 export type OperationReason = { code: string; message: string; source: string; node_id?: string; observed_at: string | null };
-export type OperationRule = { id: string; name: string; group_id?: string; node_id?: string; enabled: boolean; revision: number; status: string; reasons: OperationReason[]; members: string[] };
+export type OperationRule = { id: string; incident_id?: string; name: string; group_id?: string; node_id?: string; enabled: boolean; revision: number; status: string; reasons: OperationReason[]; members: string[] };
 export type OperationGroup = { id: string; name: string; members: string[]; desired_node: string; desired_version: number; expected_ip: string; confirmed_ip: string; confirmed_node: string; confirmed_at: string | null; stage: string; propagation: string; watch_id: string; redundancy: string; reasons: OperationReason[]; bound: boolean };
 export type OperationNode = { id: string; name: string; status: string; connected: boolean; last_seen: string | null; blocked: string; revision: number };
 export type OperationsView = {
+  current_incidents: Incident[]; recent_incidents: Incident[];
   generated_at: string; complete: boolean; nodes: OperationNode[]; groups: OperationGroup[]; rules: OperationRule[];
   counts: { nodes: number; entry: number; exit: number; rules: number; enabled_rules: number; abnormal_rules: number; unknown_rules: number; degraded_groups: number; manual_incidents: number | null; alerts: number };
   incident_sync: string | null; incident_error: string;

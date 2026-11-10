@@ -128,20 +128,23 @@ func nodeIncidentRefs(view operationsView, node string) []incidentRef {
 
 func collectOfflineIncidents(ctx context.Context, tx *sql.Tx, view operationsView) ([]incidentObservation, error) {
 	records := map[string]struct {
-		id string
-		at *time.Time
+		id        string
+		at        *time.Time
+		recovered bool
 	}{}
-	err := operationRows(ctx, tx, "SELECT node_id,id,offline_at FROM offline_incidents WHERE recovered_at IS NULL", func(rows *sql.Rows) error {
+	err := operationRows(ctx, tx, "SELECT node_id,id,offline_at,recovered_at IS NOT NULL FROM offline_incidents i WHERE id=(SELECT MAX(id) FROM offline_incidents WHERE node_id=i.node_id)", func(rows *sql.Rows) error {
 		var node, id string
 		var at int64
-		if err := rows.Scan(&node, &id, &at); err != nil {
+		var recovered bool
+		if err := rows.Scan(&node, &id, &at, &recovered); err != nil {
 			return err
 		}
 		t := time.Unix(0, at).UTC()
 		records[node] = struct {
-			id string
-			at *time.Time
-		}{id, &t}
+			id        string
+			at        *time.Time
+			recovered bool
+		}{id, &t, recovered}
 		return nil
 	})
 	if err != nil {
@@ -153,13 +156,16 @@ func collectOfflineIncidents(ctx context.Context, tx *sql.Tx, view operationsVie
 			continue
 		}
 		o := incidentObservation{Key: "control:" + n.ID, Kind: "offline", Title: n.Name + "：控制连接异常", Impact: "unknown", Handling: "waiting", Refs: nodeIncidentRefs(view, n.ID), Reasons: []string{"控制连接状态不能证明业务是否中断；节点可能按缓存继续转发"}}
+		if record, ok := records[n.ID]; ok && (n.Connected || !record.recovered) {
+			o.Cause = "control:" + n.ID + ":" + record.id
+		}
 		if n.Connected {
 			o.Closure = "异常解除"
 			o.Impact = "cleared"
 			o.Entries = []incidentEntry{{Key: "recovered", Stage: "控制连接恢复", Message: "已收到当前控制连接；这不是目标业务恢复证明", Source: "控制连接"}}
 		} else {
 			o.Entries = []incidentEntry{{Key: "observed", Stage: "首次观察到控制连接异常", Message: "此为面板观察记录，未补造之前的故障过程", Source: "控制连接"}}
-			if record, ok := records[n.ID]; ok {
+			if record, ok := records[n.ID]; ok && !record.recovered {
 				o.Entries = append(o.Entries, incidentEntry{Key: "offline:" + record.id, Stage: "离线已确认", Message: "按现有控制连接时限判定离线；业务影响待确认", Source: "离线事故", At: record.at})
 			}
 			if n.Status == "maintenance" {

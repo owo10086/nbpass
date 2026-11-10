@@ -6,7 +6,7 @@ import { go } from './route';
 import type { OperationsView } from './Operations';
 import { IncidentDetails } from './IncidentDetails';
 
-export type Incident = { id: string; kind: string; title: string; impact: string; handling: string; started_at: string; updated_at: string; ended_at: string | null; closure: string; refs: { kind: string; id: string; name: string; exists: boolean }[]; reasons: string[] };
+export type Incident = { synced_at?: string; sync_error?: string; id: string; kind: string; title: string; impact: string; handling: string; started_at: string; updated_at: string; ended_at: string | null; closure: string; refs: { kind: string; id: string; name: string; exists: boolean }[]; reasons: string[] };
 export const incidentKinds: Record<string, string> = { offline: '控制离线', blocked: '被墙', rule: '配置、监听或隧道', dns: 'DNS' };
 export const handlingLabels: Record<string, string> = { waiting: '等待条件', processing: '处理中', manual: '需要人工', ended: '已结束' };
 export const impactLabels: Record<string, string> = { abnormal: '检测到转发异常', unknown: '影响待确认', cleared: '异常证据已解除', no_known_issue: '未发现转发异常' };
@@ -43,6 +43,7 @@ export function Incidents({ focus, operations, onSessionExpired }: { focus?: str
       <Form.Item name="node_id" label="节点"><Select allowClear showSearch optionFilterProp="label" style={{ width: 150 }} options={operations?.nodes.map(n => ({ value: n.id, label: n.name }))} /></Form.Item>
       <Form.Item name="group_id" label="入口组"><Select allowClear showSearch optionFilterProp="label" style={{ width: 150 }} options={operations?.groups.map(g => ({ value: g.id, label: g.name }))} /></Form.Item>
       <Form.Item name="rule_id" label="规则"><Select allowClear showSearch optionFilterProp="label" style={{ width: 150 }} options={operations?.rules.map(r => ({ value: r.id, label: r.name }))} /></Form.Item>
+      <Form.Item name="watch_id" label="解析监控 ID"><Input allowClear /></Form.Item>
       <Form.Item name="from" label="开始"><Input type="datetime-local" /></Form.Item><Form.Item name="to" label="结束"><Input type="datetime-local" /></Form.Item>
       <Form.Item><Button type="primary" htmlType="submit">筛选</Button></Form.Item>
     </Form>

@@ -156,6 +156,7 @@ func (p *Panel) getIncident(w http.ResponseWriter, r *http.Request) {
 	for i := range item.Refs {
 		item.Refs[i].Exists = existing[item.Refs[i].Kind+":"+item.Refs[i].ID]
 	}
+	item.SyncedAt, item.SyncError, _ = p.incidentProjectionStatus(r.Context())
 	respond(w, 200, item)
 }
 func (p *Panel) getIncidentTimeline(w http.ResponseWriter, r *http.Request) {

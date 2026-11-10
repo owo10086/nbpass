@@ -4,6 +4,7 @@ import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
 import { RuleSyncDetails, SyncHelp, SyncTag, type SyncMember } from './ConfigSync';
 import { RulesTransfer } from './RulesTransfer';
+import { go } from './route';
 import { PageHeader } from './PageHeader';
 
 type RuleInput = { name: string; entry_group_id?: string; entry_node_id?: string; kind: 'direct' | 'tunnel'; exit_group_id?: string; listen_port: number; target_address: string; target_family: 'ipv4'; target_port: number; allow_private: boolean; enabled: boolean };
@@ -22,7 +23,7 @@ function ruleInput(row: RuleInput): RuleInput {
   return { name, entry_group_id, entry_node_id, kind, exit_group_id, listen_port, target_address, target_family, target_port, allow_private, enabled };
 }
 
-export function Rules({ onSessionExpired }: { onSessionExpired: () => void }) {
+export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionExpired: () => void }) {
   const [rows, setRows] = useState<Rule[]>([]);
   const [nodes, setNodes] = useState<Group[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -76,7 +77,8 @@ export function Rules({ onSessionExpired }: { onSessionExpired: () => void }) {
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建转发规则</Button>
     </PageHeader>
     {error && <Alert title={error} type="error" showIcon className="message" />}
-    <div className="panel"><Table<Rule> rowKey="id" dataSource={rows} rowSelection={{ selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} loading={!loaded && !error} pagination={rows.length > 100 ? { pageSize: 100, showSizeChanger: false } : false} scroll={{ x: 1130 }} locale={{ emptyText: '暂无转发规则，请先接入入口节点。' }} expandable={{ expandedRowRender: row => <RuleSyncDetails members={row.sync_members} /> }} columns={[
+    {focus && <Alert title={rows.some(r => r.id === focus) ? '已定位关联规则' : '关联规则已删除或尚未读取'} action={<Button onClick={() => go('rules')}>查看全部规则</Button>} type="info" showIcon className="message" />}
+    <div className="panel"><Table<Rule> rowKey="id" dataSource={focus ? rows.filter(r => r.id === focus) : rows} rowSelection={{ selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} loading={!loaded && !error} pagination={rows.length > 100 ? { pageSize: 100, showSizeChanger: false } : false} scroll={{ x: 1130 }} locale={{ emptyText: '暂无转发规则，请先接入入口节点。' }} expandable={{ defaultExpandedRowKeys: focus ? [focus] : [], expandedRowRender: row => <RuleSyncDetails members={row.sync_members} /> }} columns={[
       { title: '规则', dataIndex: 'name', width: 130, render: value => <span className="node-name">{value}</span> },
       { title: '入口', width: 130, render: (_, row) => <>{row.entry_node_id ? nodes.find(n => n.id === row.entry_node_id)?.name ?? row.entry_node_id : groups.find(g => g.id === row.entry_group_id)?.name ?? row.entry_group_id}<span className="cell-sub">{row.entry_node_id ? '入口节点' : '入口组'}</span></> },
       { title: '链路', width: 90, render: (_, row) => row.kind === 'tunnel' ? <>隧道<span className="cell-sub">经 {exitGroups.find(g => g.id === row.exit_group_id)?.name ?? row.exit_group_id}</span></> : <>直连</> },

@@ -52,6 +52,9 @@ func attachEntryIncidentProgress(ctx context.Context, tx *sql.Tx, observations [
 	byKey := map[string]*incidentObservation{}
 	for i := range observations {
 		byKey[observations[i].Key] = &observations[i]
+		if observations[i].Cause != "" {
+			byKey[observations[i].Cause] = &observations[i]
+		}
 	}
 	actions := map[string]incidentAction{}
 	err := operationRows(ctx, tx, `SELECT id,group_id,node_id,kind,stage,old_value,new_value,version,created_at,written_at FROM entry_actions`, func(rows *sql.Rows) error {
@@ -71,7 +74,7 @@ func attachEntryIncidentProgress(ctx context.Context, tx *sql.Tx, observations [
 		return err
 	}
 	decisions := []incidentDecision{}
-	err = operationRows(ctx, tx, `SELECT 'blocked:'||d.node_id||':'||d.incident_id,d.id,d.group_id,d.node_id,d.action_id,d.outcome,d.policy,COALESCE(f.rotation_id,''),d.desired_version,COALESCE(f.expected_version,0),d.created_at FROM entry_blocked_decisions d LEFT JOIN entry_blocked_rotations f ON f.decision_id=d.id UNION ALL SELECT 'control:'||node_id,id,group_id,node_id,action_id,outcome,'offline','',desired_version,0,issued_at FROM entry_offline_checks`, func(rows *sql.Rows) error {
+	err = operationRows(ctx, tx, `SELECT 'blocked:'||d.node_id||':'||d.incident_id,d.id,d.group_id,d.node_id,d.action_id,d.outcome,d.policy,COALESCE(f.rotation_id,''),d.desired_version,COALESCE(f.expected_version,0),d.created_at FROM entry_blocked_decisions d LEFT JOIN entry_blocked_rotations f ON f.decision_id=d.id UNION ALL SELECT 'control:'||node_id||':'||incident_id,id,group_id,node_id,action_id,outcome,'offline','',desired_version,0,issued_at FROM entry_offline_checks`, func(rows *sql.Rows) error {
 		var d incidentDecision
 		if e := rows.Scan(&d.key, &d.id, &d.group, &d.node, &d.action, &d.outcome, &d.policy, &d.rotation, &d.version, &d.expected, &d.at); e != nil {
 			return e

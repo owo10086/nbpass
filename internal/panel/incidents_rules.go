@@ -53,6 +53,7 @@ func collectRuleIncidents(view operationsView) []incidentObservation {
 
 // 仅对完整读取后确认被删除或被新配置替代的来源收尾；读取失败不等于恢复。
 func reconcileIncidentSources(ctx context.Context, tx *sql.Tx, observations []incidentObservation, view operationsView) ([]incidentObservation, error) {
+	active := map[string]bool{}
 	current := map[string]bool{}
 	for _, o := range observations {
 		current[o.Key] = true
@@ -62,6 +63,7 @@ func reconcileIncidentSources(ctx context.Context, tx *sql.Tx, observations []in
 		if err != nil {
 			return err
 		}
+		active[old.sourceKey] = true
 		if current[old.sourceKey] {
 			return nil
 		}
@@ -91,5 +93,11 @@ func reconcileIncidentSources(ctx context.Context, tx *sql.Tx, observations []in
 		observations = append(observations, incidentObservation{Key: old.sourceKey, Kind: old.Kind, Title: old.Title, Impact: "unknown", Closure: closure, Refs: old.Refs, Reasons: []string{"原来源已删除或被新的配置/事故标识替代；这不代表业务恢复"}, Entries: []incidentEntry{{Key: "source-ended", Stage: closure, Message: "原来源不再属于当前完整配置与事故集合，保留历史证据", Source: "配置/事故标识"}}})
 		return nil
 	})
-	return observations, err
+	filtered := observations[:0]
+	for _, o := range observations {
+		if !o.ExistingOnly || active[o.Key] {
+			filtered = append(filtered, o)
+		}
+	}
+	return filtered, err
 }

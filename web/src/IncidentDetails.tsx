@@ -34,6 +34,7 @@ export function IncidentDetails({ id, onSessionExpired }: { id: string; onSessio
   return <>
     <PageHeader title={incident?.title || '故障详情'} description="时间线按记录顺序展示，分别保留事实发生时间与面板观察时间；历史缺口不会被补造。"><Button onClick={() => go('incidents')}>返回故障列表</Button><Button loading={loading} onClick={() => void load()}>刷新</Button></PageHeader>
     {error && <Alert title={error} description="读取未成功，已显示的信息可能过期。" type="error" showIcon className="message" />}
+    {incident?.sync_error && <Alert title={incident.sync_error} description={incident.synced_at ? `最近整理：${new Date(incident.synced_at).toLocaleString()}` : '等待整理'} type="warning" showIcon className="message" />}
     {incident && <>
       <section className="panel" style={{ padding: 20, marginBottom: 20 }}>
         <Descriptions column={{ xs: 1, sm: 2 }} items={[

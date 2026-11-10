@@ -12,6 +12,7 @@ type operationReason struct {
 }
 
 type operationRule struct {
+	IncidentID    string                  `json:"incident_id,omitempty"`
 	Configuration string                  `json:"-"`
 	ExitGroupID   string                  `json:"exit_group_id,omitempty"`
 	Evidence      []operationRuleEvidence `json:"evidence"`
@@ -68,14 +69,16 @@ type operationCounts struct {
 }
 
 type operationsView struct {
-	GeneratedAt   time.Time        `json:"generated_at"`
-	Complete      bool             `json:"complete"`
-	Counts        operationCounts  `json:"counts"`
-	Nodes         []operationNode  `json:"nodes"`
-	Groups        []operationGroup `json:"groups"`
-	Rules         []operationRule  `json:"rules"`
-	IncidentSync  *time.Time       `json:"incident_sync"`
-	IncidentError string           `json:"incident_error"`
+	CurrentIncidents []incidentRecord `json:"current_incidents"`
+	RecentIncidents  []incidentRecord `json:"recent_incidents"`
+	GeneratedAt      time.Time        `json:"generated_at"`
+	Complete         bool             `json:"complete"`
+	Counts           operationCounts  `json:"counts"`
+	Nodes            []operationNode  `json:"nodes"`
+	Groups           []operationGroup `json:"groups"`
+	Rules            []operationRule  `json:"rules"`
+	IncidentSync     *time.Time       `json:"incident_sync"`
+	IncidentError    string           `json:"incident_error"`
 }
 
 type operationRuleEvidence struct {

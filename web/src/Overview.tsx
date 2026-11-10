@@ -1,5 +1,6 @@
 import { Alert, Button, Empty, Skeleton, Space, Table, Tag } from 'antd';
 import { go } from './route';
+import { handlingLabels, impactLabels, type Incident } from './Incidents';
 import { PageHeader } from './PageHeader';
 import { operationLabels, type OperationRule, type OperationsState } from './Operations';
 
@@ -19,13 +20,24 @@ export function Overview({ state }: { state: OperationsState }) {
     ].map(([label, value]) => <div className="stat" key={label}><div className="stat-label">{label}</div><div className="stat-value">{value ?? '—'}</div></div>)}</div>
     <p className="muted">节点 {counts?.nodes ?? '—'} · 启用规则 {counts?.enabled_rules ?? '—'} / {counts?.rules ?? '—'}。控制离线不等于业务中断；未发现异常不代表已验证目标业务。</p>
     {!data ? <Skeleton active /> : <>
+      {[
+        { title: '当前异常与自动处理', rows: data.current_incidents }, { title: '最近结束的故障', rows: data.recent_incidents },
+      ].map(({title, rows}) => <section className="panel" style={{ marginBottom: 20 }} key={title}>
+        <div className="panel-head"><h2>{title}</h2><Button onClick={() => go('incidents')}>全部故障与筛选</Button></div>
+        <Table<Incident> rowKey="id" dataSource={rows} pagination={false} scroll={{ x: 600 }} locale={{ emptyText: data.incident_error ? '整理状态待确认，请稍后刷新' : '当前没有记录' }} columns={[
+          { title: '故障', render: (_, r) => <Button type="link" onClick={() => go('incidents', r.id)}>{r.title}</Button> },
+          { title: '影响 / 处理', render: (_, r) => <>{impactLabels[r.impact]}<span className="cell-sub">{handlingLabels[r.handling]}{r.closure && ` · ${r.closure}`}</span></> },
+          { title: '关联入口组', render: (_, r) => r.refs.filter(ref => ref.kind === 'group').map(ref => ref.name).join('、') || '—' },
+          { title: '最近更新', render: (_, r) => new Date(r.updated_at).toLocaleString() },
+        ]} />
+      </section>)}
       <section className="panel">
         <div className="panel-head"><h2>规则影响与证据</h2></div>
         <Table<OperationRule> rowKey="id" dataSource={data.rules} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 700 }} locale={{ emptyText: <Empty description="暂无规则，请先添加节点并创建转发规则" /> }} columns={[
           { title: '规则', render: (_, r) => <><strong>{r.name}</strong><div className="muted">{r.group_id ? data.groups.find(g => g.id === r.group_id)?.name : name(r.node_id || '')}</div></> },
           { title: '当前判断', render: (_, r) => <Tag color={r.status === 'abnormal' ? 'red' : r.status === 'unknown' ? 'orange' : undefined}>{operationLabels[r.status] || r.status}</Tag> },
           { title: '原因 / 证据', render: (_, r) => <Space orientation="vertical" size={2}>{r.reasons.map((reason, i) => <span key={i}>{reason.node_id && `${name(reason.node_id)}：`}{reason.message}<span className="cell-sub">{reason.source} · {reason.observed_at ? new Date(reason.observed_at).toLocaleString() : '时间待确认'}</span></span>)}{r.reasons.length === 0 && <span className="muted">{r.enabled ? '当前规则应用及所需隧道证据未显示异常' : '停用规则不计入异常统计'}</span>}</Space> },
-          { title: '', render: (_, r) => <Button size="small" onClick={() => go(r.group_id ? 'entry-groups' : 'nodes', r.group_id || r.node_id)}>查看入口</Button> },
+          { title: '', render: (_, r) => <Space><Button size="small" onClick={() => go('rules', r.id)}>查看规则</Button>{r.incident_id && <Button size="small" onClick={() => go('incidents', r.incident_id)}>追查故障</Button>}</Space> },
         ]} />
       </section>
       <section className="panel" style={{ marginTop: 20 }}><div className="panel-head"><h2>入口组发布与冗余</h2></div>

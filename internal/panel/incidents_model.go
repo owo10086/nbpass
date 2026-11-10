@@ -19,6 +19,8 @@ type incidentEntry struct {
 	ObservedAt time.Time  `json:"observed_at"`
 }
 type incidentRecord struct {
+	SyncedAt  *time.Time    `json:"synced_at,omitempty"`
+	SyncError string        `json:"sync_error,omitempty"`
 	ID        string        `json:"id"`
 	Kind      string        `json:"kind"`
 	Title     string        `json:"title"`
@@ -33,6 +35,7 @@ type incidentRecord struct {
 	sourceKey string
 }
 type incidentObservation struct {
+	Cause        string
 	ExistingOnly bool
 	Pending      bool
 

@@ -1,6 +1,7 @@
 package clusterharness_test
 
 import (
+	"fmt"
 	"nbpass/internal/clusterharness"
 	"nbpass/internal/panel"
 	"net"
@@ -177,4 +178,125 @@ func TestIncidentsDNSFailureTracksWatchAndNewExpectation(t *testing.T) {
 	if provider.Writes() != 0 {
 		t.Fatal("故障追踪增加 DNS 写入")
 	}
+}
+
+func TestIncidentsStorageFailureDoesNotBlockEntrySwitch(t *testing.T) {
+	disk := &interruptedPersistence{}
+	f := newBlockedEntryRig(t, true, func(d *panel.Dependencies) { disk.base = d.Persistence; d.Persistence = disk })
+	if _, err := disk.db.Exec(`CREATE TRIGGER fail_operation_incidents BEFORE INSERT ON operation_incidents BEGIN SELECT RAISE(ABORT,'故障投影写入失败'); END`); err != nil {
+		t.Fatal(err)
+	}
+	f.block(t, 0)
+	f.awaitPublication(t, f.ids[1], 2)
+	waitRetention(t, func() bool { return operations(t, f.c)["incident_error"] != "" }, func() { f.h.Clock.Advance(time.Second) })
+	writes := f.dns.Writes()
+	if _, err := disk.db.Exec("DROP TRIGGER fail_operation_incidents"); err != nil {
+		t.Fatal(err)
+	}
+	incident := awaitIncident(t, f.h, f.c, "blocked")
+	awaitIncidentEntry(t, f.h, f.c, incident["id"].(string), func(e map[string]any) bool { return e["stage"] == "服务商已写入" })
+	if f.dns.Writes() != writes || f.calls.Load() != 0 {
+		t.Fatal("故障记录恢复重放业务动作")
+	}
+}
+
+func TestIncidentsOfflineRecurrenceAndRetention(t *testing.T) {
+	h, c := nodeBrowser(t)
+	n := addNode(c, "反复失联")
+	id := n["id"].(string)
+	real := h.StartNode(n["installation_ticket"].(string))
+	awaitNode(t, c, id, connected)
+	real.Disconnect()
+	awaitNode(t, c, id, func(r map[string]any) bool { return !connected(r) })
+	first := awaitIncident(t, h, c, "offline")
+	iid := first["id"].(string)
+	real.Restore()
+	real.Restart()
+	awaitNode(t, c, id, connected)
+	awaitIncidentEntry(t, h, c, iid, func(e map[string]any) bool { return e["stage"] == "控制连接恢复" })
+	ended := c.Do("GET", "/api/incidents/"+iid, nil, 200)["ended_at"]
+	h.Clock.Advance(6 * time.Second)
+	time.Sleep(20 * time.Millisecond)
+	if c.Do("GET", "/api/incidents/"+iid, nil, 200)["ended_at"] != ended {
+		t.Fatal("心跳改写原结束时间")
+	}
+	real.Disconnect()
+	awaitNode(t, c, id, func(r map[string]any) bool { return !connected(r) })
+	waitRetention(t, func() bool {
+		for _, v := range incidentRows(c) {
+			r := v.(map[string]any)
+			if r["kind"] == "offline" && r["id"] != iid && r["ended_at"] == nil {
+				return true
+			}
+		}
+		return false
+	}, func() { h.Clock.Advance(time.Second) })
+	c.Do("PUT", "/api/settings/retention", map[string]int{"event_days": 1, "probe_hours": 24}, 200)
+	h.Clock.Advance(25 * time.Hour)
+	login(c)
+	waitRetention(t, func() bool {
+		for _, v := range incidentRows(c) {
+			if v.(map[string]any)["id"] == iid {
+				return false
+			}
+		}
+		return true
+	}, func() { h.Clock.Advance(time.Minute) })
+	rows := c.Do("GET", "/api/incidents?kind=offline&status=open", nil, 200)["incidents"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("清理丢失活动故障或复活旧记录: %v", rows)
+	}
+}
+
+func TestIncidentsScaleKeepsControlAndAutomaticSwitchWorking(t *testing.T) {
+	disk := &interruptedPersistence{}
+	f := newBlockedEntryRig(t, true, func(d *panel.Dependencies) { disk.base = d.Persistence; d.Persistence = disk })
+	ids := []string{}
+	for i := 0; i < 98; i++ {
+		ids = append(ids, addNode(f.c, fmt.Sprintf("规模入口 %d", i))["id"].(string))
+	}
+	bodies := []map[string]any{}
+	for i := 0; i < 999; i++ {
+		b := directBody("", 20000+i/98, "8.8.8.8", 443)
+		delete(b, "entry_group_id")
+		b["entry_node_id"] = ids[i%98]
+		bodies = append(bodies, b)
+	}
+	for start := 0; start < len(bodies); start += 500 {
+		end := min(start+500, len(bodies))
+		importRules(f.c, "", "create", map[string]any{"format_version": 2, "rules": bodies[start:end]}, 200)
+	}
+	check := func() time.Duration {
+		start := time.Now()
+		v := operations(t, f.c)
+		counts := v["counts"].(map[string]any)
+		if counts["nodes"] != float64(100) || counts["rules"] != float64(1000) {
+			t.Fatalf("规模数据不完整: %v", counts)
+		}
+		return time.Since(start)
+	}
+	baseline := check()
+	now := f.h.Clock.Now().UnixNano()
+	if _, err := disk.db.Exec(`WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10000) INSERT INTO operation_incidents(source_key,kind,title,impact,handling,started_at,updated_at,ended_at,closure,refs,reasons) SELECT 'scale:'||x,'rule','已结束样例','cleared','ended',?,?,?,'异常解除','[]','[]' FROM n`, now, now, now); err != nil {
+		t.Fatal(err)
+	}
+	loaded := check()
+	page := f.c.Do("GET", "/api/incidents?status=ended&limit=100", nil, 200)
+	if len(page["incidents"].([]any)) != 100 || page["next_before"] == nil {
+		t.Fatal("规模历史未分页")
+	}
+	f.c.Do("GET", "/api/incidents?status=ended&limit=100&before="+page["next_before"].(string), nil, 200)
+	f.block(t, 0)
+	f.awaitPublication(t, f.ids[1], 2)
+	row := awaitIncident(t, f.h, f.c, "blocked")
+	awaitIncidentEntry(t, f.h, f.c, row["id"].(string), func(e map[string]any) bool { return e["stage"] == "服务商已写入" })
+	for _, id := range f.ids {
+		if !connected(nodeRow(t, f.c, id)) {
+			t.Fatal("规模整理阻塞控制报告")
+		}
+	}
+	if f.dns.Writes() != 2 || f.calls.Load() != 0 {
+		t.Fatalf("规模展示改变自动动作: DNS=%d 换 IP=%d", f.dns.Writes(), f.calls.Load())
+	}
+	t.Logf("100 节点 / 1000 规则概览：历史装载前 %s，10000 条结束故障后 %s；自动切换和控制报告正常", baseline, loaded)
 }
