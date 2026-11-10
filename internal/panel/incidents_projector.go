@@ -45,6 +45,14 @@ func (p *Panel) projectIncidents(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	blocked, err := collectBlockedIncidents(ctx, tx, view)
+	if err != nil {
+		return err
+	}
+	observations = append(observations, blocked...)
+	if err = attachEntryIncidentProgress(ctx, tx, observations, view); err != nil {
+		return err
+	}
 	for _, o := range observations {
 		if err = saveIncidentObservation(ctx, tx, o, view.GeneratedAt); err != nil {
 			return err

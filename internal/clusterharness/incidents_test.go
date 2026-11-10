@@ -57,3 +57,23 @@ func TestIncidentsOfflineSurvivesRestartAndKeepsHistory(t *testing.T) {
 	c.Do("GET", "/api/incidents?limit=0", nil, 400)
 	c.Do("GET", "/api/incidents/missing", nil, 404)
 }
+
+func TestIncidentsBlockedLinksEntryDecisionAndAction(t *testing.T) {
+	f := newBlockedEntryRig(t, true)
+	f.block(t, 0)
+	f.awaitPublication(t, f.ids[1], 2)
+	row := awaitIncident(t, f.h, f.c, "blocked")
+	timeline := f.c.Do("GET", "/api/incidents/"+row["id"].(string)+"/timeline", nil, 200)["entries"].([]any)
+	found := false
+	for _, v := range timeline {
+		if v.(map[string]any)["stage"] == "服务商已写入" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("被墙故障未包含实际切换动作: %v", timeline)
+	}
+	if f.calls.Load() != 0 {
+		t.Fatal("只读追踪发起换 IP")
+	}
+}
