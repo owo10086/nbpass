@@ -54,7 +54,9 @@ func tunnelAuthorizationProtocolFixture(t *testing.T) (*Panel, string, string, [
 func TestTunnelAuthorizationConfirmationReportIsolation(t *testing.T) {
 	p, entry, exit, tokenDigest, s := tunnelAuthorizationProtocolFixture(t)
 	session := &controlSession{done: make(chan struct{}), changed: make(chan struct{}, 1), instance: "current"}
+	p.controlMu.Lock()
 	p.controls[exit] = session
+	p.controlMu.Unlock()
 	report := &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "current", AttemptedRevision: s.Revision, AttemptedDigest: s.Digest, AppliedRevision: s.Revision, AppliedDigest: s.Digest, RevocationsApplied: true}
 	assertGate := func(want int) {
 		t.Helper()
@@ -254,7 +256,9 @@ func TestLegacyTunnelAuthorizationSurvivesRollingUpgrade(t *testing.T) {
 					t.Fatal("双端升级后未先准备新授权再门禁入口")
 				}
 				session := &controlSession{done: make(chan struct{}), changed: make(chan struct{}, 1), instance: "upgraded"}
+				p.controlMu.Lock()
 				p.controls[exit] = session
+				p.controlMu.Unlock()
 				s := compiledExit.Snapshot
 				if _, err := p.acceptReport(context.Background(), exit, tokenDigest, session, &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "upgraded", AttemptedRevision: s.Revision, AppliedRevision: s.Revision, AttemptedDigest: s.Digest, AppliedDigest: s.Digest, RevocationsApplied: true}); err != nil {
 					t.Fatal(err)

@@ -30,7 +30,9 @@ func TestRotationSecretCiphertextAndCommandScope(t *testing.T) {
 	const secret = "rotation-plaintext-secret-marker-28"
 	config := rotation.Config{URL: "https://vendor.example/change?key=" + secret, Method: "POST", Headers: map[string]string{"Authorization": "Bearer " + secret}, Body: `{"key":"` + secret + `"}`}
 	diskRequest(t, p, "PUT", path, config, cookie, 200)
+	p.controlMu.Lock()
 	p.controls[ids[0]] = &controlSession{done: make(chan struct{}), changed: make(chan struct{}, 1)}
+	p.controlMu.Unlock()
 	if _, err := p.db.Exec("UPDATE nodes SET last_seen_at=? WHERE id=?", p.deps.Clock.Now().UnixNano(), ids[0]); err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +86,9 @@ func TestRotationProgressIsIndependentOfOtherReports(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := &controlSession{instance: "instance", done: make(chan struct{})}
+	p.controlMu.Lock()
 	p.controls["n"] = session
+	p.controlMu.Unlock()
 	report := &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "instance", RotationOnly: true, Rotation: &controlpb.RotationProgress{ActionId: "a", OldIp: "8.8.8.8", State: "observing", Reason: "observing", Sequence: 1}, PublicIpv4: "1.1.1.1", AppliedRevision: 5, Probe: &controlpb.ProbeSample{Sequence: 1, Values: map[string]float64{"cpu_percent": 50}}, Events: []*controlpb.Event{{EventId: "malicious"}}}
 	if _, err := p.acceptReport(ctx, "n", digest, session, report); err != nil {
 		t.Fatal(err)

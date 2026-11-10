@@ -17,7 +17,9 @@ func TestRecoveryPayloadCannotRideIndependentReports(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := &controlSession{done: make(chan struct{}), instance: "instance"}
+	p.controlMu.Lock()
 	p.controls["n"] = session
+	p.controlMu.Unlock()
 	for _, kind := range []string{"probe", "events", "self", "checker", "dns", "traffic", "rotation", "config"} {
 		report := &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "instance", Recovery: &controlpb.RecoveryReport{HighWater: 999}, ProbeOnly: kind == "probe", EventsOnly: kind == "events", SelfCheckOnly: kind == "self", CheckerOnly: kind == "checker", DnsWatchOnly: kind == "dns", TrafficOnly: kind == "traffic", RotationOnly: kind == "rotation"}
 		if kind == "rotation" {
