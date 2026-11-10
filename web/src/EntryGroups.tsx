@@ -62,7 +62,7 @@ export function EntryGroups({ focus, onSessionExpired }: { focus?: string; onSes
       { title: '成员（按优先级）', render: (_, row) => row.members.map((id, i) => `${nodes.find(n => n.id === id)?.name ?? id}${i === 0 ? '（首选入口）' : ''}`).join('、') },
       { title: '受管记录', render: (_, row) => <Tag>{row.publication_status}</Tag> },
       { title: '同步状态', render: (_, row) => <SyncTag status={row.sync_status} /> },
-      { title: '', key: 'actions', align: 'right', render: (_, row) => <div className="row-actions"><Button size="small" type="text" onClick={() => edit(row)}>编辑</Button><Button size="small" type="text" onClick={() => setManagingDNS(row)}>受管记录与发布</Button><Popconfirm title="删除入口组？" description="须先删除该入口组的转发规则。" onConfirm={() => remove(row.id)}><Button danger size="small" type="text">删除</Button></Popconfirm></div> },
+      { title: '', key: 'actions', align: 'right', render: (_, row) => <div className="row-actions"><Button size="small" type="text" onClick={() => edit(row)}>编辑</Button><Button size="small" type="text" onClick={() => setManagingDNS(row)}>受管记录与发布</Button><Popconfirm title="删除入口组？" description="须先删除该入口组的转发规则。解绑后的旧 DNSPod 记录保持原状，请自行核对处理。" onConfirm={() => remove(row.id)}><Button danger size="small" type="text">删除</Button></Popconfirm></div> },
     ]} /></div>
     {managingDNS && <ManagedDNS key={managingDNS.id} group={managingDNS} nodes={nodes} onClose={() => { setManagingDNS(null); void load(); }} onSessionExpired={onSessionExpired} />}
     <Modal title={editing ? '编辑入口组' : '创建入口组'} open={editing !== undefined} onCancel={() => { setEditing(undefined); form.resetFields(); }} footer={null} forceRender>

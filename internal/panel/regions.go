@@ -26,6 +26,7 @@ const regionMigration = `CREATE TABLE node_regions (
 
 type nodeRegionView struct {
 	PublicIPv4      string `json:"public_ipv4"`
+	ConfirmedIPv4   string `json:"confirmed_ipv4"`
 	Region          Region `json:"region"`
 	AutomaticRegion Region `json:"automatic_region"`
 	RegionSource    string `json:"region_source"`
@@ -71,6 +72,9 @@ func (p *Panel) recordNodeIP(ctx context.Context, id, ip string) error {
 		VALUES(?, ?, ?, ?,?) ON CONFLICT(node_id) DO UPDATE SET public_ipv4 = excluded.public_ipv4,
 		auto_name = excluded.auto_name, auto_mainland = excluded.auto_mainland,
  domestic_since=CASE WHEN node_regions.public_ipv4<>excluded.public_ipv4 THEN excluded.domestic_since ELSE node_regions.domestic_since END`, id, ip, region.Name, region.MainlandChina, p.deps.Clock.Now().UnixNano())
+	if err == nil {
+		_ = p.notifyNodeAddressDrift(ctx)
+	}
 	return err
 }
 

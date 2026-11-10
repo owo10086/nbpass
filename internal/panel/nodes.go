@@ -112,7 +112,7 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 	defer p.controlMu.Unlock()
 	rows, err := p.db.QueryContext(r.Context(), `SELECT id, name, last_seen_at, disconnected_at, maintenance_until,
 		desired_revision, applied_revision, software_version, process_instance, apply_error, applied_digest, COALESCE((SELECT digest FROM node_snapshots WHERE node_id=nodes.id),''),
-		COALESCE(public_ipv4, ''), COALESCE(auto_name, '未知'), COALESCE(auto_mainland, 0),
+		COALESCE(public_ipv4, ''), COALESCE(confirmed_ipv4, ''), COALESCE(auto_name, '未知'), COALESCE(auto_mainland, 0),
 		override_name, COALESCE(override_mainland, 0), COALESCE(checker_disabled, 0)
 		FROM nodes LEFT JOIN node_regions ON node_id = id ORDER BY created_at, id`)
 	if err != nil {
@@ -128,7 +128,7 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 		var override sql.NullString
 		var mainland bool
 		if err := rows.Scan(&n.ID, &n.Name, &last, &disconnected, &maintenance, &n.DesiredRevision, &n.AppliedRevision, &n.SoftwareVersion, &n.ProcessInstance, &n.ApplyError, &n.AppliedDigest, &n.DesiredDigest,
-			&n.PublicIPv4, &n.AutomaticRegion.Name, &n.AutomaticRegion.MainlandChina, &override, &mainland, &n.CheckerDisabled); err != nil {
+			&n.PublicIPv4, &n.ConfirmedIPv4, &n.AutomaticRegion.Name, &n.AutomaticRegion.MainlandChina, &override, &mainland, &n.CheckerDisabled); err != nil {
 			problem(w, 503, "存储暂不可用")
 			return
 		}

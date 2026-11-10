@@ -15,7 +15,7 @@ import (
 // 自动监控与绑定共用事务。已有手工监控转为入口组管理，保留变化历史。
 func (p *Panel) bindEntryDomainWatch(ctx context.Context, tx *sql.Tx, group string) error {
 	var domain, name string
-	if err := tx.QueryRowContext(ctx, "SELECT domain,name FROM managed_records WHERE group_id=?", group).Scan(&domain, &name); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT domain,name FROM managed_records WHERE group_id=? AND owner_kind='group'", group).Scan(&domain, &name); err != nil {
 		return err
 	}
 	if name != "@" {

@@ -77,6 +77,21 @@ func (p *Panel) importRecoveryRotation(ctx context.Context, tx *sql.Tx, id strin
 	if err == nil && progress.State == "cancelled" {
 		_, err = tx.ExecContext(ctx, "DELETE FROM rotation_quota WHERE action_id=?", a.ActionId)
 	}
+	if err == nil && progress.State == "changed" {
+		// 只采纳最新成功动作，且不能覆盖动作之后的人工确认。
+		var adopt bool
+		err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM nodes n LEFT JOIN node_regions r ON r.node_id=n.id WHERE n.id=? AND coalesce(r.confirmed_at,0)<=? AND coalesce(r.confirmed_ipv4,'')<>?
+ AND NOT EXISTS(SELECT 1 FROM rotation_actions newer JOIN rotation_actions current ON current.id=? WHERE newer.node_id=n.id AND newer.state='changed' AND (newer.created_at,newer.rowid)>(current.created_at,current.rowid)))`, id, a.AttemptedAt, progress.NewIp, a.ActionId).Scan(&adopt)
+		if err == nil && adopt {
+			err = confirmNodeAddressAtTx(ctx, tx, id, progress.NewIp, a.AttemptedAt)
+			if err == nil {
+				_, err = tx.ExecContext(ctx, `UPDATE recovery_records SET verified=0 WHERE managed_record_id IN (SELECT id FROM managed_records WHERE node_id=? OR group_id IN (SELECT group_id FROM entry_group_members WHERE node_id=?))`, id, id)
+			}
+			if err == nil {
+				_, err = tx.ExecContext(ctx, `UPDATE recovery_groups SET verified=0 WHERE group_id IN (SELECT group_id FROM entry_group_members WHERE node_id=?)`, id)
+			}
+		}
+	}
 	return err
 }
 
