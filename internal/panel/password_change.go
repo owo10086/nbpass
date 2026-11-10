@@ -59,7 +59,7 @@ func (p *Panel) changePassword(w http.ResponseWriter, r *http.Request) {
 	if p.lockedLogin(w, budget.lockedUntil) {
 		return
 	}
-	cookie, err := r.Cookie(sessionCookie)
+	cookie, err := r.Cookie(p.sessionCookie())
 	if err != nil {
 		problem(w, 401, "请重新登录面板")
 		return
@@ -89,6 +89,6 @@ func (p *Panel) changePassword(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "存储暂不可用")
 		return
 	}
-	clearSession(w)
+	p.clearSession(w)
 	respond(w, 204, nil)
 }

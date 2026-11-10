@@ -47,7 +47,7 @@ func run(ctx context.Context) error {
 	controlAddress := flag.String("control-listen", "127.0.0.1:8081", "gRPC 控制监听地址")
 	controlURL := flag.String("control-url", "", "节点访问的 HTTPS 控制地址，默认与 public-origin 相同")
 	trustedControl := flag.Bool("trust-control-network", false, "明确确认控制地址位于可信网络，允许非回环监听")
-	origin := flag.String("public-origin", "", "浏览器访问面板的 HTTPS 源，例如 https://panel.example.com（必填）")
+	origin := flag.String("public-origin", "", "浏览器访问面板的 HTTPS 源，例如 https://panel.example.com（必填）；本机开发可用 http://127.0.0.1:8080")
 	dir := flag.String("data-dir", "data", "数据库和本机密钥的专用目录")
 	concurrency := flag.Int("password-concurrency", 4, "密码哈希和校验的最大并发")
 	flag.Parse()

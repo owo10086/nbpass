@@ -76,7 +76,7 @@ func TestPanelDatabaseAndWALNeverContainPlaintextCredentials(t *testing.T) {
 	diskRequest(t, p, "POST", "/api/auth/setup", map[string]string{"password": password}, nil, 201)
 	response := diskRequest(t, p, "POST", "/api/auth/login", map[string]string{"password": password}, nil, 200)
 	cookies := response.Result().Cookies()
-	if len(cookies) != 1 || cookies[0].Name != sessionCookie || len(cookies[0].Value) != 43 {
+	if len(cookies) != 1 || cookies[0].Name != p.sessionCookie() || len(cookies[0].Value) != 43 {
 		t.Fatal("login did not return a session token")
 	}
 	cookie := cookies[0]

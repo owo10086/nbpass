@@ -82,10 +82,15 @@ type Panel struct {
 
 func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error) {
 	origin, err := url.Parse(config.PublicOrigin)
-	if err != nil || origin == nil || origin.Scheme != "https" || origin.Hostname() == "" || origin.User != nil || (origin.Path != "" && origin.Path != "/") || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" {
+	if err != nil || origin == nil || origin.Hostname() == "" || origin.User != nil || (origin.Path != "" && origin.Path != "/") || origin.RawQuery != "" || origin.ForceQuery || origin.Fragment != "" {
 		return nil, errors.New("public-origin 必须是不带路径的 HTTPS 源地址")
 	}
 	host := strings.ToLower(origin.Hostname())
+	// 本机开发可直接用 http 访问回环地址；会话不经过网络，其他地址仍必须 HTTPS。
+	if origin.Scheme != "https" && (origin.Scheme != "http" || !loopbackHost(host)) {
+		return nil, errors.New("public-origin 必须是不带路径的 HTTPS 源地址；本机开发可用 http://127.0.0.1 或 http://localhost")
+	}
+	defaultPort := map[string]string{"https": "443", "http": "80"}[origin.Scheme]
 	port := origin.Port()
 	if port != "" {
 		number, err := strconv.Atoi(port)
@@ -93,14 +98,15 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 			return nil, errors.New("public-origin 端口无效")
 		}
 	}
-	if port != "" && port != "443" {
+	if port != "" && port != defaultPort {
 		host = net.JoinHostPort(host, port)
 	} else if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
-	config.PublicOrigin = "https://" + host
+	config.PublicOrigin = origin.Scheme + "://" + host
 	if config.ControlURL == "" {
-		config.ControlURL = config.PublicOrigin
+		// 节点控制连接始终校验 TLS；本机 http 开发未指定时只占位，不能用于接入节点。
+		config.ControlURL = "https://" + host
 	}
 	controlURL, err := url.Parse(config.ControlURL)
 	if err != nil || controlURL.Scheme != "https" || controlURL.Hostname() == "" || controlURL.User != nil || controlURL.Path != "" || controlURL.RawQuery != "" || controlURL.ForceQuery || controlURL.Fragment != "" {
@@ -193,6 +199,14 @@ func (p *Panel) Close() error {
 }
 
 func (p *Panel) Secrets() SecretStore { return p.secrets }
+
+func loopbackHost(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	address, err := netip.ParseAddr(host)
+	return err == nil && address.IsLoopback()
+}
 
 type lockedReader struct {
 	sync.Mutex

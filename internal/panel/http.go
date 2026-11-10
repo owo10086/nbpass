@@ -74,7 +74,7 @@ func (p *Panel) Handler() http.Handler {
 					return
 				}
 				if !valid {
-					clearSession(w)
+					p.clearSession(w)
 					problem(w, http.StatusUnauthorized, "请登录面板")
 					return
 				}

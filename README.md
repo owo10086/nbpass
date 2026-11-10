@@ -103,7 +103,7 @@ sudo systemctl is-active nbpass-node.service nbpass-update.service
 | `nbpass upgrade -data-dir ... -backup-dir ... -program ...` | 先备份，再执行数据库迁移（需先停服务） |
 | `nbpass restore -backup-dir ... -data-dir ...` | 从备份恢复到新的数据目录 |
 
-完整参数和操作顺序见 [部署文档第 5 节](./docs/deploy-linux.md)。开发时可用 `make build` 构建本机产物，用 `make test` 运行 `go vet` 和全部测试。
+完整参数和操作顺序见 [部署文档第 5 节](./docs/deploy-linux.md)。开发时可用 `make build` 构建本机产物，用 `make test` 运行 `go vet` 和全部测试。本机运行面板调试时不需要 HTTPS：`go run ./cmd/nbpass -data-dir /tmp/nbpass-dev -public-origin http://127.0.0.1:8080`，浏览器打开 `http://127.0.0.1:8080`。http 源只接受 `127.0.0.1`、`::1` 和 `localhost`；这种模式下节点无法接入，因为控制连接始终校验 TLS。
 
 ## 文档
 

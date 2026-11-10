@@ -7,10 +7,9 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
-
-const sessionCookie = "__Host-nbpass_session"
 
 func (p *Panel) configured(r *http.Request) (bool, error) {
 	var count int
@@ -131,12 +130,12 @@ func (p *Panel) login(w http.ResponseWriter, r *http.Request) {
 		problem(w, 401, "密码错误或密码已变更")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: 7 * 24 * 60 * 60, Expires: now.Add(7 * 24 * time.Hour)})
+	http.SetCookie(w, &http.Cookie{Name: p.sessionCookie(), Value: value, Path: "/", HttpOnly: true, Secure: p.secureOrigin(), SameSite: http.SameSiteStrictMode, MaxAge: 7 * 24 * 60 * 60, Expires: now.Add(7 * 24 * time.Hour)})
 	respond(w, 200, map[string]bool{"authenticated": true})
 }
 
 func (p *Panel) authenticate(r *http.Request) (bool, error) {
-	cookie, err := r.Cookie(sessionCookie)
+	cookie, err := r.Cookie(p.sessionCookie())
 	if err != nil || len(cookie.Value) != 43 {
 		return false, nil
 	}
@@ -154,7 +153,7 @@ func (p *Panel) authenticate(r *http.Request) (bool, error) {
 }
 
 func (p *Panel) logout(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie(sessionCookie)
+	cookie, err := r.Cookie(p.sessionCookie())
 	if err != nil {
 		problem(w, 401, "请登录面板")
 		return
@@ -164,7 +163,7 @@ func (p *Panel) logout(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "存储暂不可用")
 		return
 	}
-	clearSession(w)
+	p.clearSession(w)
 	respond(w, 204, nil)
 }
 
@@ -173,10 +172,19 @@ func (p *Panel) revokeSessions(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "存储暂不可用")
 		return
 	}
-	clearSession(w)
+	p.clearSession(w)
 	respond(w, 204, nil)
 }
 
-func clearSession(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: -1, Expires: time.Unix(1, 0)})
+// 本机 http 开发不能使用要求 Secure 的 __Host- 前缀，改用普通名称且不设 Secure。
+func (p *Panel) secureOrigin() bool { return strings.HasPrefix(p.config.PublicOrigin, "https://") }
+func (p *Panel) sessionCookie() string {
+	if p.secureOrigin() {
+		return "__Host-nbpass_session"
+	}
+	return "nbpass_session"
+}
+
+func (p *Panel) clearSession(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: p.sessionCookie(), Value: "", Path: "/", HttpOnly: true, Secure: p.secureOrigin(), SameSite: http.SameSiteStrictMode, MaxAge: -1, Expires: time.Unix(1, 0)})
 }
