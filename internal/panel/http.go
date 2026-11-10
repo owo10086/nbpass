@@ -19,6 +19,7 @@ func (p *Panel) Handler() http.Handler {
 	p.selfCheckRoutes(mux)
 	p.dnsWatchRoutes(mux)
 	p.retentionRoutes(mux)
+	p.incidentRoutes(mux)
 	mux.HandleFunc("GET /api/auth/status", p.status)
 	mux.HandleFunc("POST /api/auth/setup", p.setup)
 	mux.HandleFunc("POST /api/auth/login", p.login)

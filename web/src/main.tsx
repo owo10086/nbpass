@@ -13,6 +13,7 @@ import { EntryGroups } from './EntryGroups';
 import { ExitGroups } from './ExitGroups';
 import { Rules } from './Rules';
 import { Nodes } from './Nodes';
+import { Incidents } from './Incidents';
 import { Events } from './Events';
 import { Security } from './Security';
 import { Telegram } from './Telegram';
@@ -35,6 +36,7 @@ const navigation: { title?: string; items: { page: Page; label: string; icon: Re
   ] },
   { title: '监控', items: [
     { page: 'dns-watch', label: '解析监控', icon: <GlobalOutlined /> },
+    { page: 'incidents', label: '故障', icon: <HistoryOutlined /> },
     { page: 'events', label: '事件日志', icon: <UnorderedListOutlined /> },
   ] },
   { title: '设置', items: [
@@ -137,6 +139,7 @@ function App() {
               : page === 'exit-groups' ? <ExitGroups onSessionExpired={expired} />
               : page === 'rules' ? <Rules onSessionExpired={expired} />
               : page === 'dns-watch' ? <DNSWatch onSessionExpired={expired} />
+              : page === 'incidents' ? <Incidents focus={route.focus} operations={operations.data} onSessionExpired={expired} />
               : page === 'events' ? <Events onSessionExpired={expired} />
               : page === 'telegram' ? <Telegram onSessionExpired={expired} />
               : page === 'retention' ? <Retention onSessionExpired={expired} />
