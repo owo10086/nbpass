@@ -41,7 +41,9 @@ func TestSelfCheckReportPayloadsAreIndependent(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := &controlSession{done: make(chan struct{}), instance: "instance"}
+	p.controlMu.Lock()
 	p.controls["n"] = session
+	p.controlMu.Unlock()
 	wire := selfCheckWire(t, 1, now)
 	report := &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "instance", SelfCheckOnly: true, SelfCheckResults: [][]byte{wire}, PublicIpv4: "1.1.1.1", AppliedRevision: 7, AppliedDigest: "expected", AttemptedRevision: 7, Probe: &controlpb.ProbeSample{Sequence: 1, Values: map[string]float64{"cpu_percent": 50}}, Events: []*controlpb.Event{{EventId: "unrelated-invalid-event"}}}
 	response, err := p.acceptReport(ctx, "n", digest[:], session, report)

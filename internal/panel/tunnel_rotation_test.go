@@ -34,7 +34,9 @@ func TestTunnelRotationConfirmationIsolation(t *testing.T) {
 	}
 	exitSession := &controlSession{done: make(chan struct{}), changed: make(chan struct{}, 1), instance: "current"}
 	entrySession := &controlSession{done: make(chan struct{}), changed: make(chan struct{}, 1), instance: "current"}
+	p.controlMu.Lock()
 	p.controls[exit], p.controls[entry] = exitSession, entrySession
+	p.controlMu.Unlock()
 	if _, err := p.acceptReport(ctx, exit, exitToken, exitSession, rotationReport(initial)); err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +290,9 @@ func TestTunnelRotationRemovedEntryDoesNotBlockTrustCleanup(t *testing.T) {
 	}
 	xs := &controlSession{done: make(chan struct{}), changed: make(chan struct{}, 1), instance: "current"}
 	es := &controlSession{done: make(chan struct{}), changed: make(chan struct{}, 1), instance: "current"}
+	p.controlMu.Lock()
 	p.controls[exit], p.controls[entry] = xs, es
+	p.controlMu.Unlock()
 	if _, err := p.acceptReport(ctx, exit, exitToken, xs, rotationReport(initial)); err != nil {
 		t.Fatal(err)
 	}

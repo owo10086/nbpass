@@ -22,7 +22,9 @@ func TestIndependentReportsAcknowledgeEventsWithoutAdvancingOtherState(t *testin
 				t.Fatal(err)
 			}
 			session := &controlSession{done: make(chan struct{}), instance: "process"}
+			p.controlMu.Lock()
 			p.controls["existing"] = session
+			p.controlMu.Unlock()
 			report := &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "process", AppliedRevision: 7, PublicIpv4: "223.5.5.5", EventsOnly: kind == "events", ProbeOnly: kind == "probe", Events: []*controlpb.Event{(eventlog.Event{ID: "independent-event", Type: "sync_failed", OccurredAt: time.Now(), Message: "安全摘要"}).Proto()}}
 			response, err := p.acceptReport(context.Background(), "existing", digest[:], session, report)
 			if err != nil {
@@ -100,7 +102,9 @@ func TestConfigAcknowledgementDoesNotAdvanceOtherReportState(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := &controlSession{done: make(chan struct{}), instance: "process"}
+	p.controlMu.Lock()
 	p.controls["config"] = session
+	p.controlMu.Unlock()
 	report := &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "process", AttemptedRevision: 7, AppliedRevision: 7, AppliedDigest: "expected", PublicIpv4: "223.5.5.5", Probe: &controlpb.ProbeSample{Sequence: 1, Values: map[string]float64{"cpu_percent": 25}}}
 	if _, err := p.acceptReport(context.Background(), "config", digest[:], session, report); err != nil {
 		t.Fatal(err)

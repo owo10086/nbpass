@@ -90,7 +90,9 @@ func TestExitHealthIsNotConsumedByOtherReportCategories(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := &controlSession{done: make(chan struct{}), instance: "process"}
+	p.controlMu.Lock()
 	p.controls["entry"] = session
+	p.controlMu.Unlock()
 	for _, kind := range []string{"events", "rotation", "self_check", "dns_watch", "traffic", "checker"} {
 		t.Run(kind, func(t *testing.T) {
 			report := &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "process", AppliedRevision: 7, AttemptedRevision: 7, Probe: &controlpb.ProbeSample{Sequence: 1, ExitHealth: []*controlpb.ExitHealth{{ExitId: "unrelated", State: "healthy"}}}}
