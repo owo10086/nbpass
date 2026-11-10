@@ -15,26 +15,31 @@ import (
 )
 
 type managedRecord struct {
-	GroupID      string   `json:"group_id"`
-	AccountID    string   `json:"account_id"`
-	Provider     string   `json:"provider"`
-	Domain       string   `json:"domain"`
-	RecordID     string   `json:"record_id"`
-	Name         string   `json:"name"`
-	Hostname     string   `json:"hostname"`
-	Line         string   `json:"line"`
-	LineID       string   `json:"line_id"`
-	CurrentValue string   `json:"current_value"`
-	CurrentTTL   int      `json:"current_ttl"`
-	Warnings     []string `json:"warnings"`
+	ID                string   `json:"id"`
+	OwnerKind         string   `json:"owner_kind"`
+	NodeID            string   `json:"node_id,omitempty"`
+	BindingGeneration int64    `json:"binding_generation"`
+	CurrentEnabled    bool     `json:"current_enabled"`
+	GroupID           string   `json:"group_id"`
+	AccountID         string   `json:"account_id"`
+	Provider          string   `json:"provider"`
+	Domain            string   `json:"domain"`
+	RecordID          string   `json:"record_id"`
+	Name              string   `json:"name"`
+	Hostname          string   `json:"hostname"`
+	Line              string   `json:"line"`
+	LineID            string   `json:"line_id"`
+	CurrentValue      string   `json:"current_value"`
+	CurrentTTL        int      `json:"current_ttl"`
+	Warnings          []string `json:"warnings"`
 }
 
-const managedColumns = `group_id,account_id,provider,domain,record_id,name,line,line_id,current_value,current_ttl,warnings`
+const managedColumns = `coalesce(group_id,''),account_id,provider,domain,record_id,name,line,line_id,current_value,current_ttl,warnings,id,owner_kind,coalesce(node_id,''),binding_generation,current_enabled`
 
 func scanManaged(row scanner) (managedRecord, error) {
 	var b managedRecord
 	var warnings string
-	err := row.Scan(&b.GroupID, &b.AccountID, &b.Provider, &b.Domain, &b.RecordID, &b.Name, &b.Line, &b.LineID, &b.CurrentValue, &b.CurrentTTL, &warnings)
+	err := row.Scan(&b.GroupID, &b.AccountID, &b.Provider, &b.Domain, &b.RecordID, &b.Name, &b.Line, &b.LineID, &b.CurrentValue, &b.CurrentTTL, &warnings, &b.ID, &b.OwnerKind, &b.NodeID, &b.BindingGeneration, &b.CurrentEnabled)
 	if err == nil {
 		err = json.Unmarshal([]byte(warnings), &b.Warnings)
 	}
@@ -45,7 +50,7 @@ func scanManaged(row scanner) (managedRecord, error) {
 	return b, err
 }
 func (p *Panel) loadManaged(ctx context.Context, gid string) (managedRecord, error) {
-	return scanManaged(p.db.QueryRowContext(ctx, "SELECT "+managedColumns+" FROM managed_records WHERE group_id=?", gid))
+	return scanManaged(p.db.QueryRowContext(ctx, "SELECT "+managedColumns+" FROM managed_records WHERE group_id=? AND owner_kind='group'", gid))
 }
 func (p *Panel) getManagedRecord(w http.ResponseWriter, r *http.Request) {
 	b, err := p.loadManaged(r.Context(), r.PathValue("id"))
@@ -61,8 +66,8 @@ func (p *Panel) getManagedRecord(w http.ResponseWriter, r *http.Request) {
 }
 func recordWarnings(result dnsprovider.ReadResult, expectedID, lineID string) ([]string, error) {
 	r := result.Record
-	if r.ID != expectedID || r.Type != "A" || r.Proxied || !r.Enabled || r.LineID != lineID || r.LineID == "" || r.TTL < 1 {
-		return nil, errors.New("仅支持启用的 DNS-only A 记录和已确认的单一线路")
+	if r.ID != expectedID || r.Type != "A" || r.Proxied || r.LineID != lineID || r.LineID == "" || r.TTL < 1 {
+		return nil, errors.New("仅支持 DNS-only A 记录和已确认的单一线路")
 	}
 	if ip, err := netip.ParseAddr(r.Value); err != nil || !ip.Is4() {
 		return nil, errors.New("受管记录当前值不是 IPv4")
@@ -133,6 +138,9 @@ func (p *Panel) bindManagedRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	warnings, err := recordWarnings(result, body.RecordID, body.LineID)
+	if err == nil && !result.Record.Enabled {
+		err = errors.New("主备入口组的受管记录必须启用")
+	}
 	if err != nil {
 		problem(w, 400, err.Error())
 		return
@@ -146,14 +154,14 @@ func (p *Panel) bindManagedRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
-	var owner string
-	err = tx.QueryRowContext(r.Context(), "SELECT group_id FROM managed_records WHERE provider='dnspod' AND domain=? AND record_id=?", domain, body.RecordID).Scan(&owner)
+	var owner, ownerKind string
+	err = tx.QueryRowContext(r.Context(), "SELECT coalesce(group_id,''),owner_kind FROM managed_records WHERE provider='dnspod' AND domain=? AND record_id=?", domain, body.RecordID).Scan(&owner, &ownerKind)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		problem(w, 503, "存储暂不可用")
 		return
 	}
-	if owner != "" && owner != r.PathValue("id") {
-		problem(w, 409, "该 DNSPod 记录已归属其他入口组")
+	if ownerKind != "" && (ownerKind != "group" || owner != r.PathValue("id")) {
+		problem(w, 409, "该 DNSPod 记录已有归属")
 		return
 	}
 	var version int
@@ -166,8 +174,7 @@ func (p *Panel) bindManagedRecord(w http.ResponseWriter, r *http.Request) {
 		problem(w, 409, "已开始发布的入口组不能重新绑定受管记录")
 		return
 	}
-	data, _ := json.Marshal(warnings)
-	_, err = tx.ExecContext(r.Context(), `INSERT INTO managed_records(`+managedColumns+`) VALUES(?,?,'dnspod',?,?,?,?,?,?,?,?) ON CONFLICT(group_id) DO UPDATE SET account_id=excluded.account_id,domain=excluded.domain,record_id=excluded.record_id,name=excluded.name,line=excluded.line,line_id=excluded.line_id,current_value=excluded.current_value,current_ttl=excluded.current_ttl,warnings=excluded.warnings`, r.PathValue("id"), body.AccountID, domain, body.RecordID, result.Record.Name, result.Record.Line, result.Record.LineID, result.Record.Value, result.Record.TTL, string(data))
+	_, err = p.bindRecordTx(r.Context(), tx, managedRecord{OwnerKind: "group", GroupID: r.PathValue("id"), AccountID: body.AccountID, Provider: "dnspod", Domain: domain, RecordID: body.RecordID, Name: result.Record.Name, Line: result.Record.Line, LineID: result.Record.LineID, CurrentValue: result.Record.Value, CurrentTTL: result.Record.TTL, CurrentEnabled: result.Record.Enabled, Warnings: warnings})
 	if err == nil {
 		err = p.bindEntryDomainWatch(r.Context(), tx, r.PathValue("id"))
 	}

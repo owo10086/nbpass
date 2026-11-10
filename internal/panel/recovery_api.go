@@ -1,13 +1,10 @@
 package panel
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"net/http"
 	"time"
-
-	"nbpass/internal/dnsprovider"
 )
 
 func (p *Panel) recoveryRoutes(mux *http.ServeMux) {
@@ -86,12 +83,36 @@ func (p *Panel) getRecovery(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "无法读取恢复状态")
 		return
 	}
+	// 逐条暴露核对结果，节点级记录的错误也能在既有恢复页接口读取。
+	records := []map[string]any{}
+	recordRows, err := p.db.QueryContext(r.Context(), `SELECT m.id,m.owner_kind,coalesce(m.group_id,''),coalesce(m.node_id,''),m.domain,m.record_id,m.binding_generation,coalesce(r.verified,0),coalesce(r.last_error,'') FROM managed_records m JOIN recovery_records r ON r.managed_record_id=m.id ORDER BY m.id`)
+	if err != nil {
+		problem(w, 503, "无法读取逐条恢复状态")
+		return
+	}
+	for recordRows.Next() {
+		var id, kind, group, node, domain, record, message string
+		var generation int64
+		var verified bool
+		if err = recordRows.Scan(&id, &kind, &group, &node, &domain, &record, &generation, &verified, &message); err != nil {
+			break
+		}
+		records = append(records, map[string]any{"managed_record_id": id, "owner_kind": kind, "group_id": group, "node_id": node, "domain": domain, "record_id": record, "binding_generation": generation, "verified": verified, "last_error": message})
+	}
+	if err == nil {
+		err = recordRows.Err()
+	}
+	recordRows.Close()
+	if err != nil {
+		problem(w, 503, "无法读取逐条恢复状态")
+		return
+	}
 	var at *time.Time
 	if restored.Valid {
 		v := time.Unix(0, restored.Int64).UTC()
 		at = &v
 	}
-	respond(w, 200, map[string]any{"restored_at": at, "nodes": nodes, "entry_groups": groups})
+	respond(w, 200, map[string]any{"restored_at": at, "nodes": nodes, "entry_groups": groups, "records": records})
 }
 
 // 核对操作不改 DNS：读取当前服务商记录，采用能由已核对成员证明的现状。
@@ -148,7 +169,7 @@ func (p *Panel) reconcileRecovery(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "无法核对节点状态")
 		return
 	}
-	rows, err = p.db.QueryContext(ctx, "SELECT group_id FROM recovery_groups WHERE verified=0")
+	rows, err = p.db.QueryContext(ctx, `SELECT e.id FROM entry_groups e LEFT JOIN recovery_groups g ON g.group_id=e.id WHERE g.verified=0 OR EXISTS(SELECT 1 FROM managed_records m LEFT JOIN recovery_records r ON r.managed_record_id=m.id WHERE m.group_id=e.id AND (coalesce(r.verified,0)=0 OR r.binding_generation<>m.binding_generation)) ORDER BY e.id`)
 	var gids []string
 	if err == nil {
 		for rows.Next() {
@@ -173,74 +194,44 @@ func (p *Panel) reconcileRecovery(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			message = e.Error()
 		}
-		_, err = p.db.ExecContext(ctx, `INSERT INTO recovery_groups(group_id,verified,last_error) VALUES(?,?,?) ON CONFLICT(group_id) DO UPDATE SET verified=excluded.verified,last_error=excluded.last_error`, gid, e == nil, message)
+		// 成功放行已在最后复核事务内完成；这里只保存失败，不能覆盖并发失效。
+		if e != nil {
+			_, err = p.db.ExecContext(ctx, `INSERT INTO recovery_groups(group_id,verified,last_error) VALUES(?,0,?) ON CONFLICT(group_id) DO UPDATE SET verified=0,last_error=excluded.last_error`, gid, message)
+		}
 	}
 	if err != nil {
 		problem(w, 503, "无法保存核对结果")
 		return
 	}
+	// 节点级记录不属于任何组，也必须通过同一逐记录核对后才能放行。
+	recordRows, e := p.db.QueryContext(ctx, "SELECT "+managedColumns+" FROM managed_records WHERE owner_kind='node' ORDER BY id")
+	if e != nil {
+		problem(w, 503, "无法读取节点受管记录")
+		return
+	}
+	var records []managedRecord
+	for recordRows.Next() {
+		b, scanErr := scanManaged(recordRows)
+		if scanErr != nil {
+			e = scanErr
+			break
+		}
+		records = append(records, b)
+	}
+	if e == nil {
+		e = recordRows.Err()
+	}
+	recordRows.Close()
+	if e != nil {
+		problem(w, 503, "无法读取节点受管记录")
+		return
+	}
+	for _, b := range records {
+		_ = p.reconcileRecoveryRecord(ctx, b)
+		p.coordinator.wake("node:" + b.NodeID)
+	}
 	for _, gid := range gids {
 		p.coordinator.wake(gid)
 	}
 	respond(w, 200, map[string]bool{"checked": true})
-}
-
-func (p *Panel) reconcileRecoveryGroup(ctx context.Context, gid string) error {
-	var pending int
-	err := p.db.QueryRowContext(ctx, `SELECT count(*) FROM entry_group_members m LEFT JOIN recovery_nodes r ON r.node_id=m.node_id WHERE m.group_id=? AND r.node_id IS NOT NULL AND (r.high_water IS NULL OR r.verified=0)`, gid).Scan(&pending)
-	if err != nil {
-		return err
-	}
-	if pending > 0 {
-		return errors.New("入口组存在无法核对的节点，自动写继续暂停")
-	}
-	b, err := p.loadManaged(ctx, gid)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	cred, err := p.dnsCredential(ctx, b.AccountID)
-	if err != nil {
-		return errors.New("DNSPod 凭据不可用，自动写继续暂停")
-	}
-	readCtx, cancel := p.dnsContext(ctx)
-	actual, err := p.deps.DNSProvider.ReadRecord(readCtx, dnsprovider.Credentials{TokenID: cred.TokenID, Token: cred.Token}, dnsprovider.Key{Domain: b.Domain, RecordID: b.RecordID})
-	cancel()
-	if err != nil {
-		return errors.New("DNSPod 读回失败，自动写继续暂停")
-	}
-	if _, err = recordWarnings(actual, b.RecordID, b.LineID); err != nil || actual.Record.Name != b.Name {
-		return errors.New("受管记录身份、线路或类型无法核对")
-	}
-	var count int
-	var nodeID string
-	err = p.db.QueryRowContext(ctx, `SELECT count(*),COALESCE(MIN(m.node_id),'') FROM entry_group_members m JOIN node_regions n ON n.node_id=m.node_id WHERE m.group_id=? AND n.public_ipv4=?`, gid, actual.Record.Value).Scan(&count, &nodeID)
-	if err != nil {
-		return err
-	}
-	if count != 1 {
-		return errors.New("实际 DNS 无法唯一对应已核对的入口节点，自动写继续暂停")
-	}
-	tx, err := p.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	// 旧队列封存为已处理，不能重新投递或覆盖服务商当前值。
-	_, err = tx.ExecContext(ctx, `UPDATE entry_actions SET stage=?,last_error='恢复核对已封存旧动作，未重放 DNS 写入' WHERE group_id=? AND stage<>?`, EntryWritten, gid, EntryWritten)
-	if err == nil {
-		_, err = tx.ExecContext(ctx, `UPDATE managed_records SET current_value=?,current_ttl=? WHERE group_id=?`, actual.Record.Value, actual.Record.TTL, gid)
-	}
-	if err == nil {
-		_, err = tx.ExecContext(ctx, `UPDATE entry_publications SET desired_version=desired_version+1,active_node_id=?,expected_value=?,current_action_id='',written_at=? WHERE group_id=? AND (active_node_id<>? OR expected_value<>? OR current_action_id<>'')`, nodeID, actual.Record.Value, p.deps.Clock.Now().UnixNano(), gid, nodeID, actual.Record.Value)
-	}
-	if err == nil {
-		_, err = tx.ExecContext(ctx, "UPDATE entry_groups SET publication_status=? WHERE id=? AND EXISTS(SELECT 1 FROM entry_publications WHERE group_id=?)", EntryWritten, gid, gid)
-	}
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
 }

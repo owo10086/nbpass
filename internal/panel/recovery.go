@@ -141,12 +141,20 @@ func (p *Panel) raiseRecoveryRevision(ctx context.Context, tx *sql.Tx, id string
 	if err == nil {
 		_, err = tx.ExecContext(ctx, "UPDATE recovery_groups SET verified=0 WHERE group_id IN (SELECT group_id FROM entry_group_members WHERE node_id=?)", id)
 	}
+	if err == nil {
+		_, err = tx.ExecContext(ctx, `UPDATE recovery_records SET verified=0 WHERE managed_record_id IN (SELECT id FROM managed_records WHERE node_id=? OR group_id IN (SELECT group_id FROM entry_group_members WHERE node_id=?))`, id, id)
+	}
 	return err
 }
 
 func recoveryGroupAllowed(ctx context.Context, q recoveryQuerier, gid string) (bool, error) {
 	var active, verified, unknown int
 	err := q.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM recovery_state),COALESCE((SELECT verified FROM recovery_groups WHERE group_id=?),1),(SELECT count(*) FROM entry_group_members m JOIN recovery_nodes r ON r.node_id=m.node_id WHERE m.group_id=? AND (r.verified=0 OR r.high_water IS NULL))`, gid, gid).Scan(&active, &verified, &unknown)
+	if err == nil && active > 0 {
+		var records int
+		err = q.QueryRowContext(ctx, `SELECT count(*) FROM managed_records m LEFT JOIN recovery_records r ON r.managed_record_id=m.id WHERE m.group_id=? AND (coalesce(r.verified,0)=0 OR r.binding_generation<>m.binding_generation)`, gid).Scan(&records)
+		unknown += records
+	}
 	return active == 0 || verified == 1 && unknown == 0, err
 }
 
@@ -164,6 +172,10 @@ func (p *Panel) recoveryNodeAllowed(ctx context.Context, q recoveryQuerier, id s
 	var groups, pending int
 	err = q.QueryRowContext(ctx, `SELECT (SELECT count(*) FROM entry_group_members m LEFT JOIN recovery_groups g ON g.group_id=m.group_id WHERE m.node_id=? AND (COALESCE(g.verified,1)=0 OR EXISTS(SELECT 1 FROM entry_group_members m2 JOIN recovery_nodes r2 ON r2.node_id=m2.node_id WHERE m2.group_id=m.group_id AND (r2.verified=0 OR r2.high_water IS NULL)))),(SELECT count(*) FROM recovery_rotation_attempts WHERE node_id=? AND state NOT IN ('changed','released','cancelled'))`, id, id).Scan(&groups, &pending)
 	if err != nil || groups > 0 || pending > 0 {
+		return false, err
+	}
+	var records int
+	if err := q.QueryRowContext(ctx, `SELECT count(*) FROM managed_records m LEFT JOIN recovery_records r ON r.managed_record_id=m.id WHERE m.node_id=? AND EXISTS(SELECT 1 FROM recovery_state) AND (coalesce(r.verified,0)=0 OR r.binding_generation<>m.binding_generation)`, id).Scan(&records); err != nil || records > 0 {
 		return false, err
 	}
 	if tracked && automatic && p.deps.Clock.Now().Before(time.Unix(0, restored).Add(24*time.Hour)) {

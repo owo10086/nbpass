@@ -82,6 +82,11 @@ func (p *Panel) getEntryPublication(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		pub.Action = &a
+		pub.Action.Records, err = loadActionRecords(r.Context(), tx, a.ID)
+		if err != nil {
+			problem(w, 503, "无法读取逐条动作状态")
+			return
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		problem(w, 503, "无法读取发布状态")
@@ -106,8 +111,17 @@ func (p *Panel) listEntryActions(w http.ResponseWriter, r *http.Request) {
 		actions = append(actions, a)
 	}
 	if rows.Err() != nil {
+		rows.Close()
 		problem(w, 503, "无法读取入口动作")
 		return
+	}
+	rows.Close()
+	for i := range actions {
+		actions[i].Records, err = loadActionRecords(r.Context(), p.db, actions[i].ID)
+		if err != nil {
+			problem(w, 503, "无法读取逐条动作状态")
+			return
+		}
 	}
 	respond(w, 200, map[string]any{"actions": actions})
 }

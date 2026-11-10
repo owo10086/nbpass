@@ -64,6 +64,9 @@ func TestManualRotationObservesAddressAndRegionThroughAPI(t *testing.T) {
 	h.Clock.Advance(60 * time.Second)
 	awaitRotation(t, c, path, "changed")
 	row := nodeRow(t, c, id)
+	if row["confirmed_ipv4"] != "8.8.8.8" {
+		t.Fatalf("受控换 IP 没有更新面板确认地址：%v", row)
+	}
 	if row["public_ipv4"] != "8.8.8.8" || row["automatic_region"].(map[string]any)["name"] != "美国" || row["domestic_checker"] != false {
 		t.Fatalf("新IP/地区未更新: %v", row)
 	}

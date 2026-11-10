@@ -470,6 +470,9 @@ func (p *Panel) acceptRotation(ctx context.Context, id string, result *controlpb
 	}
 	if err == nil && result.State == "changed" {
 		_, err = tx.ExecContext(ctx, `INSERT INTO node_regions(node_id,public_ipv4,auto_name,auto_mainland,domestic_since) VALUES(?,?,?,?,?) ON CONFLICT(node_id) DO UPDATE SET public_ipv4=excluded.public_ipv4,auto_name=excluded.auto_name,auto_mainland=excluded.auto_mainland,domestic_since=CASE WHEN node_regions.public_ipv4<>excluded.public_ipv4 THEN excluded.domestic_since ELSE node_regions.domestic_since END`, id, result.NewIp, region.Name, region.MainlandChina, p.deps.Clock.Now().UnixNano())
+		if err == nil && a.State != "changed" {
+			err = p.confirmNodeAddressTx(ctx, tx, id, result.NewIp)
+		}
 	}
 	if err == nil && recheckStatus == "recovered" {
 		var evidence []selfcheck.Round
