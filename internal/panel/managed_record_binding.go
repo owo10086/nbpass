@@ -97,7 +97,7 @@ func (p *Panel) bindRecordTx(ctx context.Context, tx *sql.Tx, b managedRecord) (
 
 func protectRecordBinding(ctx context.Context, tx *sql.Tx, id string) error {
 	var pending bool
-	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM entry_action_records WHERE managed_record_id=? AND stage IN `+pendingRecordStages+`)`, id).Scan(&pending)
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM entry_action_records WHERE managed_record_id=? AND stage IN `+pendingRecordStages+`) OR EXISTS(SELECT 1 FROM node_address_sync_jobs WHERE managed_record_id=?)`, id, id).Scan(&pending)
 	if err != nil {
 		return err
 	}

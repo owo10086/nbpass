@@ -14,7 +14,10 @@ import (
 // 活性上报继续保存 public_ipv4，绝不能以普通上报覆盖此地址。
 // 票 03/04 的手动同步须在同一事务提交相应的逐记录动作，再统一唤醒协调器。
 func (p *Panel) confirmNodeAddressTx(ctx context.Context, tx *sql.Tx, nodeID, address string) error {
-	return confirmNodeAddressAtTx(ctx, tx, nodeID, address, p.deps.Clock.Now().UnixNano())
+	if err := confirmNodeAddressAtTx(ctx, tx, nodeID, address, p.deps.Clock.Now().UnixNano()); err != nil {
+		return err
+	}
+	return p.syncNodeWatchTx(ctx, tx, nodeID)
 }
 
 func confirmNodeAddressAtTx(ctx context.Context, tx *sql.Tx, nodeID, address string, at int64) error {
