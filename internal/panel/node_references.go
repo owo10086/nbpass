@@ -110,7 +110,10 @@ func (p *Panel) removeNode(ctx context.Context, id string) ([]nodeReference, err
 		return refs, err
 	}
 	// 删除运行态和凭据，事件历史没有外键且保留。业务引用绝不级联删除。
-	for _, table := range []string{"installation_tickets", "retired_control_instances", "probe_realtime", "probe_minutes", "node_regions", "node_snapshots"} {
+	// 顺序按外键依赖：入口离线核查先于离线事故，换 IP 额度先于换 IP 动作。
+	for _, table := range []string{"installation_tickets", "retired_control_instances", "probe_realtime", "probe_minutes", "node_regions", "node_snapshots",
+		"entry_offline_checks", "offline_incidents", "node_upgrades", "node_rule_reports", "node_rule_results",
+		"rotation_quota", "rotation_actions", "rotation_policy", "rotation_settings"} {
 		if _, err = tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE node_id=?", id); err != nil {
 			return nil, err
 		}
