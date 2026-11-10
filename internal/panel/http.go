@@ -44,7 +44,7 @@ func (p *Panel) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/nodes/{id}/checker", p.setNodeChecker)
 	mux.HandleFunc("GET /install-node.sh", p.installNode)
 	mux.HandleFunc("GET /downloads/nbpass-node-linux-amd64", p.downloadNode)
-	mux.HandleFunc("GET /api/overview", func(w http.ResponseWriter, r *http.Request) { respond(w, http.StatusOK, map[string]any{}) })
+	mux.HandleFunc("GET /api/overview", p.getOperations)
 	mux.HandleFunc("/", p.frontend)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
