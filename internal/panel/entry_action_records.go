@@ -28,6 +28,8 @@ type RecordActionRequest struct {
 }
 
 type EntryActionRecord struct {
+	PropagationStatus             string `json:"propagation_status"`
+	PropagationNote               string `json:"propagation_note"`
 	ManagedRecordID               string `json:"managed_record_id"`
 	BindingGeneration             int64  `json:"binding_generation"`
 	Provider                      string `json:"provider"`
@@ -48,7 +50,7 @@ type EntryActionRecord struct {
 func loadActionRecords(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, id string) ([]EntryActionRecord, error) {
-	rows, err := q.QueryContext(ctx, `SELECT managed_record_id,binding_generation,provider,domain,record_id,old_value,new_value,old_ttl,new_ttl,old_enabled,new_enabled,stage,last_error,write_started,value_confirmed,explicit_enable,status_started FROM entry_action_records WHERE action_id=? ORDER BY new_enabled DESC,managed_record_id`, id)
+	rows, err := q.QueryContext(ctx, `SELECT managed_record_id,binding_generation,provider,domain,record_id,old_value,new_value,old_ttl,new_ttl,old_enabled,new_enabled,stage,last_error,write_started,value_confirmed,explicit_enable,status_started,propagation_status,propagation_note FROM entry_action_records WHERE action_id=? ORDER BY new_enabled DESC,managed_record_id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +58,7 @@ func loadActionRecords(ctx context.Context, q interface {
 	result := []EntryActionRecord{}
 	for rows.Next() {
 		var r EntryActionRecord
-		if err := rows.Scan(&r.ManagedRecordID, &r.BindingGeneration, &r.Provider, &r.Domain, &r.RecordID, &r.OldValue, &r.NewValue, &r.OldTTL, &r.NewTTL, &r.OldEnabled, &r.NewEnabled, &r.Stage, &r.LastError, &r.writeStarted, &r.valueConfirmed, &r.explicitEnable, &r.statusStarted); err != nil {
+		if err := rows.Scan(&r.ManagedRecordID, &r.BindingGeneration, &r.Provider, &r.Domain, &r.RecordID, &r.OldValue, &r.NewValue, &r.OldTTL, &r.NewTTL, &r.OldEnabled, &r.NewEnabled, &r.Stage, &r.LastError, &r.writeStarted, &r.valueConfirmed, &r.explicitEnable, &r.statusStarted, &r.PropagationStatus, &r.PropagationNote); err != nil {
 			return nil, err
 		}
 		result = append(result, r)

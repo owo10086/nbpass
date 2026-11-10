@@ -80,6 +80,25 @@ func (p *Panel) reconcileRecoveryGroup(ctx context.Context, gid string) error {
 		_, err = tx.ExecContext(ctx, `UPDATE entry_groups SET publication_status=? WHERE id=? AND EXISTS(SELECT 1 FROM entry_publications WHERE group_id=?)`, EntryWritten, gid, gid)
 	}
 	if err == nil {
+		var mode string
+		if err = tx.QueryRowContext(ctx, "SELECT publication_mode FROM entry_groups WHERE id=?", gid).Scan(&mode); err == nil && mode == "all" {
+			var version int64
+			err = tx.QueryRowContext(ctx, "SELECT coalesce((SELECT desired_version FROM entry_publications WHERE group_id=?),0)", gid).Scan(&version)
+			if err == nil {
+				_, err = tx.ExecContext(ctx, "UPDATE dns_watches SET expected_version=? WHERE entry_group_id=?", version, gid)
+			}
+			if err == nil {
+				_, err = tx.ExecContext(ctx, "DELETE FROM entry_dns_previous WHERE watch_id IN (SELECT id FROM dns_watches WHERE entry_group_id=?)", gid)
+			}
+			if err == nil {
+				err = p.refreshAllWatchTx(ctx, tx, EntryAction{GroupID: gid, Version: version}, p.deps.Clock.Now())
+			}
+			if err == nil {
+				err = resetEntryWatchPaths(ctx, tx, gid)
+			}
+		}
+	}
+	if err == nil {
 		_, err = tx.ExecContext(ctx, `INSERT INTO recovery_groups(group_id,verified) VALUES(?,1) ON CONFLICT(group_id) DO UPDATE SET verified=1,last_error=''`, gid)
 	}
 	if err != nil {
@@ -135,7 +154,15 @@ func (p *Panel) reconcileRecoveryRecord(ctx context.Context, b managedRecord) er
 	} else {
 		var confirmed string
 		err = tx.QueryRowContext(ctx, "SELECT confirmed_ipv4 FROM node_regions WHERE node_id=?", b.NodeID).Scan(&confirmed)
-		if err != nil || confirmed == "" || confirmed != actual.Record.Value {
+		var pendingAddress bool
+		if b.OwnerKind == "member" {
+			if e := tx.QueryRowContext(ctx, "SELECT address_pending FROM entry_member_publications WHERE group_id=? AND node_id=?", b.GroupID, b.NodeID).Scan(&pendingAddress); e != nil && !errors.Is(e, sql.ErrNoRows) {
+				return e
+			}
+		}
+		if pendingAddress && !actual.Record.Enabled && actual.Record.Value == b.CurrentValue {
+			err = nil
+		} else if err != nil || confirmed == "" || confirmed != actual.Record.Value {
 			tx.Rollback()
 			return p.noteRecoveryRecord(ctx, b, errors.New("记录地址与面板确认的地址不一致，请先手动同步地址"))
 		}
@@ -150,6 +177,9 @@ func (p *Panel) reconcileRecoveryRecord(ctx context.Context, b managedRecord) er
 	}
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `UPDATE entry_actions SET stage=?,last_error='恢复核对已封存旧动作，未重放 DNS 写入' WHERE stage NOT IN `+terminalActionStages+` AND id IN (SELECT action_id FROM entry_action_records WHERE managed_record_id=?) AND NOT EXISTS(SELECT 1 FROM entry_action_records r WHERE r.action_id=entry_actions.id AND r.stage IN `+pendingRecordStages+`)`, EntryArchived, b.ID)
+	}
+	if err == nil && b.OwnerKind == "member" {
+		_, err = tx.ExecContext(ctx, `UPDATE entry_member_publications SET expected_value=CASE WHEN address_pending=1 THEN '' ELSE ? END,expected_enabled=?,last_action_error='',removal_action_id='',propagation_status='',reason=CASE WHEN address_pending=1 THEN '地址待确认' WHEN ?=1 THEN '已发布' ELSE '暂停待加回' END WHERE group_id=? AND node_id=?`, actual.Record.Value, actual.Record.Enabled, actual.Record.Enabled, b.GroupID, b.NodeID)
 	}
 	if err == nil && b.OwnerKind == "group" {
 		_, err = tx.ExecContext(ctx, `UPDATE entry_publications SET desired_version=desired_version+1,active_node_id=?,expected_value=?,current_action_id='',written_at=? WHERE group_id=? AND (active_node_id<>? OR expected_value<>? OR current_action_id<>'')`, nodeID, actual.Record.Value, p.deps.Clock.Now().UnixNano(), b.GroupID, nodeID, actual.Record.Value)

@@ -13,8 +13,10 @@ func (p *Panel) startEntryDNSAudit(ctx context.Context) {
 	go func() {
 		defer p.background.Done()
 		for ctx.Err() == nil {
+			p.finishAllMemberRemovals(ctx)
 			_ = p.notifyRecordRejections(ctx)
 			_ = p.notifyNodeAddressDrift(ctx)
+			p.auditAllDNS(ctx)
 			p.auditEntryDNS(ctx)
 			timer := p.deps.Clock.NewTimer(time.Second)
 			select {
@@ -31,7 +33,7 @@ func (p *Panel) startEntryDNSAudit(ctx context.Context) {
 func (p *Panel) auditEntryDNS(ctx context.Context) {
 	rows, err := p.db.QueryContext(ctx, `SELECT s.group_id,s.desired_version,s.active_node_id,s.expected_value,w.propagation_status
  FROM entry_publications s JOIN entry_dns_audits d ON d.group_id=s.group_id JOIN dns_watches w ON w.entry_group_id=s.group_id
- WHERE s.written_at IS NOT NULL AND d.next_check_at<=? ORDER BY d.next_check_at LIMIT 32`, p.deps.Clock.Now().UnixNano())
+ WHERE EXISTS(SELECT 1 FROM entry_groups g WHERE g.id=s.group_id AND g.publication_mode='primary_backup') AND s.written_at IS NOT NULL AND d.next_check_at<=? ORDER BY d.next_check_at LIMIT 32`, p.deps.Clock.Now().UnixNano())
 	if err != nil {
 		return
 	}

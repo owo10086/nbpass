@@ -247,7 +247,7 @@ func (p *Panel) acceptDNSWatchResults(ctx context.Context, node, instance string
 		return errors.New("解析采样批次过大")
 	}
 	for _, r := range results {
-		if r == nil || len(r.TaskId) != 43 || len(r.Ips) > 32 {
+		if r == nil || len(r.TaskId) != 43 || len(r.Ips) > 64 {
 			return errors.New("解析采样格式无效")
 		}
 		task, err := scanWatchTask(p.db.QueryRowContext(ctx, "SELECT "+watchTaskColumns+" FROM dns_watch_tasks WHERE id=? AND node_id=? AND process_instance=? AND expires_at>?", r.TaskId, node, instance, p.deps.Clock.Now().UnixNano()))

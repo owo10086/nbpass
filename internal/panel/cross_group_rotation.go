@@ -21,7 +21,7 @@ type rotationEntry struct {
 	written                             sql.NullInt64
 }
 
-const rotationEntriesFrom = ` FROM entry_publications s JOIN entry_groups g ON g.id=s.group_id
+const rotationEntriesFrom = ` FROM entry_publications s JOIN entry_groups g ON g.id=s.group_id AND g.publication_mode='primary_backup'
  JOIN entry_group_members m ON m.group_id=g.id WHERE m.node_id=?`
 
 func (p *Panel) rotationEntries(ctx context.Context, node string) ([]rotationEntry, error) {

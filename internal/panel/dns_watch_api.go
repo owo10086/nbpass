@@ -109,6 +109,10 @@ func (p *Panel) addDNSWatch(w http.ResponseWriter, r *http.Request) {
 		problem(w, 400, "请填写纯域名，不包含协议、端口或路径")
 		return
 	}
+	if len(body.ExpectedIPs) > 32 {
+		problem(w, 400, "手工监控的期望 IPv4 最多 32 个")
+		return
+	}
 	ips, err := dnswatch.Addresses(body.ExpectedIPs)
 	if err != nil {
 		problem(w, 400, err.Error())
@@ -148,6 +152,10 @@ func (p *Panel) putDNSWatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if body.ExpectedIPs == nil {
 		problem(w, 400, "请指定期望 IP，空数组表示仅观察")
+		return
+	}
+	if len(*body.ExpectedIPs) > 32 {
+		problem(w, 400, "手工监控的期望 IPv4 最多 32 个")
 		return
 	}
 	ips, err := dnswatch.Addresses(*body.ExpectedIPs)

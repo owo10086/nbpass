@@ -84,6 +84,9 @@ func (p *Panel) resumeRotation(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]bool{"paused": false})
 }
 func (p *Panel) getBlockedPolicy(w http.ResponseWriter, r *http.Request) {
+	if !p.requireGroupMode(w, r, "primary_backup") {
+		return
+	}
 	var policy string
 	err := p.db.QueryRowContext(r.Context(), "SELECT blocked_policy FROM entry_groups WHERE id=?", r.PathValue("id")).Scan(&policy)
 	if err != nil {
@@ -97,6 +100,9 @@ func (p *Panel) getBlockedPolicy(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]string{"policy": policy})
 }
 func (p *Panel) putBlockedPolicy(w http.ResponseWriter, r *http.Request) {
+	if !p.requireGroupMode(w, r, "primary_backup") {
+		return
+	}
 	var b struct {
 		Policy string `json:"policy"`
 	}

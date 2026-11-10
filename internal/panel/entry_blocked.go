@@ -18,7 +18,7 @@ const blockedEntryFrom = ` FROM entry_publications s JOIN entry_groups g ON g.id
  JOIN node_self_check c ON c.node_id=s.active_node_id
  JOIN nodes n ON n.id=c.node_id JOIN node_regions r ON r.node_id=n.id
  JOIN entry_blocked_incidents i ON i.node_id=n.id
- WHERE g.blocked_policy IN ('switch_entry','switch_then_rotate') AND c.enabled=1 AND c.state='blocked'
+ WHERE g.publication_mode='primary_backup' AND g.blocked_policy IN ('switch_entry','switch_then_rotate') AND c.enabled=1 AND c.state='blocked'
  AND (n.maintenance_until IS NULL OR n.maintenance_until<=?)
  AND s.expected_value=r.public_ipv4 AND i.target_ip=r.public_ipv4
  AND i.occurred_at>=COALESCE((SELECT MAX(restored_at) FROM recovery_state),0)

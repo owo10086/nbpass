@@ -112,6 +112,9 @@ func (p *Panel) bindManagedRecord(w http.ResponseWriter, r *http.Request) {
 		problem(w, 400, "请指定 DNSPod 账号、主域名、记录 ID 和单一线路 ID")
 		return
 	}
+	if !p.requireGroupMode(w, r, "primary_backup") {
+		return
+	}
 	var exists int
 	if err = p.db.QueryRowContext(r.Context(), "SELECT count(*) FROM entry_groups WHERE id=?", r.PathValue("id")).Scan(&exists); err != nil {
 		problem(w, 503, "存储暂不可用")

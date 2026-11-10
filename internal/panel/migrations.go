@@ -114,6 +114,7 @@ var migrations = []string{
 	crossGroupRotationMigration,
 	singleEntryRuleMigration,
 	managedRecordModelMigration,
+	allPublishMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {
