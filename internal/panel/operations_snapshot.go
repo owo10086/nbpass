@@ -121,7 +121,9 @@ func (p *Panel) operationsSnapshot(ctx context.Context) (operationsView, error) 
 		return view, err
 	}
 	for _, r := range rules {
-		item := operationRule{ID: r.ID, Name: r.Name, GroupID: r.EntryGroupID, NodeID: r.EntryNodeID, Enabled: r.Enabled, Status: "unknown", Reasons: []operationReason{}, Members: forwarding.RuleEntryNodes(r, members)}
+		config := r
+		config.Name = ""
+		item := operationRule{Configuration: incidentFingerprint(config), ExitGroupID: r.ExitGroupID, Evidence: []operationRuleEvidence{}, ID: r.ID, Name: r.Name, GroupID: r.EntryGroupID, NodeID: r.EntryNodeID, Enabled: r.Enabled, Status: "unknown", Reasons: []operationReason{}, Members: forwarding.RuleEntryNodes(r, members)}
 		if item.Members == nil {
 			item.Members = []string{}
 		}

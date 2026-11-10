@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -65,22 +66,49 @@ func saveIncidentObservation(ctx context.Context, tx *sql.Tx, o incidentObservat
 	if o.Reasons == nil {
 		o.Reasons = []string{}
 	}
-	// 观察时间不参与去重，相同事实在重启后仍只记一次。
-	fingerprint := incidentFingerprint(o)
+	// 优先活动记录；单次业务事故与迟到结束事实允许补充已结束的同一记录。
+	r, err := scanIncident(tx.QueryRowContext(ctx, "SELECT "+incidentColumns+" FROM operation_incidents WHERE source_key=? ORDER BY (ended_at IS NULL) DESC,sequence DESC LIMIT 1", o.Key))
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	missing := errors.Is(err, sql.ErrNoRows)
+	if !missing {
+		seen := map[string]bool{}
+		for _, ref := range o.Refs {
+			seen[ref.Kind+":"+ref.ID] = true
+		}
+		for _, ref := range r.Refs {
+			if !seen[ref.Kind+":"+ref.ID] {
+				o.Refs = append(o.Refs, ref)
+			}
+		}
+	}
+	// 采样时间变化不是新状态。事实首次写入时仍保留其发生和观察时间。
+	stable := o
+	stable.Entries = append([]incidentEntry(nil), o.Entries...)
+	for i := range stable.Entries {
+		stable.Entries[i].At = nil
+	}
+	fingerprint := incidentFingerprint(stable)
 	var old string
-	err := tx.QueryRowContext(ctx, "SELECT fingerprint FROM operation_processed WHERE source_key=?", o.Key).Scan(&old)
+	err = tx.QueryRowContext(ctx, "SELECT fingerprint FROM operation_processed WHERE source_key=?", o.Key).Scan(&old)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
 	if old == fingerprint {
 		return nil
 	}
-	r, err := scanIncident(tx.QueryRowContext(ctx, "SELECT "+incidentColumns+" FROM operation_incidents WHERE source_key=? AND ended_at IS NULL", o.Key))
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return err
+	if !missing && r.EndedAt != nil && o.Closure == "" {
+		if strings.HasPrefix(o.Key, "blocked:") || strings.HasPrefix(o.Key, "rotation:") {
+			// 同一业务事故不能因迟到事实重开。保留原结束语义，仍可补充时间线。
+			o.Closure = r.Closure
+			o.Impact = r.Impact
+		} else {
+			missing = true
+		}
 	}
-	if errors.Is(err, sql.ErrNoRows) {
-		if o.Closure != "" {
+	if missing {
+		if o.Closure != "" || o.ExistingOnly {
 			return nil
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO operation_incidents(source_key,kind,title,impact,handling,started_at,updated_at,refs,reasons) VALUES(?,?,?,?,?,?,?,?,?)`, o.Key, o.Kind, o.Title, o.Impact, o.Handling, now.UnixNano(), now.UnixNano(), watchJSON(o.Refs), watchJSON(o.Reasons))
@@ -96,6 +124,9 @@ func saveIncidentObservation(ctx context.Context, tx *sql.Tx, o incidentObservat
 	var end any
 	if o.Closure != "" {
 		end = now.UnixNano()
+		if r.EndedAt != nil && !missing {
+			end = r.EndedAt.UnixNano()
+		}
 		o.Handling = "ended"
 	}
 	_, err = tx.ExecContext(ctx, `UPDATE operation_incidents SET title=?,impact=?,handling=?,updated_at=?,ended_at=?,closure=?,refs=?,reasons=? WHERE sequence=?`, o.Title, o.Impact, o.Handling, now.UnixNano(), end, o.Closure, watchJSON(o.Refs), watchJSON(o.Reasons), r.ID)

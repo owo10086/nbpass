@@ -21,6 +21,8 @@ type entryStateReason struct {
 }
 
 type entryMemberState struct {
+	DesiredRevision  uint64             `json:"desired_revision"`
+	AppliedRevision  uint64             `json:"applied_revision"`
 	NodeID           string             `json:"node_id"`
 	NodeName         string             `json:"node_name"`
 	CheckedAt        *time.Time         `json:"checked_at"`
@@ -142,7 +144,7 @@ func (p *Panel) checkEntryCandidates(ctx context.Context) (map[[2]string]entryMe
 			return nil, err
 		}
 		for _, group := range owned {
-			state := entryMemberState{NodeID: id, NodeName: n.name, CheckedAt: &now, Ready: true, ReadinessStatus: "ready", ReadinessReasons: []entryStateReason{}, CandidateReasons: []entryStateReason{}, DomesticEvidence: inputs.domestic}
+			state := entryMemberState{DesiredRevision: n.desired, AppliedRevision: n.reported, NodeID: id, NodeName: n.name, CheckedAt: &now, Ready: true, ReadinessStatus: "ready", ReadinessReasons: []entryStateReason{}, CandidateReasons: []entryStateReason{}, DomesticEvidence: inputs.domestic}
 			for _, r := range rules {
 				if !r.Enabled || ruleEntryKey(r) != group {
 					continue

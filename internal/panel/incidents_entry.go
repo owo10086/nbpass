@@ -29,7 +29,7 @@ func collectBlockedIncidents(ctx context.Context, tx *sql.Tx, view operationsVie
 		if e := rows.Scan(&node, &id, &ip, &at); e != nil {
 			return e
 		}
-		n := nodes[node]
+		n, exists := nodes[node]
 		o := incidentObservation{Key: "blocked:" + node + ":" + id, Kind: "blocked", Title: n.Name + "：被墙判定", Impact: "unknown", Handling: "waiting", Refs: nodeIncidentRefs(view, node), Reasons: []string{"被墙是基于自测和国内检测点的推定，不代表已证明封锁原因"}}
 		occurred := time.Unix(0, at).UTC()
 		o.Entries = []incidentEntry{{Key: "blocked:" + id, Stage: "节点被推定被墙", Message: "地址 " + ip + "；依据既有自测/国内检测点判定", Source: "被墙事故", At: &occurred}}
@@ -37,6 +37,10 @@ func collectBlockedIncidents(ctx context.Context, tx *sql.Tx, view operationsVie
 			o.Closure = "异常解除"
 			o.Impact = "cleared"
 			o.Entries = append(o.Entries, incidentEntry{Key: "cleared", Stage: "被墙判定已解除", Message: "采用当前业务状态，未推断目标应用可用", Source: "自测/国内检测点"})
+		}
+		if !exists {
+			o.Closure = "配置变更结束"
+			o.Impact = "unknown"
 		}
 		observations = append(observations, o)
 		return nil
@@ -78,6 +82,8 @@ func attachEntryIncidentProgress(ctx context.Context, tx *sql.Tx, observations [
 	if err != nil {
 		return err
 	}
+	branchPending := map[string]bool{}
+	branchEnded := map[string]string{}
 	for _, d := range decisions {
 		o := byKey[d.key]
 		if o == nil {
@@ -85,36 +91,59 @@ func attachEntryIncidentProgress(ctx context.Context, tx *sql.Tx, observations [
 		}
 		at := time.Unix(0, d.at).UTC()
 		o.Entries = append(o.Entries, incidentEntry{Key: "decision:" + d.id + ":" + d.outcome, Stage: "入口组策略决策", Message: fmt.Sprintf("入口组 %s，策略 %s，决策 %s", groupName(view, d.group), d.policy, d.outcome), Source: "入口决策 " + d.id, Version: d.version, At: &at})
-		switch d.outcome {
-		case "no_candidate", "no_checkers", "unknown":
+		if d.outcome == "no_candidate" || d.outcome == "no_checkers" || d.outcome == "unknown" {
 			o.Reasons = append(o.Reasons, groupName(view, d.group)+"："+decisionReason(d.outcome))
-			o.Handling = "waiting"
 		}
 		a, ok := actions[d.action]
-		if !ok {
-			continue
+		if ok {
+			appendIncidentAction(o, a)
 		}
-		appendIncidentAction(o, a)
+		found := false
 		for _, g := range view.Groups {
 			if g.ID != d.group {
 				continue
 			}
-			if g.DesiredVersion == a.version {
-				appendIncidentPropagation(o, g, a.id)
-				if g.Propagation != "已生效" {
-					o.Closure = ""
-					o.Handling = "waiting"
-				}
-			}
+			found = true
+			version := max(d.version, d.expected)
+			currentFound := false
 			for _, current := range actions {
-				if current.group != d.group || current.version != g.DesiredVersion || current.version <= a.version {
+				if current.group != d.group || current.version != g.DesiredVersion {
 					continue
 				}
-				if current.kind == "manual_switch" {
-					o.Closure = "管理员操作结束"
-					o.Entries = append(o.Entries, incidentEntry{Key: current.id + ":supersedes", Stage: "管理员操作结束", Message: "新的手动切换替代了原入口处理分支", Source: "入口动作 " + current.id, Version: current.version, At: current.created})
+				currentFound = true
+				if current.version > version && current.kind == "failback" && current.node == d.node {
+					o.Entries = append(o.Entries, incidentEntry{Key: current.id + ":failback", Stage: "回切已提交", Message: "原节点回切已由既有协调器提交，写入与传播仍分别核对", Source: "入口动作 " + current.id, Version: current.version, At: current.created})
+					appendIncidentAction(o, current)
+					appendIncidentPropagation(o, g, current.id)
+					branchPending[o.Key] = branchPending[o.Key] || current.written == nil || g.Propagation != "已生效"
+				} else if current.version > version && current.kind != "writeback" && current.kind != "address_update" {
+					closure := "新版本替代"
+					if current.kind == "manual_switch" {
+						closure = "管理员操作结束"
+					}
+					branchEnded[o.Key] = closure
+					o.Entries = append(o.Entries, incidentEntry{Key: current.id + ":supersedes:" + d.id, Stage: closure, Message: groupName(view, d.group) + "：新的期望替代了原处理分支，不代表故障恢复", Source: "入口动作 " + current.id, Version: current.version, At: current.created})
+				} else {
+					appendIncidentPropagation(o, g, current.id)
+					branchPending[o.Key] = branchPending[o.Key] || current.written == nil || g.Propagation != "已生效" || d.policy == "switch_then_rotate"
 				}
 			}
+			if !currentFound {
+				branchPending[o.Key] = true
+			}
+		}
+		if !found {
+			branchEnded[o.Key] = "配置变更结束"
+		}
+	}
+	for i := range observations {
+		o := &observations[i]
+		o.Pending = branchPending[o.Key]
+		if o.Pending {
+			o.Closure = ""
+			o.Handling = "waiting"
+		} else if end := branchEnded[o.Key]; end != "" {
+			o.Closure = end
 		}
 	}
 	return nil

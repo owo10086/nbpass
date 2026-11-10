@@ -18,7 +18,8 @@ func evaluateOperationRule(r *operationRule, checks map[[2]string]entryMemberSta
 		add := func(code, message, source string, at *time.Time) {
 			r.Reasons = append(r.Reasons, operationReason{Code: code, Message: message, Source: source, NodeID: id, At: at})
 		}
-		if !ok || s.CheckedAt == nil || now.Before(*s.CheckedAt) || now.Sub(*s.CheckedAt) > entryCandidateInterval {
+		r.Evidence = append(r.Evidence, operationRuleEvidence{NodeID: id, Desired: n.Revision, Applied: s.AppliedRevision, At: s.CheckedAt})
+		if s.DesiredRevision != n.Revision || !ok || s.CheckedAt == nil || now.Before(*s.CheckedAt) || now.Sub(*s.CheckedAt) > entryCandidateInterval {
 			unknown = true
 			add("check_stale", "入口证据待采集或已过期", "入口检查", s.CheckedAt)
 			continue

@@ -89,7 +89,10 @@ func scopeOperationRule(r *operationRule, groups []operationGroup) {
 		}
 		// 未被发布的备用失败归入冗余，不扩大到对外规则异常。传播旧值仍需单独提示。
 		reasons := r.Reasons[:0]
-		failed, unknown := false, false
+		failed, unknown := false, !containsEntryMember(r.Members, g.ConfirmedNode)
+		if unknown {
+			reasons = append(reasons, operationReason{Code: "published_member_removed", Message: "最后确认发布的节点已不在当前规则成员中，影响待确认", Source: "入口配置"})
+		}
 		for _, reason := range r.Reasons {
 			if reason.NodeID != "" && reason.NodeID != g.ConfirmedNode {
 				continue

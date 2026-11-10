@@ -128,6 +128,8 @@ func TestEntryBlockedRotationWaitsForSwitchThenRechecksAndFailsBack(t *testing.T
 	strategySamples(t, f, 1)
 	f.awaitPublication(t, f.ids[0], 3)
 	strategyPublication(t, f, f.ids[0], 3, 3, "4.2.2.2")
+	incident := awaitIncident(t, f.h, f.c, "blocked")
+	awaitIncidentEntry(t, f.h, f.c, incident["id"].(string), func(e map[string]any) bool { return e["stage"] == "回切已提交" })
 	if f.calls.Load() != 1 {
 		t.Fatal("重复调用商家")
 	}

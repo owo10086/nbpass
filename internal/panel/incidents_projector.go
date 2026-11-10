@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -41,6 +42,30 @@ func (p *Panel) projectIncidents(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
+	// 快照与写事务之间配置或自测可能推进。拒绝用旧快照结束新事实，下一轮重读。
+	current := map[string]operationNode{}
+	for _, n := range view.Nodes {
+		current[n.ID] = n
+	}
+	seen := 0
+	if err = operationRows(ctx, tx, `SELECT n.id,n.desired_revision,COALESCE(s.state,'unknown') FROM nodes n LEFT JOIN node_self_check s ON s.node_id=n.id`, func(rows *sql.Rows) error {
+		var id, state string
+		var revision uint64
+		if e := rows.Scan(&id, &revision, &state); e != nil {
+			return e
+		}
+		n, ok := current[id]
+		if !ok || n.Revision != revision || n.Blocked != state {
+			return errors.New("运维快照已被新事实替代")
+		}
+		seen++
+		return nil
+	}); err != nil {
+		return err
+	}
+	if seen != len(current) {
+		return errors.New("运维配置已变更")
+	}
 	observations, err := collectOfflineIncidents(ctx, tx, view)
 	if err != nil {
 		return err
@@ -51,6 +76,15 @@ func (p *Panel) projectIncidents(ctx context.Context) error {
 	}
 	observations = append(observations, blocked...)
 	if err = attachEntryIncidentProgress(ctx, tx, observations, view); err != nil {
+		return err
+	}
+	observations, err = attachRotationIncidentProgress(ctx, tx, observations, view)
+	if err != nil {
+		return err
+	}
+	observations = append(observations, collectRuleIncidents(view)...)
+	observations, err = reconcileIncidentSources(ctx, tx, observations, view)
+	if err != nil {
 		return err
 	}
 	for _, o := range observations {
@@ -114,7 +148,7 @@ func collectOfflineIncidents(ctx context.Context, tx *sql.Tx, view operationsVie
 		if n.Connected {
 			o.Closure = "异常解除"
 			o.Impact = "cleared"
-			o.Entries = []incidentEntry{{Key: "recovered", Stage: "控制连接恢复", Message: "已收到当前控制连接；这不是目标业务恢复证明", Source: "控制连接", At: n.LastSeen}}
+			o.Entries = []incidentEntry{{Key: "recovered", Stage: "控制连接恢复", Message: "已收到当前控制连接；这不是目标业务恢复证明", Source: "控制连接"}}
 		} else {
 			o.Entries = []incidentEntry{{Key: "observed", Stage: "首次观察到控制连接异常", Message: "此为面板观察记录，未补造之前的故障过程", Source: "控制连接"}}
 			if record, ok := records[n.ID]; ok {

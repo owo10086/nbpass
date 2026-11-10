@@ -12,15 +12,18 @@ type operationReason struct {
 }
 
 type operationRule struct {
-	ID       string            `json:"id"`
-	Name     string            `json:"name"`
-	GroupID  string            `json:"group_id,omitempty"`
-	NodeID   string            `json:"node_id,omitempty"`
-	Enabled  bool              `json:"enabled"`
-	Revision uint64            `json:"revision"`
-	Status   string            `json:"status"`
-	Reasons  []operationReason `json:"reasons"`
-	Members  []string          `json:"members"`
+	Configuration string                  `json:"-"`
+	ExitGroupID   string                  `json:"exit_group_id,omitempty"`
+	Evidence      []operationRuleEvidence `json:"evidence"`
+	ID            string                  `json:"id"`
+	Name          string                  `json:"name"`
+	GroupID       string                  `json:"group_id,omitempty"`
+	NodeID        string                  `json:"node_id,omitempty"`
+	Enabled       bool                    `json:"enabled"`
+	Revision      uint64                  `json:"revision"`
+	Status        string                  `json:"status"`
+	Reasons       []operationReason       `json:"reasons"`
+	Members       []string                `json:"members"`
 }
 
 type operationGroup struct {
@@ -73,4 +76,11 @@ type operationsView struct {
 	Rules         []operationRule  `json:"rules"`
 	IncidentSync  *time.Time       `json:"incident_sync"`
 	IncidentError string           `json:"incident_error"`
+}
+
+type operationRuleEvidence struct {
+	NodeID  string     `json:"node_id"`
+	Desired uint64     `json:"desired_revision"`
+	Applied uint64     `json:"applied_revision"`
+	At      *time.Time `json:"checked_at"`
 }

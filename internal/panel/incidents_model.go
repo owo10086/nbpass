@@ -33,6 +33,9 @@ type incidentRecord struct {
 	sourceKey string
 }
 type incidentObservation struct {
+	ExistingOnly bool
+	Pending      bool
+
 	Key      string
 	Kind     string
 	Title    string
