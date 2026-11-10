@@ -3,6 +3,7 @@ import { Alert, App, Button, Dropdown, Form, Input, Modal, Segmented, Table, Typ
 import { MoreOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, SettingOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
 import { NodeUpgrade, type NodeUpgradeFields } from './NodeUpgrade';
+import { NodeManagedRecord, type NodeRecord } from './NodeManagedRecord';
 import { NodeRegion, type NodeRegionFields } from './NodeRegion';
 import { ProbeDetails } from './ProbeDetails';
 import { NodeValidationActions, type NodeValidationMode } from './NodeValidationActions';
@@ -16,7 +17,7 @@ type NodeRow = NodeRegionFields & NodeUpgradeFields & {
   id: string; name: string; status: string; status_label: string; connected: boolean;
   last_seen_at: string | null; maintenance_until: string | null;
   desired_revision: number; applied_revision: number; config_status: string; software_version: string; apply_error: string;
-  probe: NodeProbe;
+  probe: NodeProbe; confirmed_ipv4: string; managed_record: NodeRecord | null; record_status: string;
 };
 type Installation = { id: string; installation_command: string; ticket_expires_at: string };
 type Filter = 'all' | 'online' | 'offline' | 'maintenance' | 'pending';
@@ -62,6 +63,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   const [saving, setSaving] = useState(false);
   const [installation, setInstallation] = useState<Installation>();
   const [regionNode, setRegionNode] = useState<NodeRow>();
+  const [recordNode, setRecordNode] = useState<string>();
   const [rotationNode, setRotationNode] = useState<string>();
   const [selfCheckNode, setSelfCheckNode] = useState<string>();
   const [selfCheckSettings, setSelfCheckSettings] = useState(false);
@@ -116,6 +118,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
 
   function more(row: NodeRow, key: string) {
     if (key === 'region') setRegionNode(row);
+    else if (key === 'record') setRecordNode(row.id);
     else if (key === 'rotation') setRotationNode(row.id);
     else if (key === 'maintenance') void maintenance(row);
     else if (key === 'ports' || key === 'delete') setValidation({ id: row.id, mode: key });
@@ -143,7 +146,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
       <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
     </div>
     <div className="panel">
-      <Table<NodeRow> rowKey="id" dataSource={visible} loading={!loaded && !error} rowClassName={row => rowClassName(row.id)} pagination={visible.length > 50 ? { pageSize: 50, showSizeChanger: false } : false} scroll={{ x: 1590 }}
+      <Table<NodeRow> rowKey="id" dataSource={visible} loading={!loaded && !error} rowClassName={row => rowClassName(row.id)} pagination={visible.length > 50 ? { pageSize: 50, showSizeChanger: false } : false} scroll={{ x: 1850 }}
         locale={{ emptyText: rows.length ? '没有符合条件的节点' : '暂无节点。添加节点后，把安装命令复制到服务器执行。' }} columns={[
           { title: '节点', key: 'name', fixed: 'left', width: 190, render: (_, row) => <>
             <span className="status"><span className={`dot ${tone(row)}`} /><span className="node-name">{row.name}</span></span>
@@ -162,6 +165,13 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
             {row.region.name}{row.region_source === 'manual' && <span className="muted">（人工）</span>}
             <span className="cell-sub mono">{row.public_ipv4 || '尚未查询到 IP'}</span>
           </> },
+          { title: '域名 / 地址', key: 'record', width: 260, render: (_, row) => <>
+            <Button size="small" type="link" onClick={() => setRecordNode(row.id)}>{row.managed_record?.hostname || '绑定域名 / 同步地址'}</Button>
+            {row.managed_record && <span className="cell-sub">{row.managed_record.current_enabled ? '启用' : '暂停'} · {row.record_status}</span>}
+            <span className="cell-sub mono">期望 {row.confirmed_ipv4 || '地址待确认'}</span>
+            {row.managed_record && row.confirmed_ipv4 && row.managed_record.current_value !== row.confirmed_ipv4 && <span className="cell-danger">记录地址等待同步</span>}
+            {row.public_ipv4 && row.public_ipv4 !== row.confirmed_ipv4 && <span className="cell-danger">上报与确认地址不一致 <Button size="small" type="link" onClick={() => setRecordNode(row.id)}>同步地址</Button></span>}
+          </> },
           { title: '检测点', key: 'checker', width: 100, render: (_, row) => row.domestic_checker ? <span className="status"><span className="dot ok" />{row.checker_label}</span> : <span className="muted">{row.checker_label}</span> },
           { title: '最近活性', dataIndex: 'last_seen_at', width: 100, render: (value: string | null) => value ? <span className="num" title={new Date(value).toLocaleString()}>{ago(value)}</span> : <span className="muted">—</span> },
           { title: '配置', key: 'revision', width: 160, render: (_, row) => <>
@@ -179,6 +189,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
             <Dropdown trigger={['click']} placement="bottomRight" menu={{ onClick: ({ key }) => more(row, key), items: [
               { key: 'region', label: '地区与检测点' },
               { key: 'rotation', label: '换 IP' },
+              { key: 'record', label: '域名与地址' },
               { key: 'maintenance', label: row.status === 'maintenance' ? '结束维护' : '维护 10 分钟' },
               { key: 'ports', label: '监听端口' },
               { type: 'divider' },
@@ -193,6 +204,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
     </div>
     {selfCheckSettings && <SelfCheckSettings onClose={() => setSelfCheckSettings(false)} onError={failed} />}
     {rows.find(row => row.id === selfCheckNode) && <NodeSelfCheck key={selfCheckNode} node={rows.find(row => row.id === selfCheckNode)!} onClose={() => setSelfCheckNode(undefined)} onError={failed} />}
+    {rows.find(row => row.id === recordNode) && <NodeManagedRecord key={recordNode} node={rows.find(row => row.id === recordNode)!} onClose={() => setRecordNode(undefined)} onSaved={load} onError={failed} />}
     <NodeRotation node={rows.find(row => row.id === rotationNode)} onClose={() => setRotationNode(undefined)} onError={failed} />
     <NodeRegion node={regionNode} onClose={() => setRegionNode(undefined)} onSaved={load} onError={failed} />
     {rows.find(row => row.id === probeNode) && <ProbeDetails node={rows.find(row => row.id === probeNode)!} onClose={() => setProbeNode(undefined)} onSessionExpired={onSessionExpired} />}
