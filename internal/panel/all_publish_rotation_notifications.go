@@ -63,7 +63,11 @@ func (p *Panel) notifyAllMemberRotation(ctx context.Context, node string, restri
 		case a.RecheckStatus == "no_improvement":
 			phase, message = "no_improvement", "新 IP 复检无改善，保持摘除，继续受共享额度与无改善暂停限制"
 		case a.RecheckStatus == "recovered":
-			return nil
+			// 上次成功不代表本次被墙的申请未受限；仍需说明当前无法换 IP。
+			if restriction == nil || !enabled {
+				return nil
+			}
+			phase, message = "restricted", "全部发布组成员换 IP 受限，保持摘除："+restriction.Error()
 		default:
 			phase, message = "waiting", "全部发布组成员换 IP 进行中，保持摘除；新地址确认后仅改值，复检通过且连续六次检查成功才加回"
 		}
@@ -71,7 +75,12 @@ func (p *Panel) notifyAllMemberRotation(ctx context.Context, node string, restri
 		phase, message = "waiting", "全部发布组成员等待换 IP，摘除未确认时不占用额度"
 	}
 	if restriction != nil && enabled && (a == nil || a.State == "released" || (a.State == "changed" && a.RecheckStatus == "no_improvement")) {
-		phase, message = "restricted", "全部发布组成员换 IP 受限，保持摘除："+restriction.Error()
+		// 额度限制与复检结论可同时存在，不能用下一次申请受限覆盖本次无改善。
+		if phase == "no_improvement" {
+			message += "；再次换 IP 受限：" + restriction.Error()
+		} else {
+			phase, message = "restricted", "全部发布组成员换 IP 受限，保持摘除："+restriction.Error()
+		}
 	}
 	barriers, err := loadRotationMembers(ctx, p.db, node)
 	if err != nil {

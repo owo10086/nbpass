@@ -86,8 +86,13 @@ func TestObservationAllPublishRestoreAndManualActions(t *testing.T) {
 	setObservation(r.c, r.g, false)
 	startChecker(t, r.h, r.c, 0, 1, nil)
 	r.disconnect(t, 0)
+	// 最后一次采样才排入离线任务；继续驱动检测点的真实上报时钟。
+	r.samples(t, 2)
+	r.offlineCheck(t, 0, "unreachable")
+	r.samples(t, 1)
 	r.awaitEnabled(t, 0, false)
 	setObservation(r.c, r.g, true)
+	r.nodes[0].Restore()
 	r.nodes[0].Restart()
 	awaitNode(t, r.c, r.ids[0], connected)
 	r.healthy(t, 0)
@@ -337,6 +342,7 @@ func TestObservationUnsentPermitIsCancelledAndQuotaReleased(t *testing.T) {
 	}
 	login(r.c)
 	for i, n := range r.nodes {
+		n.Restore()
 		n.Restart()
 		awaitNode(t, r.c, r.ids[i], connected)
 	}
@@ -364,6 +370,7 @@ func TestObservationCancelledPrimaryRestoresCurrentExpectation(t *testing.T) {
 		t.Fatal("作废切换后监控期望未回退", watch)
 	}
 	gate.unavailable.Store(false)
+	f.active.Restore()
 	f.active.Restart()
 	awaitNode(t, f.c, f.a, connected)
 	setObservation(f.c, f.group, false)
