@@ -39,6 +39,7 @@ type Harness struct {
 	repeatRotationCommands atomic.Bool
 	dropUpgradeCommands    atomic.Bool
 	controlReportTransform atomic.Pointer[func(*controlpb.NodeReport)]
+	controlSendHook        atomic.Pointer[func(context.Context, string, *controlpb.PanelMessage) error]
 	ports                  portReservations
 }
 

@@ -11,20 +11,22 @@ import (
 )
 
 type entryGroupView struct {
-	MemberRecords     []allMemberPublication `json:"member_records,omitempty"`
-	PublicationMode   string                 `json:"publication_mode"`
-	MinimumKept       int                    `json:"minimum_kept"`
-	FirstPublished    bool                   `json:"first_published"`
-	MemberStates      []entryMemberState     `json:"member_states"`
-	ID                string                 `json:"id"`
-	Name              string                 `json:"name"`
-	Members           []string               `json:"members"`
-	PublicationStatus string                 `json:"publication_status"`
-	SyncStatus        string                 `json:"sync_status"`
-	SyncMembers       []groupSyncMember      `json:"sync_members"`
+	ObservationEnabled bool                   `json:"observation_enabled"`
+	MemberRecords      []allMemberPublication `json:"member_records,omitempty"`
+	PublicationMode    string                 `json:"publication_mode"`
+	MinimumKept        int                    `json:"minimum_kept"`
+	FirstPublished     bool                   `json:"first_published"`
+	MemberStates       []entryMemberState     `json:"member_states"`
+	ID                 string                 `json:"id"`
+	Name               string                 `json:"name"`
+	Members            []string               `json:"members"`
+	PublicationStatus  string                 `json:"publication_status"`
+	SyncStatus         string                 `json:"sync_status"`
+	SyncMembers        []groupSyncMember      `json:"sync_members"`
 }
 
 func (p *Panel) forwardingRoutes(mux *http.ServeMux) {
+	p.observationRoutes(mux)
 	mux.HandleFunc("GET /api/entry-groups", p.listEntryGroups)
 	mux.HandleFunc("POST /api/entry-groups", p.saveEntryGroup)
 	mux.HandleFunc("PUT /api/entry-groups/{id}", p.saveEntryGroup)
@@ -49,7 +51,7 @@ func (p *Panel) listEntryGroups(w http.ResponseWriter, r *http.Request) {
 func (p *Panel) entryGroupViews(ctx context.Context) ([]entryGroupView, error) {
 	p.controlMu.Lock()
 	defer p.controlMu.Unlock()
-	rows, err := p.db.QueryContext(ctx, `SELECT id,name,publication_status,publication_mode,minimum_kept,first_published_at IS NOT NULL FROM entry_groups ORDER BY id`)
+	rows, err := p.db.QueryContext(ctx, `SELECT id,name,publication_status,publication_mode,minimum_kept,first_published_at IS NOT NULL,observation_enabled FROM entry_groups ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -57,7 +59,7 @@ func (p *Panel) entryGroupViews(ctx context.Context) ([]entryGroupView, error) {
 	groups := []entryGroupView{}
 	for rows.Next() {
 		var g entryGroupView
-		if err := rows.Scan(&g.ID, &g.Name, &g.PublicationStatus, &g.PublicationMode, &g.MinimumKept, &g.FirstPublished); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.PublicationStatus, &g.PublicationMode, &g.MinimumKept, &g.FirstPublished, &g.ObservationEnabled); err != nil {
 			return nil, err
 		}
 		groups = append(groups, g)

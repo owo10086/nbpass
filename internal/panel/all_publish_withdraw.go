@@ -226,6 +226,13 @@ func (p *Panel) decideAllWithdrawals(ctx context.Context, g string, reasons map[
 			}
 			continue
 		}
+		observed, err := p.observeEntryTx(ctx, tx, g, m.NodeID, "auto_withdraw", fmt.Sprintf("%d:%s:%s:%d", version, r.identity, m.Record.ID, m.Record.BindingGeneration), observationDetail("auto_withdraw", m.NodeID, r.reason))
+		if err != nil {
+			return err
+		}
+		if observed {
+			continue
+		}
 		if _, err = tx.ExecContext(ctx, `UPDATE entry_member_publications SET expected_enabled=0,reason=?,withdrawn_at=? WHERE group_id=? AND node_id=?`, r.reason, p.deps.Clock.Now().UnixNano(), g, m.NodeID); err != nil {
 			return err
 		}
@@ -260,6 +267,9 @@ func (p *Panel) decideAllWithdrawals(ctx context.Context, g string, reasons map[
 // 自动摘除/加回的唯一提交点。票 07 在这里复核观测状态；外部调用前的复核
 // 位于 entryCoordinator.executeRecord 的写值/启停分支，已发出的结果仍按原动作核对。
 func (p *Panel) submitAutomaticMemberActionTx(ctx context.Context, tx *sql.Tx, g, node, kind string, version int64, changes []ManagedRecordChange, minimum int) (EntryAction, error) {
+	if observed, err := p.observeRecordTx(ctx, tx, RecordActionRequest{GroupID: g, NodeID: node, Kind: kind, ExpectedVersion: version, Records: changes}); err != nil || observed {
+		return EntryAction{GroupID: g, NodeID: node, Kind: kind, Stage: entryObserved}, err
+	}
 	a, err := p.submitMemberActionTx(ctx, tx, g, node, kind, version, changes)
 	if err == nil && minimum > 1 {
 		a.MinimumEnabled = minimum

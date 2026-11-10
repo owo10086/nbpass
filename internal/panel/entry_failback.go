@@ -128,9 +128,12 @@ func (p *Panel) submitEntryFailback(ctx context.Context, observed entryFailbackP
 	if err != nil || !fresh {
 		return false, err
 	}
-	_, err = p.submitEntryActionTx(ctx, tx, EntryActionRequest{GroupID: v.group, NodeID: v.preferred, IPv4: state.DomesticEvidence.PublicIPv4, Kind: "failback", ExpectedVersion: v.version})
+	a, err := p.submitEntryActionTx(ctx, tx, EntryActionRequest{GroupID: v.group, NodeID: v.preferred, IPv4: state.DomesticEvidence.PublicIPv4, Kind: "failback", ExpectedVersion: v.version})
 	if err != nil {
 		return false, err
+	}
+	if a.Stage == entryObserved {
+		return false, tx.Commit()
 	}
 	// 随机源或磁盘停顿也可能跨过证据期限；失效时连同动作和事件回滚。
 	fresh, err = p.offlineCandidateCurrent(ctx, tx, state)

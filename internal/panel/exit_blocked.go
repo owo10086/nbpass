@@ -27,7 +27,10 @@ const singleEntryRotationPurpose = `EXISTS(SELECT 1 FROM forward_rules r WHERE r
 // 全部发布组成员申请换 IP 的唯一用途判定；票 07 在这里拦截因该组发起的申请。
 const allMemberRotationPurpose = `EXISTS(SELECT 1 FROM entry_group_members m JOIN entry_groups g ON g.id=m.group_id WHERE m.node_id=c.node_id AND g.publication_mode='all' AND g.first_published_at IS NOT NULL)`
 
-const automaticRotationPurpose = `(` + singleEntryRotationPurpose + ` OR ` + allMemberRotationPurpose + ` OR EXISTS(SELECT 1 FROM entry_group_members m JOIN entry_groups g ON g.id=m.group_id WHERE m.node_id=c.node_id AND g.publication_mode='primary_backup' AND g.blocked_policy='rotate_ip') OR EXISTS(SELECT 1 FROM tunnel_exits e WHERE e.node_id=c.node_id AND e.blocked_enabled=1) OR ` + strategyThreeRotationPurpose + `)`
+const automaticRotationRequestedPurpose = `(` + singleEntryRotationPurpose + ` OR ` + allMemberRotationPurpose + ` OR EXISTS(SELECT 1 FROM entry_group_members m JOIN entry_groups g ON g.id=m.group_id WHERE m.node_id=c.node_id AND g.publication_mode='primary_backup' AND g.blocked_policy='rotate_ip') OR EXISTS(SELECT 1 FROM tunnel_exits e WHERE e.node_id=c.node_id AND e.blocked_enabled=1) OR ` + strategyThreeRotationPurpose + `)`
+
+// 任一归属组开启观测即否决所有自动用途，包括出口与单节点入口。
+const automaticRotationPurpose = automaticRotationRequestedPurpose + ` AND NOT EXISTS(SELECT 1 FROM entry_group_members om JOIN entry_groups og ON og.id=om.group_id WHERE om.node_id=c.node_id AND og.observation_enabled=1)`
 
 func (p *Panel) exitBlockedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/nodes/{id}/exit-blocked", p.getExitBlocked)

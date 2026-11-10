@@ -302,6 +302,9 @@ func (p *Panel) submitOfflineSwitch(ctx context.Context, e offlineEntry, id stri
 	if err != nil {
 		return err
 	}
+	if a.Stage == entryObserved {
+		return tx.Commit()
+	}
 	// 分配动作ID或存储也可能跨过有效期。提交前最后检查时间条件，
 	// 失败就回滚整个动作、期望版本和事件，绝不唤醒DNS协调器。
 	fresh, err := p.offlineCandidateCurrent(ctx, tx, states[[2]string{e.group, candidate}])

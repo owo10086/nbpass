@@ -92,6 +92,13 @@ func (p *Panel) restoreAllGroup(ctx context.Context, g string, states map[[2]str
 		if w.successes < entryFailbackSuccesses {
 			continue
 		}
+		observed, err := p.observeEntryTx(ctx, tx, g, m.NodeID, "auto_restore", fmt.Sprintf("%d:%s:%d:%s", version, m.Record.ID, m.Record.BindingGeneration, state.DomesticEvidence.PublicIPv4), observationDetail("auto_restore", m.NodeID, state.DomesticEvidence.PublicIPv4))
+		if err != nil {
+			return err
+		}
+		if observed {
+			continue
+		}
 		if _, err = tx.ExecContext(ctx, `UPDATE entry_member_publications SET expected_value=?,expected_enabled=1,address_pending=0,reason='自动加回',withdrawn_at=NULL WHERE group_id=? AND node_id=?`, state.DomesticEvidence.PublicIPv4, g, m.NodeID); err != nil {
 			return err
 		}
@@ -146,6 +153,7 @@ func allMemberRotationRecovered(ctx context.Context, tx *sql.Tx, g string, m all
  WHERE a.id=(SELECT id FROM rotation_actions WHERE node_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1)
  AND EXISTS(SELECT 1 FROM rotation_member_barriers b JOIN rotation_actions original ON original.id=b.action_id
  WHERE original.node_id=a.node_id AND b.group_id=? AND b.managed_record_id=? AND b.binding_generation=?)
+ AND NOT (a.state='cancelled' AND a.permit_sent=0)
  AND NOT (a.state='changed' AND a.recheck_status='recovered' AND a.new_ip=(SELECT confirmed_ipv4 FROM node_regions WHERE node_id=a.node_id)))`, m.NodeID, g, m.Record.ID, m.Record.BindingGeneration).Scan(&waiting)
 	return !waiting, err
 }
