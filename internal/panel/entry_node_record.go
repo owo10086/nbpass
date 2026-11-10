@@ -168,15 +168,25 @@ func (p *Panel) getNodePublication(w http.ResponseWriter, r *http.Request) {
 	var action, address, reported string
 	var written sql.NullInt64
 	var published bool
-	err := p.db.QueryRowContext(r.Context(), `SELECT coalesce(p.desired_version,0),coalesce(p.current_action_id,''),p.written_at,coalesce(p.published,0),coalesce(r.confirmed_ipv4,''),coalesce(r.public_ipv4,'') FROM nodes n LEFT JOIN node_publications p ON p.node_id=n.id LEFT JOIN node_regions r ON r.node_id=n.id WHERE n.id=?`, r.PathValue("id")).Scan(&version, &action, &written, &published, &address, &reported)
+	// 同一只读事务保证发布标记、动作阶段与逐条记录来自同一快照。
+	tx, err := p.db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		p.nodeRecordError(w, err)
+		return
+	}
+	defer tx.Rollback()
+	err = tx.QueryRowContext(r.Context(), `SELECT coalesce(p.desired_version,0),coalesce(p.current_action_id,''),p.written_at,coalesce(p.published,0),coalesce(r.confirmed_ipv4,''),coalesce(r.public_ipv4,'') FROM nodes n LEFT JOIN node_publications p ON p.node_id=n.id LEFT JOIN node_regions r ON r.node_id=n.id WHERE n.id=?`, r.PathValue("id")).Scan(&version, &action, &written, &published, &address, &reported)
 	var a *EntryAction
 	if err == nil && action != "" {
 		var loaded EntryAction
-		loaded, err = scanAction(p.db.QueryRowContext(r.Context(), "SELECT "+actionColumns+" FROM entry_actions WHERE id=?", action))
+		loaded, err = scanAction(tx.QueryRowContext(r.Context(), "SELECT "+actionColumns+" FROM entry_actions WHERE id=?", action))
 		if err == nil {
-			loaded.Records, err = loadActionRecords(r.Context(), p.db, action)
+			loaded.Records, err = loadActionRecords(r.Context(), tx, action)
 			a = &loaded
 		}
+	}
+	if err == nil {
+		err = tx.Commit()
 	}
 	if err != nil {
 		p.nodeRecordError(w, err)
