@@ -265,13 +265,27 @@ func TestAllPublishManualWithdrawalLockRestoreAndMinimumSetting(t *testing.T) {
 func (f *allPolicyRig) healthy(t *testing.T, index int) {
 	t.Helper()
 	id := f.ids[index]
-	v := f.c.Do("GET", "/api/nodes/"+id+"/self-check", nil, 200)
-	count := len(v["rounds"].([]any))
 	f.sites[index].mode.Store(2)
 	f.c.Do("PUT", "/api/nodes/"+id+"/self-check", map[string]bool{"enabled": false}, 204)
-	awaitRevision(t, f.c, id, 0)
+	disabled := awaitRevision(t, f.c, id, 0)
 	f.c.Do("PUT", "/api/nodes/"+id+"/self-check", map[string]bool{"enabled": true}, 204)
-	awaitSelfCheck(t, f.c, id, count+1, "normal", 0)
+	revision := awaitRevision(t, f.c, id, disabled)
+	// 旧轮次可能在停用前已经执行、稍后才上报；必须等本次启用配置的成功证据。
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		v := f.c.Do("GET", "/api/nodes/"+id+"/self-check", nil, 200)
+		rounds := v["rounds"].([]any)
+		if len(rounds) > 0 {
+			latest := rounds[0].(map[string]any)
+			if latest["config_revision"] == revision && latest["final_result"] == "normal" && v["state"] == "normal" && v["consecutive_abnormal"] == float64(0) {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("未收到当前配置的正常自测：%v", v)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 	// 关闭后保留真实成功证据，避免测试快进同时触发额外自测轮次。
 	f.c.Do("PUT", "/api/nodes/"+id+"/self-check", map[string]bool{"enabled": false}, 204)
 	awaitRevision(t, f.c, id, 0)

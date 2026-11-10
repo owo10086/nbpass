@@ -236,6 +236,8 @@ func TestAllPublishRotationRestrictionsAndFreezeKeepWithdrawal(t *testing.T) {
 				r.ips[0].Store("4.2.2.2")
 				r.samples(t, 9)
 				r.view(t, func(v map[string]any) bool { return v["recheck_status"] == "recovered" })
+				// 候选采样完成不代表同一时刻的周期自测已经上报。
+				awaitSelfCheck(t, r.c, r.ids[0], 4, "normal", 0)
 			}
 			if scenario == "接口失败" {
 				r.fail.Store(true)
@@ -327,10 +329,8 @@ func TestAllPublishRotationSharesPrimaryAndTwoAllGroupBarriersAcrossRestart(t *t
 	gate.blocked.Store(true)
 	r.dns.Status = func(context.Context) error { return errors.New("暂停响应丢失") }
 	r.block(t)
-	awaitDNSStage(t, r.c, primary, panel.EntryWritten)
-	if publication(r.c, primary)["active_node_id"] != r.ids[1] {
-		t.Fatal("主备组未切离")
-	}
+	// 同时等目标和新版本，避免把首次发布的“已写入”当成切离完成。
+	(&blockedEntryRig{c: r.c, group: primary}).awaitPublication(t, r.ids[1], 2)
 	awaitDNSStage(t, r.c, r.g, panel.EntryUnconfirmed)
 	r.samples(t, 2)
 	if r.calls.Load() != 0 {
