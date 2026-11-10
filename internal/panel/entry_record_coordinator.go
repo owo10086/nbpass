@@ -35,6 +35,14 @@ func (c *entryCoordinator) execute(a EntryAction) error {
 
 func (c *entryCoordinator) executeRecord(a EntryAction, r EntryActionRecord) error {
 	p := c.p
+	// worker 可能在开关事务之前取到队列快照，不能把作废行重新写活。
+	var stage string
+	if err := p.db.QueryRowContext(c.ctx, "SELECT stage,write_started FROM entry_action_records WHERE action_id=? AND managed_record_id=?", a.ID, r.ManagedRecordID).Scan(&stage, &r.writeStarted); err != nil {
+		return err
+	}
+	if stage != EntryDesired && stage != EntryUnconfirmed {
+		return nil
+	}
 	b, err := c.boundRecord(a, r)
 	if err != nil {
 		return err
@@ -90,6 +98,9 @@ func (c *entryCoordinator) executeRecord(a EntryAction, r EntryActionRecord) err
 		value = actual.Record.Value
 		r.NewValue = value
 	}
+	if cancelled, err := c.cancelObservedRecordRemainder(a, r, actual.Record); err != nil || cancelled {
+		return err
+	}
 	if actual.Record.Value == value && actual.Record.TTL == r.NewTTL && actual.Record.Enabled == r.NewEnabled && (!r.explicitEnable || r.statusStarted) {
 		return c.recordResult(a, r, EntryWritten, "")
 	}
@@ -104,14 +115,24 @@ func (c *entryCoordinator) executeRecord(a EntryAction, r EntryActionRecord) err
 	}
 	// 改值始终保持读回的启用状态；启用须另走明确的状态步骤。
 	if actual.Record.Value != value || actual.Record.TTL != r.NewTTL {
-		if err := c.markRecordWriting(a, r); err != nil {
-			return err
-		}
 		desired := actual.Record
 		desired.Value, desired.TTL = value, r.NewTTL
 		ctx, cancel = p.dnsContext(c.ctx)
-		err = p.deps.DNSProvider.WriteRecord(ctx, auth, key, desired)
+		started, writeErr := c.dispatchRecordWrite(a, r, func() error { return p.deps.DNSProvider.WriteRecord(ctx, auth, key, desired) })
 		cancel()
+		err = writeErr
+		if errors.Is(err, errObservationWrite) {
+			if cancelled, e := c.cancelObservedRecordRemainder(a, r, actual.Record); e != nil || cancelled {
+				return e
+			}
+			if r.writeStarted {
+				return c.recordNote(a, r, err.Error())
+			}
+			return nil
+		}
+		if !started {
+			return err
+		}
 		r.writeStarted = true
 		if c.ctx.Err() != nil {
 			return c.ctx.Err()
@@ -125,10 +146,6 @@ func (c *entryCoordinator) executeRecord(a EntryAction, r EntryActionRecord) err
 		return err
 	}
 	if actual.Record.Enabled != r.NewEnabled || r.explicitEnable && !r.statusStarted {
-		r.statusStarted = true
-		if err := c.markRecordWriting(a, r); err != nil {
-			return err
-		}
 		if !r.NewEnabled && a.MinimumEnabled > 0 {
 			var remaining int
 			err := p.db.QueryRowContext(c.ctx, `SELECT count(*) FROM managed_records m WHERE group_id=? AND id<>? AND current_enabled=1 AND NOT EXISTS(SELECT 1 FROM entry_action_records r WHERE r.managed_record_id=m.id AND r.binding_generation=m.binding_generation AND r.new_enabled=0 AND r.status_started=1 AND r.stage IN `+pendingRecordStages+`)`, a.GroupID, r.ManagedRecordID).Scan(&remaining)
@@ -147,9 +164,25 @@ func (c *entryCoordinator) executeRecord(a EntryAction, r EntryActionRecord) err
 			}
 		}
 		ctx, cancel = p.dnsContext(c.ctx)
-		err = p.deps.DNSProvider.SetRecordEnabled(ctx, auth, key, r.NewEnabled)
+		statusRecord := r
+		statusRecord.statusStarted = true
+		started, writeErr := c.dispatchRecordWrite(a, statusRecord, func() error { return p.deps.DNSProvider.SetRecordEnabled(ctx, auth, key, r.NewEnabled) })
 		cancel()
+		err = writeErr
+		if errors.Is(err, errObservationWrite) {
+			if cancelled, e := c.cancelObservedRecordRemainder(a, r, actual.Record); e != nil || cancelled {
+				return e
+			}
+			if r.writeStarted {
+				return c.recordNote(a, r, err.Error())
+			}
+			return nil
+		}
+		if !started {
+			return err
+		}
 		r.writeStarted = true
+		r.statusStarted = true
 		if c.ctx.Err() != nil {
 			return c.ctx.Err()
 		}
@@ -280,9 +313,12 @@ func (c *entryCoordinator) aggregate(a EntryAction) error {
 	if err != nil {
 		return err
 	}
-	var pending, confirmed, failed, unknown, total int
+	if a.Stage == EntrySuperseded || a.Stage == EntryArchived {
+		return nil
+	}
+	var pending, confirmed, failed, unknown, total, cancelledStarted int
 	var message string
-	err = tx.QueryRowContext(c.ctx, `SELECT count(*),coalesce(sum(stage IN `+pendingRecordStages+`),0),coalesce(sum(stage=?),0),coalesce(sum(stage=?),0),coalesce(sum(stage=?),0),coalesce(max(nullif(last_error,'')),'') FROM entry_action_records WHERE action_id=?`, EntryWritten, EntryFailed, EntryUnconfirmed, a.ID).Scan(&total, &pending, &confirmed, &failed, &unknown, &message)
+	err = tx.QueryRowContext(c.ctx, `SELECT count(*),coalesce(sum(stage IN `+pendingRecordStages+`),0),coalesce(sum(stage=?),0),coalesce(sum(stage=?),0),coalesce(sum(stage=?),0),coalesce(max(nullif(last_error,'')),''),coalesce(sum(write_started=1 AND stage='已失效'),0) FROM entry_action_records WHERE action_id=?`, EntryWritten, EntryFailed, EntryUnconfirmed, a.ID).Scan(&total, &pending, &confirmed, &failed, &unknown, &message, &cancelledStarted)
 	if err != nil {
 		return err
 	}
@@ -294,7 +330,7 @@ func (c *entryCoordinator) aggregate(a EntryAction) error {
 		stage = EntryDesired
 	case confirmed == total:
 		stage = EntryWritten
-	case confirmed > 0 && failed > 0:
+	case confirmed > 0 || cancelledStarted > 0:
 		stage = EntryPartial
 	case failed > 0:
 		stage = EntryFailed

@@ -124,6 +124,10 @@ func (p *Panel) submitRecordActionTx(ctx context.Context, tx *sql.Tx, req Record
 	if version != req.ExpectedVersion {
 		return a, &forwardingError{409, "期望版本已变化，请刷新后重试"}
 	}
+	if observed, err := p.observeRecordTx(ctx, tx, req); err != nil || observed {
+		a.Stage = entryObserved
+		return a, err
+	}
 	a.ID, _, err = p.randomCredential()
 	if err != nil {
 		return a, err

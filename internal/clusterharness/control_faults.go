@@ -1,11 +1,21 @@
 package clusterharness
 
 import (
+	"context"
 	"fmt"
 	"google.golang.org/grpc"
 	"nbpass/internal/controlpb"
 	"sync/atomic"
 )
+
+// BeforeControlSend 在真实 gRPC 发送之前注入阻塞；nil 恢复正常发送。
+func (h *Harness) BeforeControlSend(hook func(context.Context, string, *controlpb.PanelMessage) error) {
+	if hook == nil {
+		h.controlSendHook.Store(nil)
+	} else {
+		h.controlSendHook.Store(&hook)
+	}
+}
 
 // TransformControlReports injects wire faults without replacing the real node runtime.
 // Passing nil restores unmodified delivery.
@@ -27,6 +37,7 @@ type repeatedRotationStream struct {
 	grpc.ServerStream
 	h        *Harness
 	protocol atomic.Uint32
+	node     atomic.Pointer[string]
 }
 
 func (s *repeatedRotationStream) RecvMsg(message any) error {
@@ -34,6 +45,10 @@ func (s *repeatedRotationStream) RecvMsg(message any) error {
 		return err
 	}
 	if report, ok := message.(*controlpb.NodeReport); ok {
+		if report.NodeId != "" {
+			id := report.NodeId
+			s.node.Store(&id)
+		}
 		if transform := s.h.controlReportTransform.Load(); transform != nil {
 			(*transform)(report)
 		}
@@ -43,6 +58,17 @@ func (s *repeatedRotationStream) RecvMsg(message any) error {
 }
 
 func (s *repeatedRotationStream) SendMsg(message any) error {
+	if m, ok := message.(*controlpb.PanelMessage); ok {
+		if hook := s.h.controlSendHook.Load(); hook != nil {
+			id := ""
+			if node := s.node.Load(); node != nil {
+				id = *node
+			}
+			if err := (*hook)(s.Context(), id, m); err != nil {
+				return err
+			}
+		}
+	}
 	if m, ok := message.(*controlpb.PanelMessage); ok && m.UpgradeOnly && len(m.UpgradeManifest) > 0 && s.h.dropUpgradeCommands.Load() {
 		return nil
 	}

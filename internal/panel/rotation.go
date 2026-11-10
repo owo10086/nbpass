@@ -223,6 +223,31 @@ func (p *Panel) authorizeRotation(ctx context.Context, id string, manual bool) (
 			return nil, &forwardingError{409, "自动换 IP 受额度、暂停、维护或网络风险限制"}
 		}
 	}
+	if !manual {
+		tx, err := p.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		defer tx.Rollback()
+		var identity string
+		err = tx.QueryRowContext(ctx, "SELECT coalesce((SELECT incident_id FROM entry_blocked_incidents WHERE node_id=?),?)", id, ip).Scan(&identity)
+		if err != nil {
+			return nil, err
+		}
+		observed, err := p.observeRotationTx(ctx, tx, id, identity)
+		if err != nil {
+			return nil, err
+		}
+		if observed {
+			if err = tx.Commit(); err != nil {
+				return nil, err
+			}
+			return nil, &forwardingError{409, "节点所属入口组观测中，只记录自动换 IP，不占用额度"}
+		}
+		if err = tx.Rollback(); err != nil {
+			return nil, err
+		}
+	}
 	var entries []rotationEntry
 	var members []rotationMember
 	if !manual {
@@ -385,10 +410,12 @@ func (p *Panel) rotationCommand(ctx context.Context, id string) (*controlpb.Rota
 		return nil, err
 	}
 
-	ready, err := p.markRotationPermit(ctx, id, actionID, origin)
+	ready, err := p.rotationPermit(ctx, id, actionID, origin, false)
 	if err != nil || !ready {
 		return nil, err
 	}
+	// 这里只准备命令。许可最终复核及 permit_sent 标记必须贴近 stream.Send，
+	// 不能在普通配置或升级消息发送之前，把尚未投递的命令算作已发送。
 	return &controlpb.RotationCommand{Automatic: origin == "automatic", RecheckConfig: recheck, RecheckRevision: revision, ActionId: actionID, NodeId: id, OldIp: oldIP, ExpiresAt: expires, IssuedAt: created, ConfigJson: data, NodeName: name}, nil
 }
 

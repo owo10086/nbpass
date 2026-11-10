@@ -100,7 +100,9 @@ func (p *Panel) SubmitEntryAction(ctx context.Context, req EntryActionRequest) (
 	if err != nil {
 		return EntryAction{}, err
 	}
-	p.coordinator.wake(a.GroupID)
+	if a.ID != "" {
+		p.coordinator.wake(a.GroupID)
+	}
 	return a, nil
 }
 
@@ -154,6 +156,10 @@ func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryAc
 		return a, &forwardingError{409, "期望版本已变化，请刷新后重新操作"}
 	}
 	if err := entryActionPolicy(ctx, tx, req); err != nil {
+		return a, err
+	}
+	if observed, err := p.observePrimaryTx(ctx, tx, req); err != nil || observed {
+		a.Stage = entryObserved
 		return a, err
 	}
 	a.Version = version + 1

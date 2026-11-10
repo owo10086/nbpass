@@ -31,7 +31,7 @@ const strategyThreeFlowFrom = ` FROM entry_blocked_rotations f
 
 // DNS 写入确认后才签发许可；三轮无改善可按共享额度重试，未知和冻结不盲重试。
 const strategyThreeSwitchConfirmed = ` AND s.written_at IS NOT NULL AND (d.action_id='' OR EXISTS(SELECT 1 FROM entry_actions e WHERE e.id=d.action_id AND e.stage='服务商已写入' AND e.written_at IS NOT NULL))`
-const strategyThreeCanRotate = ` AND (f.rotation_id='' OR (a.state='changed' AND a.recheck_status='no_improvement') OR a.state='released')`
+const strategyThreeCanRotate = ` AND (f.rotation_id='' OR (a.state='changed' AND a.recheck_status='no_improvement') OR a.state='released' OR (a.state='cancelled' AND a.permit_sent=0))`
 const strategyThreeRotationPurpose = `EXISTS(SELECT 1` + strategyThreeFlowFrom + strategyThreeSwitchConfirmed + strategyThreeCanRotate + ` AND d.node_id=c.node_id)`
 
 // 调用方已持 controlMu，授权事务同时关联动作，崩溃后不会丢失关联或重复申请。
@@ -62,8 +62,8 @@ func strategyThreeFailbackAllowed(ctx context.Context, q recoveryQuerier, group 
 	var blocked bool
 	err := q.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1`+strategyThreeFlowFrom+`
  AND d.group_id=? AND f.expected_version=? AND d.outcome='submitted'
- AND NOT COALESCE(a.state='changed' AND a.recheck_status='recovered'
- AND a.new_ip=(SELECT public_ipv4 FROM node_regions WHERE node_id=d.node_id),0))`, group, version).Scan(&blocked)
+ AND NOT COALESCE((a.state='cancelled' AND a.permit_sent=0) OR (a.state='changed' AND a.recheck_status='recovered'
+ AND a.new_ip=(SELECT public_ipv4 FROM node_regions WHERE node_id=d.node_id)),0))`, group, version).Scan(&blocked)
 	return !blocked, err
 }
 

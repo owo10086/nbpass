@@ -86,6 +86,9 @@ func (p *Panel) submitMemberActionTx(ctx context.Context, tx *sql.Tx, g, node, k
 		}
 	}
 	a, err := p.submitRecordActionTx(ctx, tx, RecordActionRequest{GroupID: g, NodeID: node, Kind: kind, ExpectedVersion: version, Records: changes, MinimumEnabled: 1})
+	if err != nil || a.Stage == entryObserved {
+		return a, err
+	}
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `UPDATE dns_watches SET expected_version=?,propagation_status=?,observation_deadline=NULL,next_sample_at=? WHERE entry_group_id=?`, a.Version, EntryDesired, p.deps.Clock.Now().UnixNano(), g)
 	}
