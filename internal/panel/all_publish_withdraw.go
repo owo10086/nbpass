@@ -87,7 +87,7 @@ func (p *Panel) allWithdrawalReason(ctx context.Context, g string, m allMemberPu
 		r.reason = "被墙自动摘除"
 		return r, err
 	}
-	e := offlineEntry{group: g, node: m.NodeID, ip: m.ExpectedValue}
+	e := offlineEntry{group: g, node: m.NodeID, ip: m.ExpectedValue, record: m.Record.ID, binding: m.Record.BindingGeneration}
 	var last, disconnected, maintenance sql.NullInt64
 	var ip string
 	err = p.db.QueryRowContext(ctx, `SELECT n.last_seen_at,n.disconnected_at,n.maintenance_until,coalesce(r.public_ipv4,''),n.check_port,n.desired_revision,s.desired_version FROM nodes n LEFT JOIN node_regions r ON r.node_id=n.id JOIN entry_publications s ON s.group_id=? WHERE n.id=?`, g, m.NodeID).Scan(&last, &disconnected, &maintenance, &ip, &e.port, &e.revision, &e.version)
@@ -108,7 +108,7 @@ func (p *Panel) allWithdrawalReason(ctx context.Context, g string, m allMemberPu
 	}
 	var id, outcome string
 	var issued, deadline int64
-	err = p.db.QueryRowContext(ctx, `SELECT id,outcome,issued_at,deadline FROM entry_offline_checks WHERE group_id=? AND node_id=? AND desired_version=? AND incident_id=? ORDER BY issued_at DESC LIMIT 1`, g, e.node, e.version, e.incident).Scan(&id, &outcome, &issued, &deadline)
+	err = p.db.QueryRowContext(ctx, `SELECT id,outcome,issued_at,deadline FROM entry_offline_checks WHERE group_id=? AND node_id=? AND incident_id=? AND managed_record_id=? AND binding_generation=? AND target_ip=? AND target_port=? AND config_revision=? ORDER BY issued_at DESC LIMIT 1`, g, e.node, e.incident, e.record, e.binding, e.ip, e.port, e.revision).Scan(&id, &outcome, &issued, &deadline)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return r, err
 	}
@@ -137,7 +137,7 @@ func (p *Panel) allWithdrawalReason(ctx context.Context, g string, m allMemberPu
 	return r, p.scheduleOfflineCheck(ctx, e, now)
 }
 
-func (p *Panel) allWithdrawalCurrent(ctx context.Context, tx *sql.Tx, m allMemberPublication, r allWithdrawal, afterSubmit bool) (bool, error) {
+func (p *Panel) allWithdrawalCurrent(ctx context.Context, tx *sql.Tx, m allMemberPublication, r allWithdrawal) (bool, error) {
 	var last, disconnected, maintenance sql.NullInt64
 	var ip string
 	var port int
@@ -153,14 +153,11 @@ func (p *Panel) allWithdrawalCurrent(ctx context.Context, tx *sql.Tx, m allMembe
 	if r.check == "" {
 		return true, nil
 	} // 被墙输入受 controlMu 保护，时间不会令异常自行消失。
-	if now.UnixNano() >= r.deadline || ip != r.entry.ip || port != r.entry.port || revision != r.entry.revision || p.presence(m.NodeID, last, disconnected, maintenance, now).status != "offline" {
+	if m.Record == nil || m.Record.ID != r.entry.record || m.Record.BindingGeneration != r.entry.binding || m.ExpectedValue != r.entry.ip || now.UnixNano() >= r.deadline || ip != r.entry.ip || port != r.entry.port || revision != r.entry.revision || p.presence(m.NodeID, last, disconnected, maintenance, now).status != "offline" {
 		return false, nil
 	}
-	if afterSubmit {
-		return true, nil
-	}
 	var current bool
-	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM entry_offline_checks c JOIN offline_incidents i ON i.id=c.incident_id WHERE c.id=? AND c.outcome='unreachable' AND i.recovered_at IS NULL)`, r.check).Scan(&current)
+	err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM entry_offline_checks c JOIN offline_incidents i ON i.id=c.incident_id WHERE c.id=? AND c.outcome='unreachable' AND i.recovered_at IS NULL AND c.managed_record_id=? AND c.binding_generation=?)`, r.check, m.Record.ID, m.Record.BindingGeneration).Scan(&current)
 	return current, err
 }
 
@@ -192,7 +189,7 @@ func (p *Panel) decideAllWithdrawals(ctx context.Context, g string, reasons map[
 		}
 		enabled++
 		if r, ok := reasons[m.NodeID]; ok {
-			current, err := p.allWithdrawalCurrent(ctx, tx, m, r, false)
+			current, err := p.allWithdrawalCurrent(ctx, tx, m, r)
 			if err != nil {
 				return err
 			}
@@ -244,8 +241,8 @@ func (p *Panel) decideAllWithdrawals(ctx context.Context, g string, reasons map[
 		}
 		for _, m := range withdrawn {
 			r := reasons[m.NodeID]
-			// 期望版本触发器已令证据失效，此处只复核时间、活性、地址和配置。
-			current, err := p.allWithdrawalCurrent(ctx, tx, m, r, true)
+			// 动作改变组版本后，仍按同一成员证据复核，不能延长检测有效期。
+			current, err := p.allWithdrawalCurrent(ctx, tx, m, r)
 			if err != nil || !current {
 				return err
 			}

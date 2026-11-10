@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"nbpass/internal/clusterharness"
-	"nbpass/internal/controlpb"
 	"nbpass/internal/dnsprovider"
 	"nbpass/internal/dnswatch"
 	"nbpass/internal/node"
@@ -167,60 +166,46 @@ func TestAllPublishOfflineWithdrawalRequiresValidCheckerEvidence(t *testing.T) {
 	}
 }
 
-// 多个不可达成员须在同一组事务内选择，既有暂停成员不得用于补足配额。
-func TestAllPublishMinimumKeptChoosesExistingRecordsInMemberOrder(t *testing.T) {
+// 独立上报不能因其他成员摘除而重测；既有暂停成员不得用于补足配额。
+func TestAllPublishMinimumKeptWithIndependentCheckerReports(t *testing.T) {
 	for _, minimum := range []int{1, 9} {
 		t.Run(fmt.Sprint(minimum), func(t *testing.T) {
 			f := newAllPolicyRig(t, 3)
 			f.publish(t)
 			f.c.Do("PUT", "/api/entry-groups/"+f.g+"/minimum-kept", map[string]int{"minimum_kept": minimum}, 200)
-			// 同一假时刻不代表同一次策略检查：心跳仍会唤醒离线策略。
-			// 在控制协议边界合批真实节点的三份结果，确保三个成员同时被判不可达。
-			var reports [][]byte
-			batched := make(chan struct{})
-			f.h.TransformControlReports(func(report *controlpb.NodeReport) {
-				if !report.CheckerOnly || len(report.CheckerResults) == 0 {
-					return
-				}
-				reports = append(reports, report.CheckerResults...)
-				report.CheckerResults = nil
-				if len(reports) == 3 {
-					report.CheckerResults, reports = reports, nil
-					close(batched)
-				}
-			})
-			startChecker(t, f.h, f.c, 0, 1, nil, func(_ *node.Config, d *node.Dependencies) {
-				d.CheckerDial = func(_ context.Context, address string) (net.Conn, error) {
-					if address == "203.0.113.9:443" {
-						return checkerPipe(), nil
-					}
-					return nil, &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("目标不可达")}
-				}
-			})
+			startChecker(t, f.h, f.c, 0, 1, nil, allOfflineChecker(nil))
 			f.disconnect(t, 0, 1, 2)
-			select {
-			case <-batched:
-			case <-time.After(5 * time.Second):
-				t.Fatal("未收齐真实检测点的三份结果")
+			for i := range 3 {
+				f.offlineCheck(t, i, "unreachable")
 			}
 			awaitControlIdle(t, f.h)
-			f.h.TransformControlReports(nil)
 			f.h.Clock.Advance(time.Second)
-			if minimum == 1 {
-				f.awaitEnabled(t, 1, false)
-				f.awaitEnabled(t, 2, false)
-				a := publication(f.c, f.g)["action"].(map[string]any)
-				if len(a["records"].([]any)) != 2 {
-					t.Fatalf("未在一个动作内决定两个摘除：%v", a)
+			waitOfflineEvents(t, f.c, "?type=entry_member_kept", minimum/9*2+1)
+			awaitDNSStage(t, f.c, f.g, panel.EntryWritten)
+			var kept, paused []int
+			for i := range 3 {
+				if allPolicyMember(t, f.c, f.g, f.ids[i])["expected_enabled"] == true {
+					kept = append(kept, i)
+				} else {
+					paused = append(paused, i)
 				}
 			}
-			f.awaitEnabled(t, 0, true)
-			waitOfflineEvents(t, f.c, "?type=entry_member_kept", minimum/9*2+1)
+			want := min(minimum, 3)
+			if len(kept) != want {
+				t.Fatalf("独立报告后应保留 %d 条，实际保留 %v、摘除 %v", want, kept, paused)
+			}
+			for _, i := range kept {
+				f.awaitEnabled(t, i, true)
+			}
+			for _, i := range paused {
+				f.awaitEnabled(t, i, false)
+			}
 			if minimum == 1 {
 				f.c.Do("PUT", "/api/entry-groups/"+f.g+"/minimum-kept", map[string]int{"minimum_kept": 9}, 200)
 				f.samples(t, 7)
-				f.awaitEnabled(t, 1, false)
-				f.awaitEnabled(t, 2, false)
+				for _, i := range paused {
+					f.awaitEnabled(t, i, false)
+				}
 			}
 		})
 	}
@@ -679,13 +664,14 @@ func TestAllPublishAutomaticNotificationQueueFailureDoesNotBlockRestore(t *testi
 		t.Fatal(err)
 	}
 	f.samples(t, 1)
-	waitTelegramStatus(t, f.c, func(s map[string]any) bool { return s["pending"] == float64(0) && s["reachability"] == "reachable" })
-	_, messages := f.telegram.snapshot()
-	found := false
-	for _, m := range messages {
-		found = found || strings.Contains(m.Text, "自动加回")
-	}
-	if !found {
-		t.Fatal("自动加回通知没有续投")
-	}
+	// 历史通知成功且队列暂空，不能证明本次通知已入队并完成续投。
+	waitTelegramStatus(t, f.c, func(s map[string]any) bool {
+		_, messages := f.telegram.snapshot()
+		for _, m := range messages {
+			if strings.Contains(m.Text, "自动加回") {
+				return s["pending"] == float64(0) && s["reachability"] == "reachable"
+			}
+		}
+		return false
+	})
 }
