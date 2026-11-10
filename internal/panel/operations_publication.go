@@ -44,7 +44,7 @@ func attachOperationPublications(ctx context.Context, tx *sql.Tx, view *operatio
 		}
 		state, ok := checks[[2]string{g.ID, g.ConfirmedNode}]
 		fresh := func(s entryMemberState) bool {
-			return s.CheckedAt != nil && !now.Before(*s.CheckedAt) && now.Sub(*s.CheckedAt) <= entryCandidateInterval
+			return s.DesiredRevision == nodes[s.NodeID].Revision && s.CheckedAt != nil && !now.Before(*s.CheckedAt) && now.Sub(*s.CheckedAt) <= entryCandidateInterval
 		}
 		if !g.Bound || g.ConfirmedNode == "" || !ok || !fresh(state) || !state.Ready || !nodes[g.ConfirmedNode].Connected {
 			continue

@@ -16,8 +16,8 @@ func operationTime(v sql.NullInt64) *time.Time {
 	return &at
 }
 
-func operationRows(ctx context.Context, q queryer, statement string, scan func(*sql.Rows) error) error {
-	rows, err := q.QueryContext(ctx, statement)
+func operationRows(ctx context.Context, q queryer, statement string, scan func(*sql.Rows) error, args ...any) error {
+	rows, err := q.QueryContext(ctx, statement, args...)
 	if err != nil {
 		return err
 	}
@@ -102,9 +102,9 @@ func (p *Panel) operationsSnapshot(ctx context.Context) (operationsView, error) 
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM exit_groups").Scan(&view.Counts.Exit); err != nil {
 		return view, err
 	}
-	err = operationRows(ctx, tx, "SELECT id,name FROM entry_groups ORDER BY id", func(rows *sql.Rows) error {
+	err = operationRows(ctx, tx, "SELECT id,name,blocked_policy FROM entry_groups ORDER BY id", func(rows *sql.Rows) error {
 		var g operationGroup
-		if e := rows.Scan(&g.ID, &g.Name); e != nil {
+		if e := rows.Scan(&g.ID, &g.Name, &g.BlockedPolicy); e != nil {
 			return e
 		}
 		g.Members = members[g.ID]

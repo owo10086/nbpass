@@ -55,6 +55,17 @@ func collectRuleIncidents(view operationsView) []incidentObservation {
 func reconcileIncidentSources(ctx context.Context, tx *sql.Tx, observations []incidentObservation, view operationsView) ([]incidentObservation, error) {
 	active := map[string]bool{}
 	current := map[string]bool{}
+	watches := map[string]bool{}
+	if err := operationRows(ctx, tx, "SELECT id FROM dns_watches", func(rows *sql.Rows) error {
+		var id string
+		if e := rows.Scan(&id); e != nil {
+			return e
+		}
+		watches[id] = true
+		return nil
+	}); err != nil {
+		return nil, err
+	}
 	for _, o := range observations {
 		current[o.Key] = true
 	}
@@ -70,6 +81,13 @@ func reconcileIncidentSources(ctx context.Context, tx *sql.Tx, observations []in
 		closure := "配置变更结束"
 		if old.Kind == "rule" || old.Kind == "dns" || old.Kind == "blocked" {
 			closure = "新版本替代"
+		}
+		if old.Kind == "dns" {
+			for _, ref := range old.Refs {
+				if ref.Kind == "watch" && !watches[ref.ID] {
+					closure = "配置变更结束"
+				}
+			}
 		}
 		if old.Kind == "rule" {
 			for _, ref := range old.Refs {

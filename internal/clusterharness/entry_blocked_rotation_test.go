@@ -187,6 +187,22 @@ func TestEntryBlockedRotationNoImprovementRetriesAndPauses(t *testing.T) {
 	}
 	strategyNotice(t, f, "留在备用入口")
 	waitOfflineEvents(t, f.c, "?node_id="+f.ids[0]+"&type=ip_rotation_paused", 1)
+	incident := awaitIncident(t, f.h, f.c, "blocked")
+	awaitIncidentEntry(t, f.h, f.c, incident["id"].(string), func(e map[string]any) bool { return e["stage"] == "自动换 IP 已暂停" })
+	current := f.c.Do("GET", "/api/incidents/"+incident["id"].(string), nil, 200)
+	if current["handling"] != "manual" {
+		t.Fatalf("人工暂停未计入人工介入: %v", current)
+	}
+	attempts := map[string]bool{}
+	for _, v := range f.c.Do("GET", "/api/incidents/"+incident["id"].(string)+"/timeline", nil, 200)["entries"].([]any) {
+		source := v.(map[string]any)["source"].(string)
+		if strings.HasPrefix(source, "换 IP 动作 ") {
+			attempts[source] = true
+		}
+	}
+	if len(attempts) != 2 {
+		t.Fatalf("重试未保留两个实际动作: %v", attempts)
+	}
 	if f.calls.Load() != 2 {
 		t.Fatal("暂停后仍调用商家")
 	}

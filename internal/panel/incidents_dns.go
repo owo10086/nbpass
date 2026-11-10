@@ -51,8 +51,29 @@ func collectDNSIncidents(ctx context.Context, tx *sql.Tx, observations []inciden
 		return nil, err
 	}
 	// 用当前动作 ID 和版本查找原故障；同域名或同节点不构成因果关联。
+	keys := []string{}
+	for _, o := range observations {
+		keys = append(keys, o.Key)
+	}
+	closed := map[string]bool{}
+	for start := 0; start < len(keys); start += 500 {
+		marks, args := operationKeys(keys[start:min(start+500, len(keys))])
+		if err := operationRows(ctx, tx, `SELECT source_key FROM operation_processed m WHERE ended=1 AND source_key IN (`+marks+`) AND NOT EXISTS(SELECT 1 FROM operation_incidents i WHERE i.source_key=m.source_key AND i.ended_at IS NULL)`, func(rows *sql.Rows) error {
+			var key string
+			if e := rows.Scan(&key); e != nil {
+				return e
+			}
+			closed[key] = true
+			return nil
+		}, args...); err != nil {
+			return nil, err
+		}
+	}
 	actionRoots := map[string][]int{}
 	for i, o := range observations {
+		if o.Closure != "" || closed[o.Key] {
+			continue
+		}
 		for _, e := range o.Entries {
 			if e.Stage == "入口动作已提交" {
 				actionRoots[e.Source] = append(actionRoots[e.Source], i)

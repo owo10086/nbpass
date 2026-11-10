@@ -28,6 +28,7 @@ type operationRule struct {
 }
 
 type operationGroup struct {
+	BlockedPolicy  string            `json:"blocked_policy"`
 	ID             string            `json:"id"`
 	Name           string            `json:"name"`
 	Members        []string          `json:"members"`

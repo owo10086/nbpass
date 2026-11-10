@@ -1,8 +1,11 @@
 package clusterharness_test
 
 import (
+	"context"
 	"fmt"
 	"nbpass/internal/clusterharness"
+	"nbpass/internal/dnswatch"
+	"nbpass/internal/node"
 	"nbpass/internal/panel"
 	"net"
 	"strings"
@@ -15,17 +18,18 @@ func incidentRows(c *clusterharness.Client) []any {
 }
 func awaitIncident(t *testing.T, h *clusterharness.Harness, c *clusterharness.Client, kind string) map[string]any {
 	t.Helper()
-	for i := 0; i < 30; i++ {
-		for _, v := range incidentRows(c) {
+	for i := 0; i < 60; i++ {
+		for _, v := range c.Do("GET", "/api/incidents?kind="+kind+"&status=open", nil, 200)["incidents"].([]any) {
 			r := v.(map[string]any)
-			if r["kind"] == kind {
+			if r["kind"] == kind && r["ended_at"] == nil {
 				return r
 			}
 		}
 		h.Clock.Advance(time.Second)
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("没有 %s 故障，列表=%v，概览=%v", kind, incidentRows(c), operations(t, c))
+	view := operations(t, c)
+	t.Fatalf("没有 %s 故障，统计=%v，整理错误=%v", kind, view["counts"], view["incident_error"])
 	return nil
 }
 func TestIncidentsOfflineSurvivesRestartAndKeepsHistory(t *testing.T) {
@@ -112,7 +116,8 @@ func awaitIncidentEntry(t *testing.T, h *clusterharness.Harness, c *clusterharne
 		h.Clock.Advance(time.Second)
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("故障 %s 未出现期待的处理阶段，概览=%v", id, operations(t, c))
+	view := operations(t, c)
+	t.Fatalf("故障 %s 未出现期待的处理阶段，统计=%v，整理错误=%v", id, view["counts"], view["incident_error"])
 	return nil
 }
 
@@ -174,7 +179,19 @@ func TestIncidentsDNSFailureTracksWatchAndNewExpectation(t *testing.T) {
 	c.Do("PUT", "/api/dns-watches/"+id, map[string]any{"expected_ips": []string{"1.1.1.1"}}, 200)
 	awaitIncidentEntry(t, h, c, incident["id"].(string), func(e map[string]any) bool { return e["stage"] == "新版本替代" })
 	c.Do("GET", "/api/incidents?watch_id="+id+"&kind=dns", nil, 200)
+	var latest string
+	waitRetention(t, func() bool {
+		for _, v := range incidentRows(c) {
+			r := v.(map[string]any)
+			if r["kind"] == "dns" && r["id"] != incident["id"] {
+				latest = r["id"].(string)
+				return true
+			}
+		}
+		return false
+	}, func() { h.Clock.Advance(time.Second) })
 	c.Do("DELETE", "/api/dns-watches/"+id, nil, 204)
+	awaitIncidentEntry(t, h, c, latest, func(e map[string]any) bool { return e["stage"] == "配置变更结束" })
 	if provider.Writes() != 0 {
 		t.Fatal("故障追踪增加 DNS 写入")
 	}
@@ -183,14 +200,14 @@ func TestIncidentsDNSFailureTracksWatchAndNewExpectation(t *testing.T) {
 func TestIncidentsStorageFailureDoesNotBlockEntrySwitch(t *testing.T) {
 	disk := &interruptedPersistence{}
 	f := newBlockedEntryRig(t, true, func(d *panel.Dependencies) { disk.base = d.Persistence; d.Persistence = disk })
-	if _, err := disk.db.Exec(`CREATE TRIGGER fail_operation_incidents BEFORE INSERT ON operation_incidents BEGIN SELECT RAISE(ABORT,'故障投影写入失败'); END`); err != nil {
+	if _, err := disk.db.Exec(`CREATE TRIGGER fail_operation_incidents BEFORE INSERT ON operation_incidents BEGIN SELECT RAISE(ABORT,'故障投影写入失败'); END; CREATE TRIGGER fail_operation_projection BEFORE UPDATE ON operation_projection BEGIN SELECT RAISE(ABORT,'故障投影提交失败'); END`); err != nil {
 		t.Fatal(err)
 	}
 	f.block(t, 0)
 	f.awaitPublication(t, f.ids[1], 2)
 	waitRetention(t, func() bool { return operations(t, f.c)["incident_error"] != "" }, func() { f.h.Clock.Advance(time.Second) })
 	writes := f.dns.Writes()
-	if _, err := disk.db.Exec("DROP TRIGGER fail_operation_incidents"); err != nil {
+	if _, err := disk.db.Exec("DROP TRIGGER fail_operation_incidents; DROP TRIGGER fail_operation_projection"); err != nil {
 		t.Fatal(err)
 	}
 	incident := awaitIncident(t, f.h, f.c, "blocked")
@@ -280,6 +297,19 @@ func TestIncidentsScaleKeepsControlAndAutomaticSwitchWorking(t *testing.T) {
 	if _, err := disk.db.Exec(`WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10000) INSERT INTO operation_incidents(source_key,kind,title,impact,handling,started_at,updated_at,ended_at,closure,refs,reasons) SELECT 'scale:'||x,'rule','已结束样例','cleared','ended',?,?,?,'异常解除','[]','[]' FROM n`, now, now, now); err != nil {
 		t.Fatal(err)
 	}
+	// 带真实关联形状的历史：时间线、已完成动作及其事件均达到一万条。
+	if _, err := disk.db.Exec(`INSERT INTO operation_timeline(incident_id,fact_key,stage,message,source,version,observed_at) SELECT sequence,'scale','历史阶段','已结束的历史事实','既有动作',1,? FROM operation_incidents WHERE source_key LIKE 'scale:%'`, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := disk.db.Exec(`INSERT INTO rotation_actions(id,node_id,old_ip,new_ip,state,recheck_status,created_at,expires_at,updated_at,secret_name) SELECT 'scale-action:'||sequence,?,'8.8.8.8','1.1.1.1','changed','recovered',?,?,?,'' FROM operation_incidents WHERE source_key LIKE 'scale:%'`, ids[0], now, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := disk.db.Exec(`INSERT INTO operation_rotation_links(rotation_id,source_key) SELECT 'scale-action:'||sequence,source_key FROM operation_incidents WHERE source_key LIKE 'scale:%'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := disk.db.Exec(`INSERT INTO events(node_id,source,event_id,type,occurred_at,received_at,config_revision,message) SELECT ?,'panel','rotation-notice:scale-action:'||sequence||':changed','ip_rotation_changed',?,?,0,'历史动作已结束' FROM operation_incidents WHERE source_key LIKE 'scale:%'`, ids[0], now, now); err != nil {
+		t.Fatal(err)
+	}
 	loaded := check()
 	page := f.c.Do("GET", "/api/incidents?status=ended&limit=100", nil, 200)
 	if len(page["incidents"].([]any)) != 100 || page["next_before"] == nil {
@@ -299,4 +329,78 @@ func TestIncidentsScaleKeepsControlAndAutomaticSwitchWorking(t *testing.T) {
 		t.Fatalf("规模展示改变自动动作: DNS=%d 换 IP=%d", f.dns.Writes(), f.calls.Load())
 	}
 	t.Logf("100 节点 / 1000 规则概览：历史装载前 %s，10000 条结束故障后 %s；自动切换和控制报告正常", baseline, loaded)
+}
+
+func TestIncidentsStandaloneRotationRemainsOpenAcrossProjection(t *testing.T) {
+	f := newBlockedEntryRig(t, true)
+	f.c.Do("POST", "/api/nodes/"+f.ids[0]+"/ip-rotation/actions", nil, 202)
+	incident := awaitIncident(t, f.h, f.c, "blocked")
+	id := incident["id"].(string)
+	for i := 0; i < 3; i++ {
+		f.h.Clock.Advance(6 * time.Second)
+		time.Sleep(20 * time.Millisecond)
+		row := f.c.Do("GET", "/api/incidents/"+id, nil, 200)
+		if row["ended_at"] != nil {
+			t.Fatalf("进行中的独立动作被错误结束: %v", row)
+		}
+	}
+	if f.calls.Load() != 1 {
+		t.Fatal("展示重复调用商家")
+	}
+}
+
+func TestIncidentsQueriesRequireAuthenticationAndValidateFilters(t *testing.T) {
+	h, c := nodeBrowser(t)
+	for _, path := range []string{"/api/overview", "/api/incidents", "/api/incidents/1", "/api/incidents/1/timeline"} {
+		h.Client().Do("GET", path, nil, 401)
+	}
+	for _, query := range []string{"limit=101", "before=-1", "kind=invalid", "status=invalid", "from=bad", "from=2030-01-02T00:00:00Z&to=2030-01-01T00:00:00Z"} {
+		c.Do("GET", "/api/incidents?"+query, nil, 400)
+	}
+	c.Do("GET", "/api/incidents/missing/timeline", nil, 404)
+}
+
+func TestIncidentsNoCandidateRecoveryCompletesAfterActualPropagation(t *testing.T) {
+	lookup := func(_ context.Context, _ string, _ dnswatch.Resolver) ([]string, error) {
+		return []string{"4.2.2.2"}, nil
+	}
+	f := newBlockedEntryRig(t, false, func(d *panel.Dependencies) { d.DNSWatchLookup = lookup })
+	f.c.Do("PUT", "/api/entry-groups/"+f.group+"/blocked-policy", map[string]string{"policy": "switch_then_rotate"}, 200)
+	checker := addNode(f.c, "传播验收检测点")
+	cid := checker["id"].(string)
+	f.c.Do("PUT", "/api/nodes/"+cid+"/region", map[string]any{"name": "中国大陆", "mainland_china": true}, 204)
+	f.h.StartNode(checker["installation_ticket"].(string), func(_ *node.Config, d *node.Dependencies) { d.DNSWatchLookup = lookup })
+	awaitNode(t, f.c, cid, connected)
+	f.block(t, 0)
+	awaitStrategyRotation(t, f)
+	row := awaitIncident(t, f.h, f.c, "blocked")
+	id := row["id"].(string)
+	f.sites[0].mode.Store(2)
+	f.ip[0].Store("4.2.2.2")
+	strategySamples(t, f, 6)
+	strategyRotationView(t, f, func(v map[string]any) bool { return v["recheck_status"] == "recovered" })
+	f.awaitPublication(t, f.ids[0], 2)
+	waitRetention(t, func() bool {
+		f.h.Clock.Advance(time.Second)
+		time.Sleep(5 * time.Millisecond)
+		v := f.c.Do("GET", "/api/incidents/"+id, nil, 200)
+		return v["closure"] == "自动恢复完成"
+	}, func() { strategySamples(t, f, 1) })
+	if f.calls.Load() != 1 || f.dns.Writes() != 2 {
+		t.Fatal("传播追踪增加外部动作")
+	}
+}
+
+func TestIncidentsPolicyChangeEndsOriginalRecoveryBranch(t *testing.T) {
+	f := policyThree(t, true)
+	f.block(t, 0)
+	awaitStrategyRotation(t, f)
+	row := awaitIncident(t, f.h, f.c, "blocked")
+	id := row["id"].(string)
+	f.c.Do("PUT", "/api/entry-groups/"+f.group+"/blocked-policy", map[string]string{"policy": "disabled"}, 200)
+	awaitIncidentEntry(t, f.h, f.c, id, func(e map[string]any) bool { return e["stage"] == "配置变更结束" })
+	current := f.c.Do("GET", "/api/incidents/"+id, nil, 200)
+	if current["closure"] != "配置变更结束" {
+		t.Fatalf("策略改变后原流程仍等待: %v", current)
+	}
 }

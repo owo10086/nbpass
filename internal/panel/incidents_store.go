@@ -30,6 +30,8 @@ CREATE TABLE operation_projection (
  id INTEGER PRIMARY KEY CHECK(id=1),synced_at INTEGER NOT NULL DEFAULT 0
 );
 INSERT INTO operation_projection(id) VALUES(1);
+CREATE TABLE operation_rotation_links (rotation_id TEXT NOT NULL,source_key TEXT NOT NULL,PRIMARY KEY(rotation_id,source_key));
+CREATE INDEX operation_rotation_sources ON operation_rotation_links(source_key);
 CREATE TABLE operation_processed (source_key TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,ended INTEGER NOT NULL DEFAULT 0);
 `
 const incidentColumns = `sequence,source_key,kind,title,impact,handling,started_at,updated_at,ended_at,closure,refs,reasons`
@@ -110,6 +112,10 @@ func saveIncidentObservation(ctx context.Context, tx *sql.Tx, o incidentObservat
 	}
 	if missing {
 		if o.Closure != "" || o.ExistingOnly {
+			if o.Closure != "" {
+				_, e := tx.ExecContext(ctx, `INSERT INTO operation_processed(source_key,fingerprint,ended) VALUES(?,?,1) ON CONFLICT(source_key) DO UPDATE SET fingerprint=excluded.fingerprint,ended=1`, o.Key, fingerprint)
+				return e
+			}
 			return nil
 		}
 		res, err := tx.ExecContext(ctx, `INSERT INTO operation_incidents(source_key,kind,title,impact,handling,started_at,updated_at,refs,reasons) VALUES(?,?,?,?,?,?,?,?,?)`, o.Key, o.Kind, o.Title, o.Impact, o.Handling, now.UnixNano(), now.UnixNano(), watchJSON(o.Refs), watchJSON(o.Reasons))
