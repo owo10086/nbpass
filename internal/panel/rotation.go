@@ -224,7 +224,12 @@ func (p *Panel) authorizeRotation(ctx context.Context, id string, manual bool) (
 		}
 	}
 	var entries []rotationEntry
+	var members []rotationMember
 	if !manual {
+		members, err = p.prepareAllMemberRotation(ctx, id)
+		if err != nil {
+			return nil, err
+		}
 		entries, err = p.prepareCrossGroupRotation(ctx, id)
 		if err != nil {
 			return nil, err
@@ -260,6 +265,13 @@ func (p *Panel) authorizeRotation(ctx context.Context, id string, manual bool) (
 		if !current {
 			return nil, &forwardingError{409, "跨组切离期望版本已变化，等待重新检查"}
 		}
+		current, err = rotationMembersCurrent(ctx, tx, id, members)
+		if err != nil {
+			return nil, err
+		}
+		if !current {
+			return nil, &forwardingError{409, "全部发布组切离期望已变化，等待重新检查"}
+		}
 	}
 	settings, e := loadSelfCheckSettings(ctx, tx)
 	if e != nil {
@@ -282,6 +294,9 @@ func (p *Panel) authorizeRotation(ctx context.Context, id string, manual bool) (
 	}
 	if err == nil {
 		err = linkStrategyThreeRotation(ctx, tx, id, actionID, manual)
+	}
+	if err == nil && !manual {
+		err = saveRotationMembers(ctx, tx, actionID, members)
 	}
 	if err == nil && !manual {
 		for _, entry := range entries {

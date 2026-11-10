@@ -52,6 +52,13 @@ func (p *Panel) restoreAllGroup(ctx context.Context, g string, states map[[2]str
 		if m.Record == nil || m.ExpectedEnabled || m.ManualLocked || m.RemovalActionID != "" || m.LastError != "" {
 			continue
 		}
+		allowed, err := allMemberRotationRecovered(ctx, tx, g, m)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			continue
+		}
 		key := [2]string{g, m.NodeID}
 		state := states[key]
 		fresh, err := p.offlineCandidateCurrent(ctx, tx, state)
@@ -129,6 +136,18 @@ func (p *Panel) restoreAllGroup(ctx context.Context, g string, states map[[2]str
 		}
 	}
 	return nil
+}
+
+// 因本成员参与的受控换 IP 尚未恢复时，周期自测不能代替本次新 IP 复检。
+// 后续合法手动换 IP 可以接续恢复；换绑后不继承旧记录的恢复门槛。
+func allMemberRotationRecovered(ctx context.Context, tx *sql.Tx, g string, m allMemberPublication) (bool, error) {
+	var waiting bool
+	err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM rotation_actions a
+ WHERE a.id=(SELECT id FROM rotation_actions WHERE node_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1)
+ AND EXISTS(SELECT 1 FROM rotation_member_barriers b JOIN rotation_actions original ON original.id=b.action_id
+ WHERE original.node_id=a.node_id AND b.group_id=? AND b.managed_record_id=? AND b.binding_generation=?)
+ AND NOT (a.state='changed' AND a.recheck_status='recovered' AND a.new_ip=(SELECT confirmed_ipv4 FROM node_regions WHERE node_id=a.node_id)))`, m.NodeID, g, m.Record.ID, m.Record.BindingGeneration).Scan(&waiting)
+	return !waiting, err
 }
 
 // 新绑定的成员尚无本地期望地址时，仍须以绑定读回的记录地址核对三方一致。

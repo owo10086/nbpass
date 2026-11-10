@@ -118,6 +118,7 @@ var migrations = []string{
 	allPublishMigration,
 	allPublishPolicyMigration,
 	allPublishOfflineMigration,
+	allPublishRotationMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

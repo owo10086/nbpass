@@ -160,12 +160,15 @@ func (p *Panel) startRotationPolicy(ctx context.Context) {
 				}
 				rows.Close()
 			}
+			restrictions := map[string]error{}
 			for _, id := range ids {
 				if _, err := p.authorizeRotation(ctx, id, false); err != nil {
+					restrictions[id] = err
 					_ = p.notifyStrategyThreeRestriction(ctx, id, err)
 				}
 			}
 			_ = p.observeStrategyThreeRotations(ctx)
+			_ = p.observeAllMemberRotations(ctx, restrictions)
 			_ = p.reconcileNodeAddressSyncs(ctx)
 			p.controlMu.Unlock()
 			timer := p.deps.Clock.NewTimer(time.Second)
