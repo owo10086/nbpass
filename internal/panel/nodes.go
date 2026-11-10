@@ -75,6 +75,8 @@ func (p *Panel) addNode(w http.ResponseWriter, r *http.Request) {
 }
 
 type nodeView struct {
+	ManagedRecord *managedRecord `json:"managed_record"`
+	RecordStatus  string         `json:"record_status"`
 	nodeUpgradeView
 	nodeRegionView
 	ID               string       `json:"id"`
@@ -171,6 +173,10 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		nodes[i].nodeUpgradeView = view
+	}
+	if err := p.nodeRecordViews(r.Context(), nodes); err != nil {
+		problem(w, 503, "无法读取节点受管记录")
+		return
 	}
 	respond(w, 200, map[string]any{"nodes": nodes})
 }

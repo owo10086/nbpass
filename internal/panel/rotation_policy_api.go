@@ -160,6 +160,7 @@ func (p *Panel) startRotationPolicy(ctx context.Context) {
 				}
 			}
 			_ = p.observeStrategyThreeRotations(ctx)
+			_ = p.reconcileNodeAddressSyncs(ctx)
 			p.controlMu.Unlock()
 			timer := p.deps.Clock.NewTimer(time.Second)
 			select {

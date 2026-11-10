@@ -108,7 +108,12 @@ func (p *Panel) getNodeReferences(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	respond(w, 200, map[string]any{"references": refs})
+	warnings, err := p.nodeRecordWarnings(r.Context(), r.PathValue("id"))
+	if err != nil {
+		problem(w, 503, "无法读取旧记录提示")
+		return
+	}
+	respond(w, 200, map[string]any{"references": refs, "warnings": warnings})
 }
 
 func (p *Panel) deleteNode(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +136,8 @@ func (p *Panel) deleteNode(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Panel) removeNode(ctx context.Context, id string) ([]nodeReference, error) {
+	p.entryMu.Lock()
+	defer p.entryMu.Unlock()
 	p.controlMu.Lock()
 	defer p.controlMu.Unlock()
 	tx, err := p.db.BeginTx(ctx, nil)
@@ -141,6 +148,13 @@ func (p *Panel) removeNode(ctx context.Context, id string) ([]nodeReference, err
 	refs, err := nodeReferences(ctx, tx, id)
 	if err != nil || len(refs) > 0 {
 		return refs, err
+	}
+	var pending bool
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM managed_records m JOIN entry_action_records r ON r.managed_record_id=m.id WHERE m.node_id=? AND r.stage IN `+pendingRecordStages+`) OR EXISTS(SELECT 1 FROM node_address_sync_jobs WHERE node_id=?)`, id, id).Scan(&pending); err != nil {
+		return nil, err
+	}
+	if pending {
+		return nil, &forwardingError{409, "节点受管记录有未完成动作，不能删除"}
 	}
 	// 删除运行态和凭据，事件历史没有外键且保留。业务引用绝不级联删除。
 	// 顺序按外键依赖：入口离线核查先于离线事故，换 IP 额度先于换 IP 动作。
@@ -167,4 +181,22 @@ func (p *Panel) removeNode(ctx context.Context, id string) ([]nodeReference, err
 	}
 	delete(p.pendingControls, id)
 	return refs, nil
+}
+
+// 删除确认展示旧远端记录提示；删除只清理本地归属，不调用 DNSPod。
+func (p *Panel) nodeRecordWarnings(ctx context.Context, id string) ([]string, error) {
+	rows, err := p.db.QueryContext(ctx, "SELECT domain,record_id FROM managed_records WHERE node_id=?", id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	warnings := []string{}
+	for rows.Next() {
+		var domain, record string
+		if err := rows.Scan(&domain, &record); err != nil {
+			return nil, err
+		}
+		warnings = append(warnings, "旧 DNSPod 记录（"+domain+" / "+record+"）保持原状，请管理员自行核对和处理")
+	}
+	return warnings, rows.Err()
 }

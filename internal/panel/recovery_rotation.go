@@ -85,6 +85,9 @@ func (p *Panel) importRecoveryRotation(ctx context.Context, tx *sql.Tx, id strin
 		if err == nil && adopt {
 			err = confirmNodeAddressAtTx(ctx, tx, id, progress.NewIp, a.AttemptedAt)
 			if err == nil {
+				err = p.syncNodeWatchTx(ctx, tx, id)
+			}
+			if err == nil {
 				_, err = tx.ExecContext(ctx, `UPDATE recovery_records SET verified=0 WHERE managed_record_id IN (SELECT id FROM managed_records WHERE node_id=? OR group_id IN (SELECT group_id FROM entry_group_members WHERE node_id=?))`, id, id)
 			}
 			if err == nil {

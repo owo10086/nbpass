@@ -155,7 +155,9 @@ func (p *Panel) reconcileRecoveryRecord(ctx context.Context, b managedRecord) er
 		_, err = tx.ExecContext(ctx, `UPDATE entry_publications SET desired_version=desired_version+1,active_node_id=?,expected_value=?,current_action_id='',written_at=? WHERE group_id=? AND (active_node_id<>? OR expected_value<>? OR current_action_id<>'')`, nodeID, actual.Record.Value, p.deps.Clock.Now().UnixNano(), b.GroupID, nodeID, actual.Record.Value)
 	}
 	if err == nil && b.OwnerKind == "node" {
-		_, err = tx.ExecContext(ctx, `UPDATE node_publications SET desired_version=desired_version+1,current_action_id='',written_at=? WHERE node_id=? AND current_action_id<>''`, p.deps.Clock.Now().UnixNano(), b.NodeID)
+		_, err = tx.ExecContext(ctx, `UPDATE node_publications SET desired_version=desired_version+1,current_action_id='',written_at=?,
+ published=CASE WHEN ? AND EXISTS(SELECT 1 FROM entry_actions a JOIN entry_action_records r ON r.action_id=a.id WHERE a.id=node_publications.current_action_id AND a.kind='first_publish' AND a.stage IN ('恢复已封存','服务商已写入') AND r.managed_record_id=? AND r.binding_generation=? AND r.explicit_enable=1 AND r.status_started=1 AND r.new_value=? AND r.new_enabled=1) THEN 1 ELSE published END
+ WHERE node_id=? AND current_action_id<>''`, p.deps.Clock.Now().UnixNano(), actual.Record.Enabled, b.ID, b.BindingGeneration, actual.Record.Value, b.NodeID)
 	}
 	if err != nil {
 		return err

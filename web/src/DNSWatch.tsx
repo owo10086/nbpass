@@ -7,7 +7,7 @@ import { api, APIError } from './api';
 type Resolver = { kind: 'dns' | 'doh'; address: string };
 type Path = { path_id: string; node_id: string; kind: string; resolver: string; ips: string[]; status: string; expected_version: number; consecutive_mismatches: number; consecutive_matches: number; sampled_at: string | null };
 type History = { sequence: number; path_id: string; sampled_at: string; old_ips: string[]; ips: string[]; status: string; changed: boolean };
-type Watch = { id: string; domain: string; entry_group_id: string; propagation_status: string; expected_ips: string[]; expected_version: number; status: string; coverage_label: string; change_count: number; different_ip_count: number; today_switches: number; yesterday_switches: number; next_sample_at: string; paths: Path[]; history?: History[]; next_before?: number };
+type Watch = { id: string; domain: string; entry_group_id: string; owner_node_id: string; propagation_status: string; expected_ips: string[]; expected_version: number; status: string; coverage_label: string; change_count: number; different_ip_count: number; today_switches: number; yesterday_switches: number; next_sample_at: string; paths: Path[]; history?: History[]; next_before?: number };
 type SwitchDay = { date: string; count: number; switches: { at: string; old_ips: string[]; ips: string[] }[] };
 type SwitchPage = { days: SwitchDay[]; next_before: string | null };
 // 今日、昨日按浏览器所在时区划分，后端按同一偏移分天。
@@ -101,7 +101,7 @@ export function DNSWatch({ onSessionExpired }: { onSessionExpired: () => void })
       { title: '状态', render: (_, row) => <><Tag color={color(row.status)}>{row.status}</Tag>{row.propagation_status && <Tag>{row.propagation_status}</Tag>}<span className="cell-sub">{row.coverage_label}</span></> },
       { title: '不同 IP 数',dataIndex: 'different_ip_count', render: value => <span className="num">{value}</span> },
       { title: '下次查询', dataIndex: 'next_sample_at', render: value => <span className="num">{date(value)}</span> },
-      { title: '', key: 'actions', align: 'right', render: (_, row) => row.entry_group_id ? <span className="muted">入口组自动管理</span> : <div className="row-actions"><Button size="small" type="text" onClick={() => edit(row)}>修改期望</Button><Popconfirm title={`删除 ${row.domain} 的解析监控及历史？`} onConfirm={() => remove(row.id)}><Button danger size="small" type="text" loading={busy}>删除</Button></Popconfirm></div> },
+      { title: '', key: 'actions', align: 'right', render: (_, row) => (row.entry_group_id || row.owner_node_id) ? <span className="muted">{row.owner_node_id ? '入口节点自动管理' : '入口组自动管理'}</span> : <div className="row-actions"><Button size="small" type="text" onClick={() => edit(row)}>修改期望</Button><Popconfirm title={`删除 ${row.domain} 的解析监控及历史？`} onConfirm={() => remove(row.id)}><Button danger size="small" type="text" loading={busy}>删除</Button></Popconfirm></div> },
     ]} /></div>
     <Modal title={editing === 'new' ? '添加解析监控' : '修改期望 IP'} open={!!editing} onCancel={() => setEditing(undefined)} onOk={() => form.submit()} confirmLoading={busy} destroyOnHidden>
       {error && <Alert title={error} type="error" showIcon />}

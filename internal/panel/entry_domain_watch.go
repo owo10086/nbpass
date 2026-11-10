@@ -30,7 +30,7 @@ func (p *Panel) bindEntryDomainWatch(ctx context.Context, tx *sql.Tx, group stri
 	}
 	now := p.deps.Clock.Now().UnixNano()
 	// 优先接管同名手工监控；其他入口组的同名监控有各自独立的期望。
-	_, err = tx.ExecContext(ctx, `UPDATE dns_watches SET entry_group_id=?,expected_ips='[]',expected_version=0,next_sample_at=?,last_status='' WHERE domain=? AND entry_group_id IS NULL AND NOT EXISTS(SELECT 1 FROM dns_watches WHERE entry_group_id=?)`, group, now, domain, group)
+	_, err = tx.ExecContext(ctx, `UPDATE dns_watches SET entry_group_id=?,expected_ips='[]',expected_version=0,next_sample_at=?,last_status='' WHERE domain=? AND entry_group_id IS NULL AND owner_node_id IS NULL AND NOT EXISTS(SELECT 1 FROM dns_watches WHERE entry_group_id=?)`, group, now, domain, group)
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `INSERT INTO dns_watches(id,domain,expected_ips,expected_version,next_sample_at,created_at,entry_group_id) SELECT ?,?,'[]',0,?,?,? WHERE NOT EXISTS(SELECT 1 FROM dns_watches WHERE entry_group_id=?)`, "entry:"+group, domain, now, now, group, group)
 	}

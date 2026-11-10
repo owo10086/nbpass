@@ -82,6 +82,9 @@ func (c *entryCoordinator) executeRecord(a EntryAction, r EntryActionRecord) err
 	if _, err := recordWarnings(actual, r.RecordID, b.LineID); err != nil || actual.Record.Name != b.Name || b.OwnerKind == "group" && !actual.Record.Enabled {
 		return c.recordNote(a, r, "受管记录类型、名称、启用状态或线路变化，等待人工核对")
 	}
+	if r.preserveEnabled {
+		r.NewEnabled = actual.Record.Enabled
+	}
 	value := r.NewValue
 	if value == "" {
 		value = actual.Record.Value
@@ -190,7 +193,7 @@ func (c *entryCoordinator) markRecordWriting(a EntryAction, r EntryActionRecord)
 	if err := missingResult(tx.ExecContext(c.ctx, `UPDATE entry_actions SET old_value=CASE WHEN write_started=0 THEN ? ELSE old_value END,old_ttl=CASE WHEN write_started=0 THEN ? ELSE old_ttl END,write_started=1,last_error='' WHERE id=? AND version=? AND stage NOT IN `+terminalActionStages, r.OldValue, r.OldTTL, a.ID, a.Version)); err != nil {
 		return err
 	}
-	err = missingResult(tx.ExecContext(c.ctx, `UPDATE entry_action_records SET old_value=?,old_ttl=?,old_enabled=?,write_started=1,status_started=?,last_error='' WHERE action_id=? AND managed_record_id=? AND binding_generation=? AND stage IN `+pendingRecordStages+` AND EXISTS(SELECT 1 FROM managed_records m WHERE m.id=managed_record_id AND m.binding_generation=entry_action_records.binding_generation AND m.provider=entry_action_records.provider AND m.domain=entry_action_records.domain AND m.record_id=entry_action_records.record_id)`, r.OldValue, r.OldTTL, r.OldEnabled, r.statusStarted, a.ID, r.ManagedRecordID, r.BindingGeneration))
+	err = missingResult(tx.ExecContext(c.ctx, `UPDATE entry_action_records SET old_value=?,old_ttl=?,old_enabled=?,write_started=1,status_started=?,new_enabled=?,last_error='' WHERE action_id=? AND managed_record_id=? AND binding_generation=? AND stage IN `+pendingRecordStages+` AND EXISTS(SELECT 1 FROM managed_records m WHERE m.id=managed_record_id AND m.binding_generation=entry_action_records.binding_generation AND m.provider=entry_action_records.provider AND m.domain=entry_action_records.domain AND m.record_id=entry_action_records.record_id)`, r.OldValue, r.OldTTL, r.OldEnabled, r.statusStarted, r.NewEnabled, a.ID, r.ManagedRecordID, r.BindingGeneration))
 	if err != nil {
 		return err
 	}
@@ -227,7 +230,7 @@ func (c *entryCoordinator) recordResult(a EntryAction, r EntryActionRecord, stag
 	if stage == EntryWritten {
 		written = c.p.deps.Clock.Now().UnixNano()
 	}
-	err = missingResult(tx.ExecContext(c.ctx, `UPDATE entry_action_records SET stage=?,last_error=?,write_started=?,written_at=?,value_confirmed=MAX(value_confirmed,?),new_value=? WHERE action_id=? AND managed_record_id=? AND binding_generation=? AND provider=? AND domain=? AND record_id=? AND stage IN `+pendingRecordStages+` AND EXISTS(SELECT 1 FROM entry_actions a WHERE a.id=action_id AND a.version=? AND a.stage NOT IN `+terminalActionStages+`) AND EXISTS(SELECT 1 FROM managed_records m WHERE m.id=managed_record_id AND m.binding_generation=entry_action_records.binding_generation AND m.provider=entry_action_records.provider AND m.domain=entry_action_records.domain AND m.record_id=entry_action_records.record_id)`, stage, message, r.writeStarted, written, stage == EntryWritten, r.NewValue, a.ID, r.ManagedRecordID, r.BindingGeneration, r.Provider, r.Domain, r.RecordID, a.Version))
+	err = missingResult(tx.ExecContext(c.ctx, `UPDATE entry_action_records SET stage=?,last_error=?,write_started=?,new_enabled=?,written_at=?,value_confirmed=MAX(value_confirmed,?),new_value=? WHERE action_id=? AND managed_record_id=? AND binding_generation=? AND provider=? AND domain=? AND record_id=? AND stage IN `+pendingRecordStages+` AND EXISTS(SELECT 1 FROM entry_actions a WHERE a.id=action_id AND a.version=? AND a.stage NOT IN `+terminalActionStages+`) AND EXISTS(SELECT 1 FROM managed_records m WHERE m.id=managed_record_id AND m.binding_generation=entry_action_records.binding_generation AND m.provider=entry_action_records.provider AND m.domain=entry_action_records.domain AND m.record_id=entry_action_records.record_id)`, stage, message, r.writeStarted, r.NewEnabled, written, stage == EntryWritten, r.NewValue, a.ID, r.ManagedRecordID, r.BindingGeneration, r.Provider, r.Domain, r.RecordID, a.Version))
 	if err != nil {
 		return err
 	}
@@ -304,7 +307,7 @@ func (c *entryCoordinator) aggregate(a EntryAction) error {
 			_, err = tx.ExecContext(c.ctx, `UPDATE entry_groups SET publication_status=? WHERE id=? AND EXISTS(SELECT 1 FROM entry_publications WHERE group_id=? AND current_action_id=? AND desired_version=?)`, stage, a.GroupID, a.GroupID, a.ID, a.Version)
 		}
 	} else {
-		_, err = tx.ExecContext(c.ctx, `UPDATE node_publications SET written_at=? WHERE node_id=? AND current_action_id=? AND desired_version=?`, written, a.OwnerNodeID, a.ID, a.Version)
+		_, err = tx.ExecContext(c.ctx, `UPDATE node_publications SET written_at=?,published=CASE WHEN ?='first_publish' AND ?='服务商已写入' THEN 1 ELSE published END WHERE node_id=? AND current_action_id=? AND desired_version=?`, written, a.Kind, stage, a.OwnerNodeID, a.ID, a.Version)
 	}
 	if err == nil {
 		err = p.actionEvent(c.ctx, tx, a, stage)

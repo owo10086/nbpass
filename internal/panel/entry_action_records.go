@@ -15,6 +15,7 @@ type ManagedRecordChange struct {
 	BindingGeneration int64
 	Value             string
 	Enabled           bool
+	PreserveEnabled   bool
 	ExplicitEnable    bool
 }
 
@@ -41,6 +42,7 @@ type EntryActionRecord struct {
 	NewEnabled                    bool   `json:"new_enabled"`
 	Stage                         string `json:"stage"`
 	LastError                     string `json:"last_error"`
+	preserveEnabled               bool
 	writeStarted, valueConfirmed  bool
 	explicitEnable, statusStarted bool
 }
@@ -48,7 +50,7 @@ type EntryActionRecord struct {
 func loadActionRecords(ctx context.Context, q interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, id string) ([]EntryActionRecord, error) {
-	rows, err := q.QueryContext(ctx, `SELECT managed_record_id,binding_generation,provider,domain,record_id,old_value,new_value,old_ttl,new_ttl,old_enabled,new_enabled,stage,last_error,write_started,value_confirmed,explicit_enable,status_started FROM entry_action_records WHERE action_id=? ORDER BY new_enabled DESC,managed_record_id`, id)
+	rows, err := q.QueryContext(ctx, `SELECT managed_record_id,binding_generation,provider,domain,record_id,old_value,new_value,old_ttl,new_ttl,old_enabled,new_enabled,stage,last_error,write_started,value_confirmed,explicit_enable,status_started,preserve_enabled FROM entry_action_records WHERE action_id=? ORDER BY new_enabled DESC,managed_record_id`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +58,7 @@ func loadActionRecords(ctx context.Context, q interface {
 	result := []EntryActionRecord{}
 	for rows.Next() {
 		var r EntryActionRecord
-		if err := rows.Scan(&r.ManagedRecordID, &r.BindingGeneration, &r.Provider, &r.Domain, &r.RecordID, &r.OldValue, &r.NewValue, &r.OldTTL, &r.NewTTL, &r.OldEnabled, &r.NewEnabled, &r.Stage, &r.LastError, &r.writeStarted, &r.valueConfirmed, &r.explicitEnable, &r.statusStarted); err != nil {
+		if err := rows.Scan(&r.ManagedRecordID, &r.BindingGeneration, &r.Provider, &r.Domain, &r.RecordID, &r.OldValue, &r.NewValue, &r.OldTTL, &r.NewTTL, &r.OldEnabled, &r.NewEnabled, &r.Stage, &r.LastError, &r.writeStarted, &r.valueConfirmed, &r.explicitEnable, &r.statusStarted, &r.preserveEnabled); err != nil {
 			return nil, err
 		}
 		result = append(result, r)
@@ -77,7 +79,7 @@ func insertActionRecord(ctx context.Context, tx *sql.Tx, id string, b managedRec
 	if change.Value == "" {
 		ttl = b.CurrentTTL
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO entry_action_records(action_id,managed_record_id,binding_generation,provider,domain,record_id,old_value,new_value,old_ttl,new_ttl,old_enabled,new_enabled,stage,explicit_enable) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, b.ID, b.BindingGeneration, b.Provider, b.Domain, b.RecordID, b.CurrentValue, change.Value, b.CurrentTTL, ttl, b.CurrentEnabled, change.Enabled, EntryDesired, change.ExplicitEnable)
+	_, err := tx.ExecContext(ctx, `INSERT INTO entry_action_records(action_id,managed_record_id,binding_generation,provider,domain,record_id,old_value,new_value,old_ttl,new_ttl,old_enabled,new_enabled,stage,explicit_enable,preserve_enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, id, b.ID, b.BindingGeneration, b.Provider, b.Domain, b.RecordID, b.CurrentValue, change.Value, b.CurrentTTL, ttl, b.CurrentEnabled, change.Enabled, EntryDesired, change.ExplicitEnable, change.PreserveEnabled)
 	return err
 }
 

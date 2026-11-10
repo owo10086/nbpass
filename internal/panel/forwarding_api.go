@@ -225,7 +225,7 @@ func (p *Panel) deleteEntryGroup(w http.ResponseWriter, r *http.Request) {
 	defer p.entryMu.Unlock()
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
 		var pending int
-		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM entry_actions WHERE group_id=? AND stage NOT IN "+terminalActionStages, r.PathValue("id")).Scan(&pending); err != nil {
+		if err := tx.QueryRowContext(r.Context(), "SELECT (SELECT count(*) FROM entry_actions WHERE group_id=? AND stage NOT IN "+terminalActionStages+") + (SELECT count(*) FROM node_address_sync_jobs j JOIN managed_records m ON m.id=j.managed_record_id WHERE m.group_id=?)", r.PathValue("id"), r.PathValue("id")).Scan(&pending); err != nil {
 			return err
 		}
 		if pending > 0 {
