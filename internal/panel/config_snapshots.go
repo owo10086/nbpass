@@ -17,28 +17,14 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 	if err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT group_id,node_id FROM entry_group_members ORDER BY position")
-	if err != nil {
-		return nil, err
-	}
-	members := map[string][]string{}
-	for rows.Next() {
-		var group, id string
-		if err := rows.Scan(&group, &id); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		members[group] = append(members[group], id)
-	}
-	err = rows.Err()
-	rows.Close()
+	members, err := loadEntryGroupMembers(ctx, tx)
 	if err != nil {
 		return nil, err
 	}
 	if err := p.validateConfiguration(ctx, tx, rules, members); err != nil {
 		return nil, err
 	}
-	rows, err = tx.QueryContext(ctx, "SELECT id,desired_revision,check_port FROM nodes ORDER BY id")
+	rows, err := tx.QueryContext(ctx, "SELECT id,desired_revision,check_port FROM nodes ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
@@ -72,7 +58,7 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 		if !r.Enabled {
 			continue
 		}
-		for _, id := range members[r.EntryGroupID] {
+		for _, id := range forwarding.RuleEntryNodes(r, members) {
 			compiled[id].Rules = append(compiled[id].Rules, r.Config())
 		}
 	}

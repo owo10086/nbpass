@@ -87,7 +87,7 @@ func ConfigurationErrors(nodes []ValidationNode, rules []Rule, members map[strin
 		if !r.Enabled || invalid[r.ID] {
 			continue
 		}
-		for _, id := range members[r.EntryGroupID] {
+		for _, id := range RuleEntryNodes(r, members) {
 			n := byNode[id]
 			ref := ListenerReference{NodeID: id, NodeName: n.Name, Port: r.ListenPort, Kind: "rule", RuleID: r.ID, RuleName: r.Name}
 			endpoints = append(endpoints, endpoint{ref: ref, rule: r})
@@ -219,7 +219,7 @@ func ListenerConflicts(nodes []ValidationNode, rules []Rule, members map[string]
 		if !rule.Enabled {
 			continue
 		}
-		for _, id := range members[rule.EntryGroupID] {
+		for _, id := range RuleEntryNodes(rule, members) {
 			reserve(ListenerReference{NodeID: id, NodeName: byID[id].Name, Port: rule.ListenPort, Kind: "rule", RuleID: rule.ID, RuleName: rule.Name})
 		}
 	}

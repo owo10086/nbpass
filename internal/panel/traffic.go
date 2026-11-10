@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"nbpass/internal/controlpb"
+	"nbpass/internal/forwarding"
 )
 
 const trafficMigration = `CREATE TABLE rule_traffic_totals (
@@ -40,9 +42,25 @@ INSERT INTO rule_traffic_sources(node_id,rule_id)
 
 // 保留曾正式下发过的入口归属。缓存授权离线不设到期，移组不能丢掉原入口的补报。
 func recordTrafficSources(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO rule_traffic_sources(node_id,rule_id)
- SELECT m.node_id,r.id FROM forward_rules r JOIN entry_group_members m ON m.group_id=r.entry_group_id WHERE r.enabled=1`)
-	return err
+	rules, err := loadRules(ctx, tx)
+	if err != nil {
+		return err
+	}
+	members, err := loadEntryGroupMembers(ctx, tx)
+	if err != nil {
+		return err
+	}
+	for _, r := range rules {
+		if !r.Enabled {
+			continue
+		}
+		for _, id := range forwarding.RuleEntryNodes(r, members) {
+			if _, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO rule_traffic_sources(node_id,rule_id) VALUES(?,?)", id, r.ID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (p *Panel) acceptTraffic(ctx context.Context, id, instance string, report *controlpb.NodeReport) (*controlpb.PanelMessage, error) {
@@ -148,20 +166,31 @@ func (p *Panel) rulesWithTraffic(ctx context.Context, rules []ruleView) ([]ruleW
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		rows, err := p.db.QueryContext(ctx, `SELECT m.node_id,n.process_instance,n.last_seen_at,t.process_instance,t.active_connections,t.sampled_at,t.received_at FROM entry_group_members m JOIN nodes n ON n.id=m.node_id LEFT JOIN rule_traffic_realtime t ON t.node_id=m.node_id AND t.rule_id=? WHERE m.group_id=?`, r.ID, r.EntryGroupID)
+		fresh := true
+		members := len(r.SyncMembers)
+		var total uint64
+		// 同步成员已由 RuleEntryNodes 解析；历史来源只补字节，不进入实时连接数。
+		ids := make([]string, 0, members)
+		args := []any{r.ID}
+		for _, member := range r.SyncMembers {
+			ids = append(ids, "?")
+			args = append(args, member.NodeID)
+		}
+		if members == 0 {
+			out = append(out, v)
+			continue
+		}
+		rows, err := p.db.QueryContext(ctx, `SELECT n.id,n.process_instance,n.last_seen_at,t.process_instance,t.active_connections,t.sampled_at,t.received_at FROM nodes n LEFT JOIN rule_traffic_realtime t ON t.node_id=n.id AND t.rule_id=? WHERE n.id IN (`+strings.Join(ids, ",")+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
-		fresh := true
-		members := 0
-		var total uint64
 		for rows.Next() {
-			members++
 			var id, instance string
 			var sampledInstance sql.NullString
 			var last, active, at, received sql.NullInt64
-			if err = rows.Scan(&id, &instance, &last, &sampledInstance, &active, &at, &received); err != nil {
-				break
+			if err := rows.Scan(&id, &instance, &last, &sampledInstance, &active, &at, &received); err != nil {
+				rows.Close()
+				return nil, err
 			}
 			session := p.controls[id]
 			connected := session != nil
@@ -178,13 +207,10 @@ func (p *Panel) rulesWithTraffic(ctx context.Context, rules []ruleView) ([]ruleW
 				total += uint64(active.Int64)
 			}
 		}
-		rowErr := rows.Err()
+		err = rows.Err()
 		rows.Close()
 		if err != nil {
 			return nil, err
-		}
-		if rowErr != nil {
-			return nil, rowErr
 		}
 		if fresh && members > 0 {
 			v.Traffic.ActiveConnections = &total

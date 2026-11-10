@@ -3,7 +3,9 @@ package panel
 import (
 	"context"
 	"database/sql"
+	"nbpass/internal/forwarding"
 	"net/http"
+	"sort"
 	"strings"
 )
 
@@ -26,7 +28,6 @@ func nodeReferences(ctx context.Context, tx *sql.Tx, id string) ([]nodeReference
 	queries := []string{
 		`SELECT DISTINCT 'entry_group',g.id,g.name FROM entry_groups g JOIN entry_group_members m ON m.group_id=g.id WHERE m.node_id=?`,
 		`SELECT DISTINCT 'entry_group',g.id,g.name FROM entry_groups g JOIN entry_actions a ON a.group_id=g.id WHERE a.node_id=?`,
-		`SELECT DISTINCT 'rule',r.id,r.name FROM forward_rules r JOIN entry_group_members m ON m.group_id=r.entry_group_id WHERE m.node_id=?`,
 	}
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('exit_groups','exit_group_members')").Scan(&exists); err != nil {
 		return nil, err
@@ -57,7 +58,39 @@ func nodeReferences(ctx context.Context, tx *sql.Tx, id string) ([]nodeReference
 		}
 		refs = append(refs, ref)
 	}
-	return refs, rows.Err()
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	rules, err := loadRules(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	members, err := loadEntryGroupMembers(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[nodeReference]bool{}
+	for _, ref := range refs {
+		seen[ref] = true
+	}
+	for _, r := range rules {
+		if containsEntryMember(forwarding.RuleEntryNodes(r, members), id) {
+			seen[nodeReference{Kind: "rule", ID: r.ID, Name: r.Name}] = true
+		}
+	}
+	refs = refs[:0]
+	for ref := range seen {
+		refs = append(refs, ref)
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Kind != refs[j].Kind {
+			return refs[i].Kind < refs[j].Kind
+		}
+		return refs[i].ID < refs[j].ID
+	})
+	return refs, nil
 }
 
 func (p *Panel) getNodeReferences(w http.ResponseWriter, r *http.Request) {

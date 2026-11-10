@@ -10,9 +10,14 @@ import (
 
 // 仅保留升级前已经同时下发双端、授权内容未变化的零代次规则。
 // 删除、停用或修改授权后，下一份完整快照不再包含它，不能借兼容路径复活。
-func (p *Panel) legacyTunnelAuthorizations(ctx context.Context, tx *sql.Tx, rules []forwarding.Rule) (map[[3]string]bool, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT node_id,snapshot,encrypted FROM node_snapshots
- WHERE node_id IN (SELECT node_id FROM tunnel_exits UNION SELECT node_id FROM entry_group_members)`)
+func (p *Panel) legacyTunnelAuthorizations(ctx context.Context, tx *sql.Tx, rules []forwarding.Rule, members map[string][]string) (map[[3]string]bool, error) {
+	relevant := map[string]bool{}
+	for _, r := range rules {
+		for _, id := range forwarding.RuleEntryNodes(r, members) {
+			relevant[id] = true
+		}
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT s.node_id,s.snapshot,s.encrypted,EXISTS(SELECT 1 FROM tunnel_exits e WHERE e.node_id=s.node_id) FROM node_snapshots s`)
 	if err != nil {
 		return nil, err
 	}
@@ -21,9 +26,12 @@ func (p *Panel) legacyTunnelAuthorizations(ctx context.Context, tx *sql.Tx, rule
 	for rows.Next() {
 		var id string
 		var data []byte
-		var encrypted bool
-		if err := rows.Scan(&id, &data, &encrypted); err != nil {
+		var encrypted, exit bool
+		if err := rows.Scan(&id, &data, &encrypted, &exit); err != nil {
 			return nil, err
+		}
+		if !exit && !relevant[id] {
+			continue
 		}
 		snapshot := &controlpb.ConfigSnapshot{}
 		if err := p.decodeSnapshot(id, data, encrypted, snapshot); err != nil {

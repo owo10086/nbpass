@@ -29,10 +29,10 @@ func TestRulesJSONExportContainsOnlyVersionedRuleDefinitions(t *testing.T) {
 	direct["enabled"] = false
 	f.c.Do("POST", "/api/rules", direct, 201)
 	doc := f.c.Do("GET", "/api/rules/export", nil, 200)
-	if len(doc) != 2 || doc["format_version"] != float64(1) || len(doc["rules"].([]any)) != 2 {
+	if len(doc) != 2 || doc["format_version"] != float64(2) || len(doc["rules"].([]any)) != 2 {
 		t.Fatalf("导出缺少格式版本或规则: %v", doc)
 	}
-	allowed := map[string]bool{"id": true, "name": true, "entry_group_id": true, "kind": true, "exit_group_id": true, "listen_port": true, "target_address": true, "target_family": true, "target_port": true, "allow_private": true, "enabled": true}
+	allowed := map[string]bool{"id": true, "name": true, "entry_group_id": true, "entry_node_id": true, "kind": true, "exit_group_id": true, "listen_port": true, "target_address": true, "target_family": true, "target_port": true, "allow_private": true, "enabled": true}
 	for _, value := range doc["rules"].([]any) {
 		for field := range value.(map[string]any) {
 			if !allowed[field] {
@@ -134,7 +134,7 @@ func TestRulesJSONRejectsAmbiguousFormatsAndModes(t *testing.T) {
 	_, c := nodeBrowser(t)
 	g := entryGroup(c, addNode(c, "格式入口")["id"].(string))["id"].(string)
 	for _, mutate := range []func(map[string]any, map[string]any){
-		func(doc, _ map[string]any) { doc["format_version"] = 2 },
+		func(doc, _ map[string]any) { doc["format_version"] = 3 },
 		func(doc, _ map[string]any) { delete(doc, "format_version") },
 		func(doc, _ map[string]any) { doc["rules"] = nil },
 		func(doc, _ map[string]any) { doc["token"] = "secret" },

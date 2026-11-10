@@ -27,7 +27,8 @@ const (
 type Rule struct {
 	ID            string        `json:"id"`
 	Name          string        `json:"name"`
-	EntryGroupID  string        `json:"entry_group_id"`
+	EntryGroupID  string        `json:"entry_group_id,omitempty"`
+	EntryNodeID   string        `json:"entry_node_id,omitempty"`
 	Kind          RuleKind      `json:"kind"`
 	ExitGroupID   string        `json:"exit_group_id,omitempty"`
 	ListenPort    int           `json:"listen_port"`
@@ -41,8 +42,11 @@ type Rule struct {
 func (r *Rule) Validate() error {
 	r.Name = strings.TrimSpace(r.Name)
 	r.TargetAddress = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(r.TargetAddress), "."))
-	if r.Name == "" || len(r.Name) > 200 || r.EntryGroupID == "" {
-		return errors.New("请指定规则名称和入口组")
+	if r.Name == "" || len(r.Name) > 200 {
+		return errors.New("请指定规则名称")
+	}
+	if (r.EntryGroupID == "") == (r.EntryNodeID == "") {
+		return errors.New("入口节点与入口组必须且只能指定一个")
 	}
 	if (r.Kind != Direct && r.Kind != Tunnel) || r.TargetFamily != IPv4 {
 		return errors.New("当前仅支持 TCP、IPv4 的直连或隧道规则")
@@ -99,4 +103,13 @@ func (r Rule) Config() *controlpb.ForwardRule {
 		kind = controlpb.RuleKind_RULE_KIND_TUNNEL
 	}
 	return &controlpb.ForwardRule{ExitGroupId: r.ExitGroupID, Id: r.ID, EntryGroupId: r.EntryGroupID, Kind: kind, ListenPort: uint32(r.ListenPort), TargetAddress: r.TargetAddress, TargetFamily: controlpb.AddressFamily_ADDRESS_FAMILY_IPV4, TargetPort: uint32(r.TargetPort), AllowPrivate: r.AllowPrivate}
+}
+
+// RuleEntryNodes 集中解析规则的实际入口节点集合；组入口保留成员顺序。
+// 调用方须先验证入口二选一及引用存在性；返回的切片只读，不可修改组成员。
+func RuleEntryNodes(r Rule, members map[string][]string) []string {
+	if r.EntryNodeID != "" {
+		return []string{r.EntryNodeID}
+	}
+	return members[r.EntryGroupID]
 }
