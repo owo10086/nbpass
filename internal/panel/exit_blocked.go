@@ -24,7 +24,10 @@ CREATE TABLE exit_address_progress (
 // 单节点入口、出口和入口组用途只决定申请资格；执行、额度、冻结仍只有节点级一份。
 const singleEntryRotationPurpose = `EXISTS(SELECT 1 FROM forward_rules r WHERE r.entry_node_id=c.node_id AND r.enabled=1)`
 
-const automaticRotationPurpose = `(` + singleEntryRotationPurpose + ` OR EXISTS(SELECT 1 FROM entry_group_members m JOIN entry_groups g ON g.id=m.group_id WHERE m.node_id=c.node_id AND g.blocked_policy='rotate_ip') OR EXISTS(SELECT 1 FROM tunnel_exits e WHERE e.node_id=c.node_id AND e.blocked_enabled=1) OR ` + strategyThreeRotationPurpose + `)`
+// 全部发布组成员申请换 IP 的唯一用途判定；票 07 在这里拦截因该组发起的申请。
+const allMemberRotationPurpose = `EXISTS(SELECT 1 FROM entry_group_members m JOIN entry_groups g ON g.id=m.group_id WHERE m.node_id=c.node_id AND g.publication_mode='all' AND g.first_published_at IS NOT NULL)`
+
+const automaticRotationPurpose = `(` + singleEntryRotationPurpose + ` OR ` + allMemberRotationPurpose + ` OR EXISTS(SELECT 1 FROM entry_group_members m JOIN entry_groups g ON g.id=m.group_id WHERE m.node_id=c.node_id AND g.publication_mode='primary_backup' AND g.blocked_policy='rotate_ip') OR EXISTS(SELECT 1 FROM tunnel_exits e WHERE e.node_id=c.node_id AND e.blocked_enabled=1) OR ` + strategyThreeRotationPurpose + `)`
 
 func (p *Panel) exitBlockedRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/nodes/{id}/exit-blocked", p.getExitBlocked)

@@ -134,6 +134,12 @@ func (p *Panel) markRotationPermit(ctx context.Context, node, action, origin str
 		if err != nil {
 			return false, err
 		}
+		if current {
+			current, err = rotationMemberPermitCurrent(ctx, tx, node, action)
+			if err != nil {
+				return false, err
+			}
+		}
 		if !current {
 			_, err = tx.ExecContext(ctx, `UPDATE rotation_actions SET state='cancelled',reason='跨组切离期望或节点自动授权已变化，未投递许可已取消',updated_at=? WHERE id=?`, p.deps.Clock.Now().UnixNano(), action)
 			if err == nil {

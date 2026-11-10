@@ -32,6 +32,10 @@ type allPolicyRig struct {
 }
 
 func newAllPolicyRig(t *testing.T, count int, options ...func(*panel.Dependencies)) *allPolicyRig {
+	return newAllPolicyRigWithNodes(t, count, nil, options...)
+}
+
+func newAllPolicyRigWithNodes(t *testing.T, count int, nodeOptions func(*node.Config, *node.Dependencies), options ...func(*panel.Dependencies)) *allPolicyRig {
 	t.Helper()
 	f := &allPolicyRig{dns: clusterharness.NewDNSPod(), telegram: &fakeTelegram{}}
 	f.h, f.c = telegramBrowser(t, f.telegram, append([]func(*panel.Dependencies){func(d *panel.Dependencies) { d.DNSProvider = f.dns }}, options...)...)
@@ -53,6 +57,9 @@ func newAllPolicyRig(t *testing.T, count int, options ...func(*panel.Dependencie
 					return nil, errors.New("测试环境端口已占用")
 				}
 				return net.Listen(network, "127.0.0.1:0")
+			}
+			if nodeOptions != nil {
+				nodeOptions(nil, d)
 			}
 		})
 		awaitNode(t, f.c, id, connected)
