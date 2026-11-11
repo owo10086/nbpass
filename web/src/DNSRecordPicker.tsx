@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Form, Select, Typography } from 'antd';
+import { App, AutoComplete, Button, Form, Modal, Radio, Select, Space, Typography } from 'antd';
 import { api, APIError } from './api';
 
 type Domain = { name: string; status: string };
 type PickedRecord = { id: string; name: string; hostname: string; line: string; line_id: string; value: string; enabled: boolean; reason: string; owner: string };
+type ProviderRecord = { id: string; name: string; type: string; line: string; line_id: string; value: string; enabled: boolean };
+export type RecordTarget = { account_id: string; domain: string; name: string };
+type Choice = { message: string; candidates: ProviderRecord[]; conflicts: ProviderRecord[]; values: RecordTarget };
 
-// 绑定表单内的账号 → 主域名 → A 记录三级选择；记录 ID 与线路随所选记录带出，绑定时由面板读回并完整校验。
+// 绑定表单内的账号 → 主域名 → 主机记录名；没有同名记录时面板新建，已有时接管，由绑定接口完整校验。
 export function DNSRecordPicker({ accounts, onError }: { accounts: { id: string; name: string }[]; onError: (e: unknown) => void }) {
   const form = Form.useFormInstance();
   const accountID: string | undefined = Form.useWatch('account_id', form);
@@ -43,31 +46,62 @@ export function DNSRecordPicker({ accounts, onError }: { accounts: { id: string;
   const recordStatus = (r: PickedRecord) => `${r.value} · ${r.line} · ${r.enabled ? '启用' : '暂停'}`;
   return <>
     <Form.Item name="account_id" label="DNSPod 账号" rules={[{ required: true, message: '请选择账号' }]}>
-      <Select placeholder="选择账号" options={accounts.map(a => ({ value: a.id, label: a.name }))} onChange={() => form.setFieldsValue({ domain: undefined, record_id: undefined, line_id: undefined })} />
+      <Select placeholder="选择账号" options={accounts.map(a => ({ value: a.id, label: a.name }))} onChange={() => form.setFieldsValue({ domain: undefined, name: undefined })} />
     </Form.Item>
     <Form.Item name="domain" label="主域名" rules={[{ required: true, message: '请选择主域名' }]}>
       <Select showSearch optionFilterProp="label" placeholder={accountID ? '选择 DNSPod 中的域名' : '请先选择账号'} disabled={!accountID} loading={loading.domains}
         status={loadError.domains ? 'error' : undefined}
         notFoundContent={loading.domains ? '正在读取…' : '该账号下没有域名'}
-        options={domains.map(d => ({ value: d.name, label: d.status && d.status !== 'enable' ? `${d.name}（${d.status === 'pause' ? '已暂停解析' : d.status}）` : d.name }))}
-        onChange={() => form.setFieldsValue({ record_id: undefined, line_id: undefined })} />
+        options={domains.map(d => ({ value: d.name, label: d.status && d.status !== 'enable' ? `${d.name}（${d.status === 'pause' ? '已暂停解析' : d.status}）` : d.name }))} />
     </Form.Item>
-    <Form.Item name="record_id" label="A 记录" rules={[{ required: true, message: '请选择要接管的 A 记录' }]}
-      extra={<>可选暂停的单线路 A 记录，不可接管的会标明原因。<Button type="link" size="small" style={{ padding: 0 }} disabled={!domain || loading.records} onClick={loadRecords}>重新读取记录</Button></>}>
-      <Select showSearch optionFilterProp="label" placeholder={domain ? '选择记录' : '请先选择主域名'} disabled={!domain} loading={loading.records}
-        status={loadError.records ? 'error' : undefined}
-        notFoundContent={loading.records ? '正在读取…' : '该域名下没有 A 记录'}
-        options={records.map(r => ({ value: r.id, label: `${r.hostname} · ${recordStatus(r)}`, disabled: !!r.reason, record: r }))}
-        optionRender={option => {
-          const r = option.data.record as PickedRecord;
-          return <div>
-            <div>{r.hostname} <Typography.Text type="secondary">{recordStatus(r)}</Typography.Text></div>
-            {(r.reason || r.owner) && <Typography.Text type={r.reason ? 'danger' : 'warning'} style={{ fontSize: 12 }}>{r.reason || `已绑定：${r.owner}`}</Typography.Text>}
-          </div>;
-        }}
-        onChange={(id: string) => form.setFieldsValue({ line_id: records.find(r => r.id === id)?.line_id })} />
+    <Form.Item label="主机记录" required
+      extra={<>填 www、@ 等，记录类型为 A。没有同名记录时面板在默认线路新建一条暂停的记录，首次发布或加回时启用；已有时接管，有多条或类型不同时再让你选。<Button type="link" size="small" style={{ padding: 0 }} disabled={!domain || loading.records} onClick={loadRecords}>重新读取已有记录</Button></>}>
+      <Space.Compact style={{ width: '100%' }}>
+        <Form.Item name="name" noStyle rules={[{ required: true, whitespace: true, message: '请填写主机记录名' }]}>
+          <AutoComplete placeholder={domain ? '输入或选择已有记录' : '请先选择主域名'} disabled={!domain} allowClear
+            filterOption={(input, option) => String(option?.value ?? '').includes(input.trim().toLowerCase())}
+            options={records.map(r => ({ value: r.name, label: <div>
+              <div>{r.hostname} <Typography.Text type="secondary">{recordStatus(r)}</Typography.Text></div>
+              {(r.reason || r.owner) && <Typography.Text type={r.reason ? 'danger' : 'warning'} style={{ fontSize: 12 }}>{r.reason || `已绑定：${r.owner}`}</Typography.Text>}
+            </div> })).filter((o, i, all) => all.findIndex(x => x.value === o.value) === i)} />
+        </Form.Item>
+        {domain && <Typography.Text type="secondary" style={{ padding: '4px 11px', whiteSpace: 'nowrap' }}>.{domain}</Typography.Text>}
+      </Space.Compact>
     </Form.Item>
-    <Form.Item name="line_id" hidden><input type="hidden" /></Form.Item>
     {(loadError.domains || loadError.records) && <Typography.Paragraph type="danger">{loadError.domains || loadError.records}</Typography.Paragraph>}
   </>;
+}
+
+// useRecordBinding 提交按名字绑定；面板要求再选（多条同名或类型冲突）时弹出选择，选定后带着选择重新提交。
+export function useRecordBinding(put: (body: Record<string, unknown>) => Promise<{ created?: boolean } | unknown>, run: (action: () => Promise<unknown>) => Promise<void>) {
+  const { message } = App.useApp();
+  const [choice, setChoice] = useState<Choice | null>(null);
+  const [picked, setPicked] = useState('');
+  async function attempt(values: RecordTarget, extra: Record<string, unknown>) {
+    try {
+      const result = await put({ account_id: values.account_id, domain: values.domain, name: values.name, type: 'A', ...extra }) as { created?: boolean } | undefined;
+      setChoice(null);
+      if (result?.created) void message.success('已在 DNSPod 新建暂停的记录，首次发布或加回时启用');
+    } catch (e) {
+      if (!(e instanceof APIError && e.status === 409 && (e.details.candidates || e.details.conflicts))) throw e;
+      setPicked('');
+      setChoice({ message: e.message, candidates: (e.details.candidates ?? []) as ProviderRecord[], conflicts: (e.details.conflicts ?? []) as ProviderRecord[], values });
+    }
+  }
+  function confirm() {
+    if (!choice || !picked) return;
+    const [kind, id] = picked.split(':');
+    const extra = kind === 'adopt' ? { record_id: id } : kind === 'convert' ? { convert_record_id: id } : { create: true };
+    void run(() => attempt(choice.values, extra));
+  }
+  const describe = (r: ProviderRecord) => `${r.type} ${r.value} · ${r.line} · ${r.enabled ? '启用' : '暂停'} · ID ${r.id}`;
+  const chooser = <Modal open={!!choice} title="选择要绑定的记录" okText="确认" okButtonProps={{ disabled: !picked }} onOk={confirm} onCancel={() => setChoice(null)} destroyOnHidden>
+    <Typography.Paragraph>{choice?.message}</Typography.Paragraph>
+    <Radio.Group value={picked} onChange={e => setPicked(e.target.value)} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {choice?.candidates.map(r => <Radio key={r.id} value={`adopt:${r.id}`}>接管 {describe(r)}</Radio>)}
+      {choice?.conflicts.map(r => <Radio key={r.id} value={`convert:${r.id}`}>把这条 {describe(r)} 改成 A 并接管（改后暂停，原值不保留）</Radio>)}
+      {!!choice?.candidates.length && <Radio value="create">在默认线路新建一条暂停的 A 记录</Radio>}
+    </Radio.Group>
+  </Modal>;
+  return { bind: (values: RecordTarget) => run(() => attempt(values, {})), chooser };
 }

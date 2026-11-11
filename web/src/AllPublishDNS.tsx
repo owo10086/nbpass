@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
-import { DNSRecordPicker } from './DNSRecordPicker';
+import { DNSRecordPicker, useRecordBinding } from './DNSRecordPicker';
 import { EntryDomainWatch } from './EntryDomainWatch';
 import type { EntryMemberState } from './EntryReadiness';
 
@@ -53,13 +53,14 @@ export function AllPublishDNS({ group, nodes, onClose, onSessionExpired }: { gro
     setSaving(true); setError('');
     try { await action(); await load(); } catch (e) { failed(e); } finally { if (active.current) setSaving(false); }
   }
+  const binder = useRecordBinding(async body => { const result = await api(`${path}/members/${bindingMember}/managed-record`, 'PUT', body); setBindingMember(null); return result; }, run);
   const members = publication?.members ?? [];
   const pending = publication?.action && ['期望已变更', '结果未确认'].includes(publication.action.stage);
   const name = (id: string) => nodes.find(n => n.id === id)?.name ?? id;
   return <Modal open title={`${group.name} · 全部发布`} onCancel={onClose} footer={null} width={1000}>
     <Space orientation="vertical" style={{ width: '100%' }} size="middle">
       {error && <Alert type="error" title={error} showIcon />}
-      <Alert type="info" showIcon title="每个成员绑定一条已有的同名、同线路 A 记录。" description="首次发布前不自动改 DNS。首次发布后新增成员会先暂停，等待加回；面板不创建或删除 DNSPod 记录。" />
+      <Alert type="info" showIcon title="每个成员各绑定一条同名、同线路的 A 记录。" description="填同一个主机记录名：没有空闲的同名记录时面板新建一条暂停的记录，首次发布或加回时启用。首次发布前不自动改 DNS；首次发布后新增成员会先暂停，等待加回。面板不删除 DNSPod 记录。" />
       <MemberRecords members={members} nodes={nodes} />
       {publication && <Card size="small" title="自动摘除与加回">
         <Space wrap>
@@ -102,11 +103,12 @@ export function AllPublishDNS({ group, nodes, onClose, onSessionExpired }: { gro
       <EntryDomainWatch all groupID={group.id} nodes={nodes} onSessionExpired={onSessionExpired} />
     </Space>
     <Modal open={!!bindingMember} title={`绑定 ${bindingMember ? name(bindingMember) : ''} 的记录`} footer={null} onCancel={() => setBindingMember(null)}>
-      <Form form={bindingForm} layout="vertical" onFinish={values => run(async () => { await api(`${path}/members/${bindingMember}/managed-record`, 'PUT', { account_id: values.account_id, domain: values.domain, record_id: values.record_id, line_id: values.line_id }); setBindingMember(null); })}>
+      <Form form={bindingForm} layout="vertical" onFinish={binder.bind}>
         <DNSRecordPicker accounts={accounts} onError={failed} />
-        <Button htmlType="submit" type="primary" loading={saving}>绑定并读取当前记录</Button>
+        <Button htmlType="submit" type="primary" loading={saving}>绑定记录</Button>
       </Form>
     </Modal>
+    {binder.chooser}
     <Modal open={addingAccount} title="添加 DNSPod 账号" footer={null} onCancel={() => { setAddingAccount(false); accountForm.resetFields(); }}>
       <Form form={accountForm} layout="vertical" onFinish={values => run(async () => { await api('/dns-accounts', 'POST', values); setAddingAccount(false); accountForm.resetFields(); })}>
         <Typography.Paragraph type="secondary">使用腾讯云 API 密钥（访问管理 → API 密钥管理），建议用只授予 DNSPod 权限的子账号。凭据加密保存在面板，保存后不回显。</Typography.Paragraph>

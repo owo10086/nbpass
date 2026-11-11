@@ -32,6 +32,8 @@ type managedRecord struct {
 	CurrentValue      string   `json:"current_value"`
 	CurrentTTL        int      `json:"current_ttl"`
 	Warnings          []string `json:"warnings"`
+	// Created 仅在本次绑定由面板新建记录时出现在应答中，不落库。
+	Created bool `json:"created,omitempty"`
 }
 
 const managedColumns = `coalesce(group_id,''),account_id,provider,domain,record_id,name,line,line_id,current_value,current_ttl,warnings,id,owner_kind,coalesce(node_id,''),binding_generation,current_enabled`
@@ -98,56 +100,28 @@ func normalizeDNSDomain(value string) (string, error) {
 	return domain, nil
 }
 func (p *Panel) bindManagedRecord(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		AccountID string `json:"account_id"`
-		Domain    string `json:"domain"`
-		RecordID  string `json:"record_id"`
-		LineID    string `json:"line_id"`
-	}
+	var body recordTarget
 	if !decode(w, r, &body) {
-		return
-	}
-	domain, err := normalizeDNSDomain(body.Domain)
-	if err != nil || body.AccountID == "" || body.RecordID == "" || len(body.RecordID) > 100 || body.LineID == "" || len(body.LineID) > 100 {
-		problem(w, 400, "请指定 DNSPod 账号、主域名、记录 ID 和单一线路 ID")
 		return
 	}
 	if !p.requireGroupMode(w, r, "primary_backup") {
 		return
 	}
-	var exists int
-	if err = p.db.QueryRowContext(r.Context(), "SELECT count(*) FROM entry_groups WHERE id=?", r.PathValue("id")).Scan(&exists); err != nil {
+	// 新建或改类型前先拒绝已发布的组，避免在服务商留下用不上的记录；事务内仍会再次校验。
+	var started bool
+	if err := p.db.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM entry_publications WHERE group_id=? AND desired_version>0)", r.PathValue("id")).Scan(&started); err != nil {
 		problem(w, 503, "存储暂不可用")
 		return
 	}
-	if exists == 0 {
-		problem(w, 404, "入口组不存在")
+	if started {
+		problem(w, 409, "已开始发布的入口组不能重新绑定受管记录")
 		return
 	}
-	credentials, err := p.dnsCredential(r.Context(), body.AccountID)
-	if err != nil {
-		problem(w, 400, "DNSPod 账号未配置或凭据不可用")
+	resolved, ok := p.resolveRecordTarget(w, r, body, recordTargetRules{initial: p.preferredInitialIPv4(r.PathValue("id"))})
+	if !ok {
 		return
 	}
-	if p.deps.DNSProvider == nil {
-		problem(w, 503, "DNS 服务商不可用")
-		return
-	}
-	ctx, cancel := p.dnsContext(r.Context())
-	defer cancel()
-	result, err := p.deps.DNSProvider.ReadRecord(ctx, credentials.provider(), dnsprovider.Key{Domain: domain, RecordID: body.RecordID})
-	if err != nil {
-		problem(w, 502, "DNSPod 读取失败，请核对账号和记录")
-		return
-	}
-	warnings, err := recordWarnings(result, body.RecordID, body.LineID)
-	if err == nil && !result.Record.Enabled {
-		err = errors.New("主备入口组的受管记录必须启用")
-	}
-	if err != nil {
-		problem(w, 400, err.Error())
-		return
-	}
+	domain, result, warnings := resolved.domain, resolved.result, resolved.warnings
 	// 同一记录的归属由数据库唯一约束决定；账号别名不能绕过归属。
 	p.entryMu.Lock()
 	defer p.entryMu.Unlock()
@@ -158,7 +132,7 @@ func (p *Panel) bindManagedRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback()
 	var owner, ownerKind string
-	err = tx.QueryRowContext(r.Context(), "SELECT coalesce(group_id,''),owner_kind FROM managed_records WHERE provider='dnspod' AND domain=? AND record_id=?", domain, body.RecordID).Scan(&owner, &ownerKind)
+	err = tx.QueryRowContext(r.Context(), "SELECT coalesce(group_id,''),owner_kind FROM managed_records WHERE provider='dnspod' AND domain=? AND record_id=?", domain, result.Record.ID).Scan(&owner, &ownerKind)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		problem(w, 503, "存储暂不可用")
 		return
@@ -177,7 +151,7 @@ func (p *Panel) bindManagedRecord(w http.ResponseWriter, r *http.Request) {
 		problem(w, 409, "已开始发布的入口组不能重新绑定受管记录")
 		return
 	}
-	_, err = p.bindRecordTx(r.Context(), tx, managedRecord{OwnerKind: "group", GroupID: r.PathValue("id"), AccountID: body.AccountID, Provider: "dnspod", Domain: domain, RecordID: body.RecordID, Name: result.Record.Name, Line: result.Record.Line, LineID: result.Record.LineID, CurrentValue: result.Record.Value, CurrentTTL: result.Record.TTL, CurrentEnabled: result.Record.Enabled, Warnings: warnings})
+	_, err = p.bindRecordTx(r.Context(), tx, managedRecord{OwnerKind: "group", GroupID: r.PathValue("id"), AccountID: body.AccountID, Provider: "dnspod", Domain: domain, RecordID: result.Record.ID, Name: result.Record.Name, Line: result.Record.Line, LineID: result.Record.LineID, CurrentValue: result.Record.Value, CurrentTTL: result.Record.TTL, CurrentEnabled: result.Record.Enabled, Warnings: warnings})
 	if err == nil {
 		err = p.bindEntryDomainWatch(r.Context(), tx, r.PathValue("id"))
 	}
@@ -197,5 +171,6 @@ func (p *Panel) bindManagedRecord(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "无法读取受管记录")
 		return
 	}
+	b.Created = resolved.created
 	respond(w, 200, b)
 }

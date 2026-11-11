@@ -78,6 +78,10 @@ func (f *DNSPod) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		} else {
 			err = f.WriteRecord(r.Context(), dnsprovider.Credentials{}, key, value)
 		}
+	case "CreateRecord":
+		var id string
+		id, err = f.CreateRecord(r.Context(), dnsprovider.Credentials{}, body.Domain, dnsprovider.Record{Name: body.SubDomain, Type: body.RecordType, Line: body.RecordLine, LineID: body.LineID, Value: body.Value, TTL: body.TTL, Enabled: body.Status != "DISABLE"})
+		response["RecordId"] = json.Number(id)
 	case "ModifyRecordStatus":
 		err = f.SetRecordEnabled(r.Context(), dnsprovider.Credentials{}, key, body.Status == "ENABLE")
 	default:

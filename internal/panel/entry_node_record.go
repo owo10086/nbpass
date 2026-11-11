@@ -5,8 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
-
-	"nbpass/internal/dnsprovider"
 )
 
 func (p *Panel) entryNodeRecordRoutes(mux *http.ServeMux) {
@@ -39,22 +37,12 @@ func (p *Panel) getNodeManagedRecord(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Panel) bindNodeManagedRecord(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		AccountID string `json:"account_id"`
-		Domain    string `json:"domain"`
-		RecordID  string `json:"record_id"`
-		LineID    string `json:"line_id"`
-	}
+	var body recordTarget
 	if !decode(w, r, &body) {
 		return
 	}
-	domain, err := normalizeDNSDomain(body.Domain)
-	if err != nil || body.AccountID == "" || body.RecordID == "" || len(body.RecordID) > 100 || body.LineID == "" || len(body.LineID) > 100 {
-		problem(w, 400, "请指定 DNSPod 账号、主域名、记录 ID 和单一线路 ID")
-		return
-	}
 	var exists bool
-	if err = p.db.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM nodes WHERE id=?)", r.PathValue("id")).Scan(&exists); err != nil {
+	if err := p.db.QueryRowContext(r.Context(), "SELECT EXISTS(SELECT 1 FROM nodes WHERE id=?)", r.PathValue("id")).Scan(&exists); err != nil {
 		p.nodeRecordError(w, err)
 		return
 	}
@@ -64,7 +52,7 @@ func (p *Panel) bindNodeManagedRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	// 在读取服务商前优先返回在途保护；绑定事务仍会再次校验，避免检查与提交之间的竞态。
 	var pending bool
-	err = p.db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM managed_records m JOIN entry_action_records a ON a.managed_record_id=m.id WHERE m.owner_kind='node' AND m.node_id=? AND a.stage IN `+pendingRecordStages+`) OR EXISTS(SELECT 1 FROM node_address_sync_jobs j JOIN managed_records m ON m.id=j.managed_record_id WHERE m.owner_kind='node' AND m.node_id=?)`, r.PathValue("id"), r.PathValue("id")).Scan(&pending)
+	err := p.db.QueryRowContext(r.Context(), `SELECT EXISTS(SELECT 1 FROM managed_records m JOIN entry_action_records a ON a.managed_record_id=m.id WHERE m.owner_kind='node' AND m.node_id=? AND a.stage IN `+pendingRecordStages+`) OR EXISTS(SELECT 1 FROM node_address_sync_jobs j JOIN managed_records m ON m.id=j.managed_record_id WHERE m.owner_kind='node' AND m.node_id=?)`, r.PathValue("id"), r.PathValue("id")).Scan(&pending)
 	if err != nil {
 		p.nodeRecordError(w, err)
 		return
@@ -73,27 +61,11 @@ func (p *Panel) bindNodeManagedRecord(w http.ResponseWriter, r *http.Request) {
 		problem(w, 409, "该受管记录有未完成动作，不能更换")
 		return
 	}
-	credentials, err := p.dnsCredential(r.Context(), body.AccountID)
-	if err != nil {
-		problem(w, 400, "DNSPod 账号未配置或凭据不可用")
+	resolved, ok := p.resolveRecordTarget(w, r, body, recordTargetRules{initial: p.nodeInitialIPv4(r.PathValue("id"))})
+	if !ok {
 		return
 	}
-	if p.deps.DNSProvider == nil {
-		problem(w, 503, "DNS 服务商不可用")
-		return
-	}
-	ctx, cancel := p.dnsContext(r.Context())
-	defer cancel()
-	result, err := p.deps.DNSProvider.ReadRecord(ctx, credentials.provider(), dnsprovider.Key{Domain: domain, RecordID: body.RecordID})
-	if err != nil {
-		problem(w, 502, "DNSPod 读取失败，请核对账号和记录")
-		return
-	}
-	warnings, err := recordWarnings(result, body.RecordID, body.LineID)
-	if err != nil {
-		problem(w, 400, err.Error())
-		return
-	}
+	domain, result, warnings := resolved.domain, resolved.result, resolved.warnings
 	p.entryMu.Lock()
 	defer p.entryMu.Unlock()
 	p.controlMu.Lock()
@@ -108,7 +80,7 @@ func (p *Panel) bindNodeManagedRecord(w http.ResponseWriter, r *http.Request) {
 	err = tx.QueryRowContext(r.Context(), "SELECT id FROM nodes WHERE id=?", r.PathValue("id")).Scan(&nodeID)
 	var b managedRecord
 	if err == nil {
-		b, err = p.bindRecordTx(r.Context(), tx, managedRecord{OwnerKind: "node", NodeID: nodeID, AccountID: body.AccountID, Provider: "dnspod", Domain: domain, RecordID: body.RecordID, Name: result.Record.Name, Line: result.Record.Line, LineID: result.Record.LineID, CurrentValue: result.Record.Value, CurrentTTL: result.Record.TTL, CurrentEnabled: result.Record.Enabled, Warnings: warnings})
+		b, err = p.bindRecordTx(r.Context(), tx, managedRecord{OwnerKind: "node", NodeID: nodeID, AccountID: body.AccountID, Provider: "dnspod", Domain: domain, RecordID: result.Record.ID, Name: result.Record.Name, Line: result.Record.Line, LineID: result.Record.LineID, CurrentValue: result.Record.Value, CurrentTTL: result.Record.TTL, CurrentEnabled: result.Record.Enabled, Warnings: warnings})
 	}
 	// 换绑保留单调版本，但必须由管理员重新发布，不能沿用旧记录的完成状态。
 	if err == nil {
@@ -125,6 +97,7 @@ func (p *Panel) bindNodeManagedRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p.wakeDNSWatch()
+	b.Created = resolved.created
 	respond(w, 200, b)
 }
 

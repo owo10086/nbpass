@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -20,8 +21,11 @@ type DNSPod struct {
 	Read        func(context.Context) error
 	Write       func(context.Context) error
 	Status      func(context.Context) error
+	Create      func(context.Context) error
 	EnableError string
 	ModifyError string
+	CreateError string
+	nextID      int
 }
 
 func NewDNSPod() *DNSPod { return &DNSPod{records: make(map[dnsprovider.Key]dnsprovider.Record)} }
@@ -133,6 +137,43 @@ func (f *DNSPod) ListRecords(ctx context.Context, _ dnsprovider.Credentials, dom
 	slices.SortFunc(records, func(a, b dnsprovider.Record) int { return strings.Compare(a.ID, b.ID) })
 	return records, nil
 }
+func (f *DNSPod) FindRecords(ctx context.Context, auth dnsprovider.Credentials, domain, name string) ([]dnsprovider.Record, error) {
+	all, err := f.ListRecords(ctx, auth, domain)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(all, func(r dnsprovider.Record) bool { return !strings.EqualFold(r.Name, name) }), nil
+}
+
+// CreateRecord 分配递增的数字 ID；Create 钩子在记录落库后执行，可模拟"已建成但回包丢失"。
+// 同名同线路下 CNAME 与其他记录互斥，按 DNSPod 规则明确拒绝。
+func (f *DNSPod) CreateRecord(ctx context.Context, _ dnsprovider.Credentials, domain string, r dnsprovider.Record) (string, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, "create")
+	f.writes++
+	if f.CreateError != "" {
+		code := f.CreateError
+		f.mu.Unlock()
+		return "", &dnsprovider.RejectionError{Code: code}
+	}
+	for k, other := range f.records {
+		if k.Domain == domain && strings.EqualFold(other.Name, r.Name) && other.LineID == r.LineID && (other.Type == "CNAME" || r.Type == "CNAME") {
+			f.mu.Unlock()
+			return "", &dnsprovider.RejectionError{Code: "InvalidParameter.DomainRecordExist"}
+		}
+	}
+	f.nextID++
+	r.ID = strconv.Itoa(9000 + f.nextID)
+	f.records[dnsprovider.Key{Domain: domain, RecordID: r.ID}] = r
+	f.mu.Unlock()
+	if f.Create != nil {
+		if err := f.Create(ctx); err != nil {
+			return "", err
+		}
+	}
+	return r.ID, nil
+}
+
 func (f *DNSPod) WriteRecord(ctx context.Context, _ dnsprovider.Credentials, key dnsprovider.Key, r dnsprovider.Record) error {
 	f.mu.Lock()
 	f.calls = append(f.calls, "write")

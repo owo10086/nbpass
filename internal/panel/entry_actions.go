@@ -170,7 +170,8 @@ func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryAc
 	a.CreatedAt = p.deps.Clock.Now()
 	_, err = tx.ExecContext(ctx, `INSERT INTO entry_actions(id,group_id,version,kind,node_id,old_value,new_value,old_ttl,stage,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, a.ID, a.GroupID, a.Version, a.Kind, a.NodeID, a.OldValue, a.NewValue, a.OldTTL, a.Stage, a.CreatedAt.UnixNano())
 	if err == nil {
-		err = insertActionRecord(ctx, tx, a.ID, b, ManagedRecordChange{ManagedRecordID: b.ID, BindingGeneration: b.BindingGeneration, Value: a.NewValue, Enabled: true})
+		// 面板新建或改类型接管的记录是暂停的，首次发布须走明确的启用步骤。
+		err = insertActionRecord(ctx, tx, a.ID, b, ManagedRecordChange{ManagedRecordID: b.ID, BindingGeneration: b.BindingGeneration, Value: a.NewValue, Enabled: true, ExplicitEnable: req.Kind == "first_publish" && !b.CurrentEnabled})
 	}
 	if err == nil {
 		err = carryStrategyThreeVersion(ctx, tx, req, a.Version)

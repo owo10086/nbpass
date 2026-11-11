@@ -46,6 +46,11 @@ type Provider interface {
 	ListDomains(context.Context, Credentials) ([]Domain, error)
 	ListRecords(context.Context, Credentials, string) ([]Record, error)
 	ReadRecord(context.Context, Credentials, Key) (ReadResult, error)
+	// FindRecords 列出主域名下某个主机记录名的全部记录（各类型、各线路），供按名字绑定。
+	FindRecords(ctx context.Context, auth Credentials, domain, name string) ([]Record, error)
+	// CreateRecord 新建记录并返回记录 ID；Enabled 决定初始状态，面板新建时总是暂停。
+	CreateRecord(ctx context.Context, auth Credentials, domain string, r Record) (string, error)
+	// WriteRecord 改值；类型可在 A 与 CNAME 之间改变，用于经管理员确认的改类型接管。
 	WriteRecord(context.Context, Credentials, Key, Record) error
 	SetRecordEnabled(context.Context, Credentials, Key, bool) error
 }

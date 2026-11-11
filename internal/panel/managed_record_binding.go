@@ -24,7 +24,7 @@ func (p *Panel) bindRecordTx(ctx context.Context, tx *sql.Tx, b managedRecord) (
 	var valid bool
 	switch b.OwnerKind {
 	case "group":
-		valid = b.GroupID != "" && b.NodeID == "" && b.CurrentEnabled
+		valid = b.GroupID != "" && b.NodeID == ""
 	case "member":
 		if b.GroupID != "" && b.NodeID != "" {
 			err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM entry_group_members WHERE group_id=? AND node_id=?)", b.GroupID, b.NodeID).Scan(&valid)
@@ -36,7 +36,7 @@ func (p *Panel) bindRecordTx(ctx context.Context, tx *sql.Tx, b managedRecord) (
 		return b, err
 	}
 	if !valid {
-		return b, &forwardingError{400, "受管记录必须唯一归属主备入口组、组成员或入口节点；主备记录须启用"}
+		return b, &forwardingError{400, "受管记录必须唯一归属主备入口组、组成员或入口节点"}
 	}
 	var existing string
 	err = tx.QueryRowContext(ctx, `SELECT id FROM managed_records WHERE owner_kind=? AND coalesce(group_id,'')=? AND coalesce(node_id,'')=?`, b.OwnerKind, b.GroupID, b.NodeID).Scan(&existing)

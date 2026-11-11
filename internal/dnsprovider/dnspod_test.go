@@ -172,3 +172,51 @@ func TestDNSPodListDomainsTreatsNoDataAsEmpty(t *testing.T) {
 		t.Fatalf("空账号 %v %v", domains, err)
 	}
 }
+
+func TestDNSPodCreatesPausedRecordAndFindsByName(t *testing.T) {
+	service := tc3Server(t, func(action string, body map[string]any) map[string]any {
+		switch action {
+		case "CreateRecord":
+			if body["SubDomain"] != "app" || body["RecordType"] != "A" || body["RecordLine"] != "默认" || body["RecordLineId"] != "0" || body["Status"] != "DISABLE" || body["Value"] != "8.8.8.8" || body["TTL"] != float64(600) {
+				t.Errorf("新建参数错误：%v", body)
+			}
+			return map[string]any{"RecordId": 9001}
+		case "DescribeRecordList":
+			if body["SubDomain"] != "app" {
+				t.Errorf("按名字查询须带 SubDomain：%v", body)
+			}
+			return map[string]any{"RecordCountInfo": map[string]any{"TotalCount": 2}, "RecordList": []any{
+				map[string]any{"RecordId": 9001, "Name": "app", "Type": "A", "Line": "默认", "LineId": "0", "Value": "8.8.8.8", "TTL": 600, "Status": "DISABLE"},
+				map[string]any{"RecordId": 9002, "Name": "app.cdn", "Type": "CNAME", "Line": "默认", "LineId": "0", "Value": "x.example.net.", "TTL": 600, "Status": "ENABLE"},
+			}}
+		}
+		return nil
+	})
+	defer service.Close()
+	d := DNSPod{URL: service.URL, Client: service.Client()}
+	id, err := d.CreateRecord(context.Background(), testAuth, "example.com", Record{Name: "app", Type: "A", Line: "默认", LineID: "0", Value: "8.8.8.8", TTL: 600})
+	if err != nil || id != "9001" {
+		t.Fatalf("新建 %q %v", id, err)
+	}
+	if _, err = d.CreateRecord(context.Background(), testAuth, "example.com", Record{Name: "app", Type: "AAAA", Line: "默认", LineID: "0", Value: "::1", TTL: 600}); err == nil {
+		t.Fatal("不支持的类型未拒绝")
+	}
+	records, err := d.FindRecords(context.Background(), testAuth, "example.com", "app")
+	if err != nil || len(records) != 1 || records[0].ID != "9001" || records[0].Enabled {
+		t.Fatalf("按名字查询混入其他记录：%+v %v", records, err)
+	}
+}
+
+func TestDNSPodWriteCanChangeRecordType(t *testing.T) {
+	service := tc3Server(t, func(action string, body map[string]any) map[string]any {
+		if action != "ModifyRecord" || body["RecordType"] != "A" || body["Status"] != "DISABLE" {
+			t.Errorf("改类型须带新类型与状态：%s %v", action, body)
+		}
+		return map[string]any{"RecordId": 100}
+	})
+	defer service.Close()
+	d := DNSPod{URL: service.URL, Client: service.Client()}
+	if err := d.WriteRecord(context.Background(), testAuth, Key{"example.com", "100"}, Record{ID: "100", Name: "web", Type: "A", Line: "默认", LineID: "0", Value: "8.8.8.8", TTL: 600}); err != nil {
+		t.Fatal(err)
+	}
+}

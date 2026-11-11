@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Descriptions, Form, Input, Modal, Select, Space, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
-import { DNSRecordPicker } from './DNSRecordPicker';
+import { DNSRecordPicker, useRecordBinding } from './DNSRecordPicker';
 import { EntryBlockedPolicy } from './EntryBlockedPolicy';
 import { EntryMembers } from './EntryMembers';
 import { EntryReadiness, type EntryMemberState } from './EntryReadiness';
@@ -85,12 +85,13 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
     } catch (e) { failed(e); }
     finally { setSaving(false); }
   }
-  async function bind(values: { account_id: string; domain: string; record_id: string; line_id: string }) {
+  async function run(action: () => Promise<unknown>) {
     setSaving(true); setError('');
-    try { await api(`${path}/managed-record`, 'PUT', values); bindingDirty.current = false; await load(); }
+    try { await action(); await load(); }
     catch (e) { failed(e); }
     finally { setSaving(false); }
   }
+  const binder = useRecordBinding(async body => { const result = await api(`${path}/managed-record`, 'PUT', body); bindingDirty.current = false; return result; }, run);
   async function publish(values: { active_node_id: string; ipv4: string; confirm_inbound: boolean }) {
     setSaving(true); setError('');
     try { await api(`${path}/publish`, 'POST', values); publishForm.resetFields(); await load(); }
@@ -119,12 +120,13 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
         </Form>
         <Typography.Paragraph style={{ marginTop: 12 }}>首选入口：{nodes.find(n => n.id === publication?.preferred_node_id)?.name ?? publication?.preferred_node_id ?? '加载中'}</Typography.Paragraph>
       </Card>
-      <Alert type="info" showIcon title="绑定后先核对当前记录，再由你明确选择活动入口并首次发布。" description="只管理这一条单线路 A 记录，发布 TTL 为 60 秒。" />
+      <Alert type="info" showIcon title="绑定后先核对当前记录，再由你明确选择活动入口并首次发布。" description="只管理这一条单线路 A 记录，发布 TTL 为 60 秒。面板新建的记录先暂停，首次发布时写入地址并启用。" />
       <Card title="DNSPod 受管记录" loading={loading} extra={!started && <Button onClick={() => setAddingAccount(true)}>添加 DNSPod 账号</Button>}>
-        {!started && <Form form={bindingForm} layout="vertical" onFinish={bind} onValuesChange={() => { bindingDirty.current = true; }}>
+        {!started && <Form form={bindingForm} layout="vertical" onFinish={binder.bind} onValuesChange={() => { bindingDirty.current = true; }}>
           <DNSRecordPicker accounts={accounts} onError={failed} />
-          <Button type="primary" htmlType="submit" loading={saving}>绑定并读取当前记录</Button>
+          <Button type="primary" htmlType="submit" loading={saving}>绑定记录</Button>
         </Form>}
+        {binder.chooser}
         {binding && <>
           <Descriptions column={1} size="small" style={{ marginTop: 16 }} items={[
             { key: 'hostname', label: '域名', children: binding.hostname },

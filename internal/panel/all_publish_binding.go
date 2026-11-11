@@ -3,7 +3,6 @@ package panel
 import (
 	"database/sql"
 	"errors"
-	"nbpass/internal/dnsprovider"
 	"net/http"
 )
 
@@ -48,41 +47,32 @@ func (p *Panel) bindMemberRecord(w http.ResponseWriter, r *http.Request) {
 	if !p.requireGroupMode(w, r, "all") {
 		return
 	}
-	var body struct {
-		AccountID string `json:"account_id"`
-		Domain    string `json:"domain"`
-		RecordID  string `json:"record_id"`
-		LineID    string `json:"line_id"`
-	}
+	var body recordTarget
 	if !decode(w, r, &body) {
 		return
 	}
-	domain, err := normalizeDNSDomain(body.Domain)
-	if err != nil || body.AccountID == "" || body.RecordID == "" || len(body.RecordID) > 100 || body.LineID == "" || len(body.LineID) > 100 {
-		problem(w, 400, "请指定 DNSPod 账号、主域名、记录 ID 和线路 ID")
+	// 组内已有成员时名字和线路随组；在新建或改类型前先拒绝不一致的请求，事务内仍会再次校验。
+	var otherDomain, otherName, otherLine string
+	err := p.db.QueryRowContext(r.Context(), "SELECT domain,name,line_id FROM managed_records WHERE group_id=? AND owner_kind='member' AND node_id<>? LIMIT 1", r.PathValue("id"), r.PathValue("node")).Scan(&otherDomain, &otherName, &otherLine)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		problem(w, 503, "无法核对组域名")
 		return
 	}
-	credential, err := p.dnsCredential(r.Context(), body.AccountID)
-	if err != nil {
-		problem(w, 400, "DNSPod 账号不可用")
+	rules := recordTargetRules{initial: p.nodeInitialIPv4(r.PathValue("node"))}
+	if err == nil {
+		domain, _ := normalizeDNSDomain(body.Domain)
+		name, _ := normalizeRecordName(body.Name, domain)
+		if domain != otherDomain || body.Name != "" && name != otherName {
+			problem(w, 400, "成员记录须与组域名同名、同线路")
+			return
+		}
+		rules.line = otherLine
+	}
+	resolved, ok := p.resolveRecordTarget(w, r, body, rules)
+	if !ok {
 		return
 	}
-	if p.deps.DNSProvider == nil {
-		problem(w, 503, "DNS 服务商不可用")
-		return
-	}
-	ctx, cancel := p.dnsContext(r.Context())
-	defer cancel()
-	actual, err := p.deps.DNSProvider.ReadRecord(ctx, credential.provider(), dnsprovider.Key{Domain: domain, RecordID: body.RecordID})
-	if err != nil {
-		problem(w, 502, "DNSPod 读取失败")
-		return
-	}
-	warnings, err := recordWarnings(actual, body.RecordID, body.LineID)
-	if err != nil {
-		problem(w, 400, err.Error())
-		return
-	}
+	domain, actual, warnings := resolved.domain, resolved.result, resolved.warnings
 	p.entryMu.Lock()
 	defer p.entryMu.Unlock()
 	tx, err := p.db.BeginTx(r.Context(), nil)
@@ -123,8 +113,7 @@ func (p *Panel) bindMemberRecord(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var otherDomain, otherName, otherLine string
-	err = tx.QueryRowContext(r.Context(), "SELECT domain,name,line_id FROM managed_records WHERE group_id=? AND owner_kind='member' LIMIT 1", r.PathValue("id")).Scan(&otherDomain, &otherName, &otherLine)
+	err = tx.QueryRowContext(r.Context(), "SELECT domain,name,line_id FROM managed_records WHERE group_id=? AND owner_kind='member' AND node_id<>? LIMIT 1", r.PathValue("id"), r.PathValue("node")).Scan(&otherDomain, &otherName, &otherLine)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		problem(w, 503, "无法核对组域名")
 		return
@@ -133,7 +122,7 @@ func (p *Panel) bindMemberRecord(w http.ResponseWriter, r *http.Request) {
 		problem(w, 400, "成员记录须与组域名同名、同线路")
 		return
 	}
-	b, err := p.bindRecordTx(r.Context(), tx, managedRecord{OwnerKind: "member", GroupID: r.PathValue("id"), NodeID: r.PathValue("node"), AccountID: body.AccountID, Provider: "dnspod", Domain: domain, RecordID: body.RecordID, Name: actual.Record.Name, Line: actual.Record.Line, LineID: actual.Record.LineID, CurrentValue: actual.Record.Value, CurrentTTL: actual.Record.TTL, CurrentEnabled: actual.Record.Enabled, Warnings: warnings})
+	b, err := p.bindRecordTx(r.Context(), tx, managedRecord{OwnerKind: "member", GroupID: r.PathValue("id"), NodeID: r.PathValue("node"), AccountID: body.AccountID, Provider: "dnspod", Domain: domain, RecordID: actual.Record.ID, Name: actual.Record.Name, Line: actual.Record.Line, LineID: actual.Record.LineID, CurrentValue: actual.Record.Value, CurrentTTL: actual.Record.TTL, CurrentEnabled: actual.Record.Enabled, Warnings: warnings})
 	if err == nil {
 		_, err = tx.ExecContext(r.Context(), "INSERT OR IGNORE INTO entry_member_publications(group_id,node_id) VALUES(?,?)", b.GroupID, b.NodeID)
 	}
@@ -169,5 +158,6 @@ func (p *Panel) bindMemberRecord(w http.ResponseWriter, r *http.Request) {
 		p.coordinator.wake(actionWorkerKey(a))
 	}
 	p.wakeDNSWatch()
+	b.Created = resolved.created
 	respond(w, 200, b)
 }

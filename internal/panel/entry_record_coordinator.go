@@ -87,7 +87,7 @@ func (c *entryCoordinator) executeRecord(a EntryAction, r EntryActionRecord) err
 	if err != nil {
 		return c.recordNote(a, r, "DNSPod 读回失败，等待核对")
 	}
-	if _, err := recordWarnings(actual, r.RecordID, b.LineID); err != nil || actual.Record.Name != b.Name || b.OwnerKind == "group" && !actual.Record.Enabled {
+	if _, err := recordWarnings(actual, r.RecordID, b.LineID); err != nil || actual.Record.Name != b.Name || b.OwnerKind == "group" && !actual.Record.Enabled && !r.explicitEnable {
 		return c.recordNote(a, r, "受管记录类型、名称、启用状态或线路变化，等待人工核对")
 	}
 	if r.preserveEnabled {

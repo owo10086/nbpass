@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Card, Descriptions, Form, Input, Modal, Popconfirm, Space, Typography } from 'antd';
 import { api, APIError } from './api';
-import { DNSRecordPicker } from './DNSRecordPicker';
+import { DNSRecordPicker, useRecordBinding } from './DNSRecordPicker';
 
 type Account = { id: string; name: string };
 export type NodeRecord = { account_id: string; domain: string; record_id: string; line_id: string; line: string; hostname: string; current_value: string; current_enabled: boolean; warnings: string[] };
@@ -58,9 +58,7 @@ export function NodeManagedRecord({ node, onClose, onSaved, onError }: { node: N
   function publish() {
     modal.confirm({ title: '确认首次发布节点域名？', content: `请确认 ${publication?.expected_value} 可接收入站业务连接。面板会先写地址，再明确启用这条记录。`, okText: '确认并首次发布', onOk: () => operate(() => api(`${path}/publish`, 'POST', { expected_version: publication?.desired_version, confirm_inbound: true })) });
   }
-  async function bind(values: { account_id: string; domain: string; record_id: string; line_id: string }) {
-    await operate(async () => { await api<NodeRecord>(`${path}/managed-record`, 'PUT', values); setWarnings([]); dirty.current = false; });
-  }
+  const binder = useRecordBinding(async body => { const result = await api<NodeRecord>(`${path}/managed-record`, 'PUT', body); setWarnings([]); dirty.current = false; return result; }, operate);
   async function unbind() {
     await operate(async () => { const result = await api<{ warnings: string[] }>(`${path}/managed-record`, 'DELETE'); setWarnings(result.warnings); form.resetFields(); dirty.current = false; });
   }
@@ -98,10 +96,11 @@ export function NodeManagedRecord({ node, onClose, onSaved, onError }: { node: N
           </Space>
         </>}
         <Typography.Paragraph type="secondary">更换或解绑后，旧记录保持原状。受管域名自动加入解析监控，以确认地址为期望。</Typography.Paragraph>
-        <Form form={form} layout="vertical" onValuesChange={() => { dirty.current = true; }} onFinish={bind} disabled={busy || pending}>
+        <Form form={form} layout="vertical" onValuesChange={() => { dirty.current = true; }} onFinish={binder.bind} disabled={busy || pending}>
           <DNSRecordPicker accounts={accounts} onError={failed} />
-          <Button htmlType="submit" loading={busy} disabled={!loaded || pending}>{record ? '更换绑定并读取记录' : '绑定并读取记录'}</Button>
+          <Button htmlType="submit" loading={busy} disabled={!loaded || pending}>{record ? '更换绑定' : '绑定记录'}</Button>
         </Form>
+        {binder.chooser}
       </Card>
     </Space>
     <Modal title="添加 DNSPod 账号" open={addingAccount} onCancel={() => { setAddingAccount(false); accountForm.resetFields(); }} footer={null} destroyOnHidden>

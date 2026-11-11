@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zero Forwarder 功能截图预览</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --line: #e4e7ec; --text: #1d2433; --muted: #667085;
+    --accent: #2f6fed; --accent-soft: #eaf1ff; --side: 268px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { font: 14px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", sans-serif; color: var(--text); background: var(--bg); }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* 侧栏 */
+  aside { position: fixed; inset: 0 auto 0 0; width: var(--side); background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; }
+  .brand { padding: 18px 18px 12px; border-bottom: 1px solid var(--line); }
+  .brand b { display: block; font-size: 15px; }
+  .brand span { color: var(--muted); font-size: 12px; }
+  nav { overflow-y: auto; padding: 8px 8px 24px; flex: 1; }
+  nav h4 { margin: 14px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--muted); }
+  nav button { all: unset; box-sizing: border-box; display: flex; justify-content: space-between; align-items: center; width: 100%; padding: 6px 10px; border-radius: 6px; cursor: pointer; color: var(--text); }
+  nav button:hover { background: #f2f4f7; }
+  nav button.on { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+  nav button:focus-visible { outline: 2px solid var(--accent); }
+  nav .n { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  nav button.on .n { color: var(--accent); }
+
+  /* 主区 */
+  main { margin-left: var(--side); min-height: 100%; }
+  header { position: sticky; top: 0; z-index: 5; display: flex; gap: 12px; align-items: center; padding: 12px 28px; background: rgba(246,247,249,.92); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+  header input { flex: 1; max-width: 420px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: #fff; }
+  header input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  header .stat { color: var(--muted); font-size: 13px; }
+  .content { padding: 8px 28px 60px; }
+
+  section.page { padding-top: 22px; scroll-margin-top: 64px; }
+  .page-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin-bottom: 4px; }
+  .page-head .sec { font-size: 12px; color: var(--muted); }
+  .page-head h2 { margin: 0; font-size: 20px; }
+  .page-head .links { font-size: 12px; display: flex; gap: 10px; }
+  .summary { margin: 0 0 14px; color: var(--muted); max-width: 820px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+  .card { all: unset; box-sizing: border-box; cursor: zoom-in; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; transition: box-shadow .15s, transform .15s; }
+  .card:hover { box-shadow: 0 6px 20px rgba(16,24,40,.10); transform: translateY(-2px); }
+  .card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .thumb { aspect-ratio: 16 / 10; background: #eef0f3; overflow: hidden; border-bottom: 1px solid var(--line); }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top left; display: block; }
+  .cap { padding: 10px 12px 12px; }
+  .cap .alt { font-weight: 500; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .cap .where { margin-top: 4px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #pick { display: none; padding: 8px; border: 1px solid var(--line); border-radius: 8px; font: inherit; background: #fff; max-width: 40%; }
+  .empty { padding: 60px 0; text-align: center; color: var(--muted); }
+  mark { background: #fff1b8; color: inherit; border-radius: 2px; }
+
+  /* 大图预览 */
+  .lb { position: fixed; inset: 0; z-index: 50; background: #0c1018; display: none; flex-direction: column; color: #e8ebf0; }
+  .lb.open { display: flex; }
+  .lb-top { display: flex; align-items: center; gap: 14px; padding: 12px 18px; font-size: 13px; }
+  .lb-top .crumb { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #aab2c0; }
+  .lb-top .crumb b { color: #fff; font-weight: 600; }
+  .lb-top .count { font-variant-numeric: tabular-nums; color: #aab2c0; }
+  :where(.lb) button { all: unset; cursor: pointer; border-radius: 8px; color: #e8ebf0; }
+  :where(.lb) button:focus-visible { outline: 2px solid #7aa7ff; }
+  .lb-top button { padding: 6px 10px; background: rgba(255,255,255,.08); }
+  .lb-top button:hover { background: rgba(255,255,255,.16); }
+  .lb-stage { flex: 1; position: relative; overflow: auto; display: flex; }
+  .lb-stage img { margin: auto; max-width: calc(100% - 140px); max-height: 100%; object-fit: contain; cursor: zoom-in; background: #fff; border-radius: 4px; box-shadow: 0 10px 40px rgba(0,0,0,.5); }
+  .lb-stage.zoom img { max-width: none; max-height: none; cursor: zoom-out; margin: 0 auto; }
+  .lb-nav { position: fixed; top: 50%; transform: translateY(-50%); width: 48px; height: 72px; display: grid; place-items: center; font-size: 28px; background: rgba(255,255,255,.06); }
+  .lb-nav:hover { background: rgba(255,255,255,.16); }
+  .lb-prev { left: 12px; } .lb-next { right: 12px; }
+  .lb-cap { padding: 12px 18px 16px; text-align: center; }
+  .lb-cap .alt { font-size: 15px; color: #fff; }
+  .lb-cap .meta { font-size: 12px; color: #8b94a5; margin-top: 2px; }
+  .lb-strip { display: flex; gap: 6px; overflow-x: auto; padding: 0 18px 14px; scrollbar-width: thin; }
+  .lb-strip button { flex: none; width: 76px; height: 48px; border-radius: 4px; overflow: hidden; opacity: .45; outline-offset: 0; }
+  .lb-strip button.on { opacity: 1; outline: 2px solid #7aa7ff; }
+  .lb-strip img { width: 100%; height: 100%; object-fit: cover; object-position: top left; display: block; }
+
+  @media (max-width: 820px) {
+    aside { display: none; }
+    #pick { display: block; }
+    header { padding: 10px 14px; flex-wrap: wrap; }
+    .content { padding: 8px 14px 40px; }
+    main { margin-left: 0; }
+    .lb-stage img { max-width: 100%; }
+    .lb-nav { display: none; }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <div class="brand"><b>Zero Forwarder 功能截图</b><span id="brandStat"></span></div>
+  <nav id="nav"></nav>
+</aside>
+<main>
+  <header>
+    <select id="pick" aria-label="选择功能页"></select>
+    <input id="q" type="search" placeholder="搜索截图说明、小节或功能名…（按 / 聚焦）" autocomplete="off">
+    <span class="stat" id="stat"></span>
+  </header>
+  <div class="content" id="content"></div>
+</main>
+
+<div class="lb" id="lb" role="dialog" aria-modal="true" aria-label="截图预览">
+  <div class="lb-top">
+    <div class="crumb" id="lbCrumb"></div>
+    <span class="count" id="lbCount"></span>
+    <button id="lbZoom" title="原始尺寸 / 适应窗口（Z）">原始尺寸</button>
+    <button id="lbOpen" title="在新标签页打开原图">新标签打开</button>
+    <button id="lbClose" title="关闭（Esc）">关闭 ✕</button>
+  </div>
+  <div class="lb-stage" id="lbStage"><img id="lbImg" alt=""></div>
+  <button class="lb-nav lb-prev" id="lbPrev" title="上一张（←）">‹</button>
+  <button class="lb-nav lb-next" id="lbNext" title="下一张（→）">›</button>
+  <div class="lb-cap"><div class="alt" id="lbAlt"></div><div class="meta" id="lbMeta"></div></div>
+  <div class="lb-strip" id="lbStrip"></div>
+</div>
+
+<script>
+const PAGES = [{"section":"开始使用","title":"用 AI 助手定位问题","slug":"agent-diagnose","summary":"按需使用进程内诊断导出或只读命令，让 AI 定位节点问题，核对权限、开关和日志隐私。","shots":[{"f":"zfc-tutorial-20261018-api-key-scopes-88558d36eefe.png","alt":"当前 API Key 的独立 Agent 诊断与执行权限","h2":"创建有限期的密钥","h3":"","w":999,"h":1924}]},{"section":"核心功能","title":"配置说明","slug":"config","summary":"理解服务器、转发端点、端口和分组的关系，查阅传输、监听、权限与流量设置。","shots":[{"f":"zfc-tutorial-20261018-server-basic-284dd04db0f4.png","alt":"服务器的显示名称、入口地址、网卡与端口范围","h2":"服务器基本信息","h3":"","w":1396,"h":850},{"f":"zfc-tutorial-20261018-server-forward-be5426fded2c.png","alt":"服务器转发模式和“使用转发端点作为传输”开关","h2":"服务器的转发配置","h3":"","w":1396,"h":660},{"f":"zfc-tutorial-20261018-server-advanced-2221b0c2e00c.png","alt":"转发权限、允许入站代理、入站协议策略和高级限制","h2":"服务器权限与限制","h3":"","w":1396,"h":1660},{"f":"zfc-tutorial-20261018-endpoint-basic-277ef4dcc27c.png","alt":"转发端点的地址、服务端口、绑定端口与高级设置","h2":"转发端点","h3":"","w":1276,"h":1190},{"f":"zfc-tutorial-20261018-port-basic-33afbae1bbab.png","alt":"端口的名称、线路、目标、服务端口与转发模式","h2":"端口基本信息","h3":"","w":1396,"h":1060},{"f":"zfc-tutorial-20261018-port-advanced-04cbe4c47197.png","alt":"目标策略、测试方法、Proxy Protocol 和监听协议","h2":"端口高级选项","h3":"","w":1396,"h":855}]},{"section":"核心功能","title":"服务器组","slug":"server-groups","summary":"把多个 worker 组成入口线路，统一部署端口，配置自动加入、入站策略和 DNS 健康切换。","shots":[{"f":"zfc-tutorial-20261018-server-group-basic-5c6c457e7288.png","alt":"创建服务器组：名称、统一入口地址、端口范围与入站协议策略","h2":"第二步：创建服务器组","h3":"","w":2200,"h":1475},{"f":"zfc-tutorial-20261018-server-group-auto-add-7fe4b65bc126.png","alt":"自动加入模板：转发与入站权限、测速权限、流量倍率、连接及带宽限制","h2":"使用自动加入扩容","h3":"","w":2136,"h":845},{"f":"zfc-tutorial-20261018-server-group-dns-bec1f21d6f1c.png","alt":"组 DNS 自动切换：观察模式、DNS 配置、TTL、最少保留数、入口互测与确认时长","h2":"配置组 DNS 自动切换","h3":"","w":2136,"h":930}]},{"section":"核心功能","title":"动态域名与 DDNS","slug":"dynamic-dns","summary":"配置 DNS API，把服务器或转发端点上报的公网地址同步到域名，并检查观察态、地址族和写入状态。","shots":[{"f":"zfc-tutorial-20261018-dns-api-cloudflare-46bb4a9e76d4.png","alt":"DNS API 示例：Cloudflare 认证、API 地址、最低 TTL 与启用开关","h2":"配置 DNS API","h3":"","w":1280,"h":1305},{"f":"zfc-tutorial-20261018-ddns-ready-6bca882dd3d4.png","alt":"DDNS 上线状态：Ready、冲突清单和悬挂 Claim","h2":"确认 DDNS 已就绪","h3":"","w":1808,"h":1458},{"f":"zfc-tutorial-20261018-dynamic-address-options-4da84a7afa66.png","alt":"动态 IP 与动态入口地址：两者分别控制上报与内部连接地址","h2":"准备节点的动态地址上报","h3":"","w":1400,"h":830},{"f":"zfc-tutorial-20261018-ddns-binding-f8f0b129805c.png","alt":"DDNS 绑定：资源、DNS 配置、Zone、记录名、地址族、TTL 和观察态","h2":"新建 DDNS 绑定","h3":"","w":1120,"h":1490}]},{"section":"核心功能","title":"智能 DNS","slug":"smart-dns","summary":"创建独立权威调度节点池，把新入口域名绑定到业务服务器组，核对健康、权重、发布进度与缓存等待。","shots":[{"f":"zfc-tutorial-20261018-gslb-overview-5aa6c6eaf69d.png","alt":"智能 DNS 控制台：健康、权重、缓存和故障切换的适用边界","h2":"先理解三种资源","h3":"","w":2864,"h":626},{"f":"zfc-tutorial-20261018-gslb-pool-parent-6764c7ec833b.png","alt":"节点池向导第一步：名称、DNS API 配置与父区","h2":"第一步：创建节点池","h3":"","w":1360,"h":833},{"f":"zfc-tutorial-20261018-gslb-pool-members-bde3e4f544d3.png","alt":"调度节点步骤：至少两台服务器及各自公网 IPv4 / IPv6","h2":"第一步：创建节点池","h3":"选择调度节点","w":1360,"h":840}]},{"section":"核心功能","title":"跨面板资源共享","slug":"cross-panel-sharing","summary":"区分共享 worker 与共享转发端点的邀请方向，配置额度、安全限制、安装和退出流程。","shots":[{"f":"zfc-tutorial-20261018-share-import-5c1cc5e61ef1.png","alt":"拥有方导入共享服务器邀请，配置入口、配额与端口段","h2":"拥有方导入并设定限制","h3":"","w":1436,"h":2123},{"f":"zfc-tutorial-20261018-endpoint-share-import-5728de71bef8.png","alt":"使用方导入共享转发端点；该共享码与服务器邀请不同","h2":"共享转发端点：拥有方先生成共享码","h3":"","w":1040,"h":566}]},{"section":"核心功能","title":"用户、套餐与计费","slug":"users-packages","summary":"配置用户订阅、套餐线路、流量重置、续费和自动补流量，区分各层权限与额度。","shots":[{"f":"zfc-tutorial-20261018-package-form-4b1dcac02f52.png","alt":"套餐名称、额度、价格、计费周期与流量重置策略","h2":"先创建一份套餐","h3":"","w":1594,"h":2123},{"f":"zfc-tutorial-20261018-package-permissions-f30546eadc94.png","alt":"套餐中的访问控制、协议权限、订阅链接和商城配置","h2":"线路与能力设置","h3":"","w":1594,"h":2123},{"f":"zfc-tutorial-20261018-user-subscription-form-b0d3dea6bcd3.png","alt":"创建用户订阅：身份、激活、带宽、额度和计费","h2":"创建或调整用户订阅","h3":"","w":1402,"h":2123}]},{"section":"核心功能","title":"权限、租户与 API","slug":"access-control","summary":"配置角色、租户隔离和 API 密钥，核对授权、资源范围、操作审计与登录会话。","shots":[{"f":"zfc-tutorial-20261018-role-permissions-c046dd382c17.png","alt":"角色的功能域与查看／管理权限矩阵","h2":"创建与分配角色","h3":"","w":1118,"h":1970},{"f":"zfc-tutorial-20261018-tenant-quota-52e0328d55d5.png","alt":"租户资源、网络域和路由域配额配置","h2":"划分租户与配额","h3":"","w":1121,"h":2123},{"f":"zfc-tutorial-20261018-api-key-scopes-88558d36eefe.png","alt":"API Key 的期限与功能权限","h2":"创建 API 密钥","h3":"","w":999,"h":1924}]},{"section":"核心功能","title":"商城与运营","slug":"operations","summary":"商城、支付、余额订单、兑换码和推广佣金仅商用 tier 支持；另介绍工单与公告操作。","shots":[{"f":"zfc-tutorial-20261018-redeem-code-create-67a94b3e7d80.png","alt":"兑换码类型、金额、前缀与有效期","h2":"发行兑换码（仅商用 tier）","h3":"","w":1002,"h":764},{"f":"zfc-tutorial-20261018-ticket-topic-20f07bcb25f2.png","alt":"工单主题的名称、描述、用户填写提示与状态","h2":"工单支持","h3":"","w":1196,"h":805},{"f":"zfc-tutorial-20261018-announcement-create-492136cf06fa.png","alt":"公告的可见性、置顶、租户发布范围和时间设置","h2":"公告与维护通知","h3":"","w":2200,"h":1687}]},{"section":"核心功能","title":"转发指南","slug":"fwd-guide","summary":"从第一条端口转发开始，理解直连、单跳、转发链与 TOT 聚合，并检查实际连通性。","shots":[{"f":"zfc-tutorial-20261018-port-basic-33afbae1bbab.png","alt":"添加端口转发：名称、线路、目标、服务端口与转发模式","h2":"第二步：添加第一条转发","h3":"","w":1396,"h":1060},{"f":"zfc-tutorial-20261018-port-advanced-04cbe4c47197.png","alt":"高级选项中的目标策略、测试方法、Proxy Protocol 与监听协议","h2":"第二步：添加第一条转发","h3":"","w":1396,"h":855},{"f":"zfc-tutorial-20261018-port-relay-465254c149ca.png","alt":"单跳转发的端点、优先级顺序、均衡策略和 Fallback 设置","h2":"第三步：按场景选择路径","h3":"单跳转发：多选的是候选池","w":1396,"h":770},{"f":"zfc-tutorial-20261018-port-chain-316e0f9fa2d4.png","alt":"链式转发的顺序、智能选择与固定前后跳数","h2":"第三步：按场景选择路径","h3":"链式转发：按层组织路径","w":1396,"h":1060},{"f":"zfc-tutorial-20261018-port-tot-c97fa5e36f61.png","alt":"TOT 聚合模式与服务器选择入口","h2":"第三步：按场景选择路径","h3":"TOT 聚合：配置汇聚点和子流","w":1396,"h":470}]},{"section":"核心功能","title":"多线路共同维护","slug":"multi-line-rule","summary":"把多条入口线路纳入同一规则，统一端口与业务配置，完成逐线路预检、扩展和批量维护。","shots":[{"f":"zfc-tutorial-20261018-rule-create-4c1d4f63aa92.png","alt":"共同规则表单：多选线路、统一监听端口、逐线路预检和端口额度","h2":"新建一条共同规则","h3":"","w":1400,"h":1290}]},{"section":"核心功能","title":"动态多级转发链","slug":"fwd-chain","summary":"用端点组组织多层路径，配置保存的转发链、智能选择与固定前后跳数。","shots":[{"f":"zfc-tutorial-20261018-endpoint-group-5019d01db2e6.png","alt":"端点组的可选成员、已选成员和排序入口","h2":"第一步：准备节点和端点组","h3":"","w":2196,"h":1872},{"f":"zfc-tutorial-20261018-saved-chain-de5d4211c24e.png","alt":"创建转发链并排列端点组层次","h2":"第二步：创建可复用的转发链","h3":"","w":2196,"h":1822},{"f":"zfc-tutorial-20261018-port-chain-316e0f9fa2d4.png","alt":"端口链式模式的转发顺序、智能选择和固定跳数","h2":"第四步：设置智能选择和必经层","h3":"","w":1396,"h":1060}]},{"section":"核心功能","title":"可视化网络规划","slug":"network-planning","summary":"在端口拓扑图中查看路径与测量，编辑节点、边和 TOT 子流，校验后保存并核对实际连接。","shots":[{"f":"zfc-tutorial-20261018-network-planning-6a0c05b300d9.png","alt":"端口网络规划图与图例","h2":"先读图，再修改","h3":"","w":2200,"h":997}]},{"section":"核心功能","title":"单线程带宽聚合","slug":"bw-merge","summary":"在 TOT 聚合表单中配置汇聚服务器、多端点或链式子流，并验证单连接吞吐。","shots":[{"f":"zfc-tutorial-20261018-tot-substream-f27ec476daca.png","alt":"TOT 汇聚服务器、发送模式和子流编辑器","h2":"第一步：在端口中选择 TOT 聚合","h3":"","w":1313,"h":1070},{"f":"zfc-tutorial-20261018-tot-advanced-4528f66a5c87.png","alt":"子流的复用次数、方向、带宽、权重与生效时间","h2":"第三步：按需调整子流进阶设置","h3":"","w":1000,"h":1160}]},{"section":"核心功能","title":"多备用线路","slug":"multi-fallback-line","summary":"使用可视化表单配置 Hammer、链式和 TOT 备用路径，区分端口冷备与服务器级候选合并。","shots":[{"f":"zfc-tutorial-20261018-fallback-hammer-c0a7bc761858.png","alt":"端口 Fallback 的冷备提示、Hammer 类型、端点与选择模式","h2":"第二步：添加第一条备用","h3":"","w":1313,"h":620},{"f":"zfc-tutorial-20261018-fallback-chain-ed754e782d23.png","alt":"链式备用中的端点、智能选路和固定前后跳数","h2":"第二步：添加第一条备用","h3":"链式：另一条多跳路径","w":1313,"h":620},{"f":"zfc-tutorial-20261018-fallback-tot-786c732ba48f.png","alt":"TOT 备用中的汇聚服务器、延迟测试和发送模式","h2":"第二步：添加第一条备用","h3":"TOT：备用聚合路径","w":1313,"h":755},{"f":"zfc-tutorial-20261018-fallback-server-0ad34660b6fd.png","alt":"服务器 Fallback 的热备提示和使用转发端点作为传输开关","h2":"服务器级备用如何配置","h3":"","w":1313,"h":820}]},{"section":"核心功能","title":"入站代理","slug":"inbound-proxy","summary":"在入口启用 SS、VLESS、Reality、AnyTLS 等协议，配置证书、转发路径与客户端连接。","shots":[{"f":"zfc-tutorial-20261018-server-advanced-2221b0c2e00c.png","alt":"服务器中的入站代理开关和协议策略","h2":"第一步：确认线路权限和网络条件","h3":"","w":1396,"h":1660},{"f":"zfc-tutorial-20261018-inbound-ss-e696b23951e1.png","alt":"Shadowsocks 示例中的探测目标、服务端口和入站配置","h2":"第二步：添加端口，开启入站","h3":"","w":1396,"h":1900},{"f":"zfc-tutorial-20261018-inbound-protocols-05213a666a63.png","alt":"入站协议选择菜单，列表可向下滚动查看其余协议","h2":"当前可选协议","h3":"","w":1396,"h":885},{"f":"zfc-tutorial-20261018-inbound-tls-cfb43c3b2791.png","alt":"AnyTLS 的证书来源、服务器名称和 ALPN 配置","h2":"TLS：证书、服务器名称与校验","h3":"","w":1396,"h":1060},{"f":"zfc-tutorial-20261018-inbound-reality-70ecde377e9e.png","alt":"Reality 的拟态目标、SNI 白名单和 Short ID 配置","h2":"Reality：dest、SNI 与身份参数","h3":"","w":1396,"h":940},{"f":"zfc-tutorial-20261018-inbound-hysteria2-8bbfd9ae7812.png","alt":"Hysteria2 的密码、混淆与 TLS 设置","h2":"Hysteria2、TUIC 与 Juicity","h3":"","w":1396,"h":1030},{"f":"zfc-tutorial-20261018-port-chain-316e0f9fa2d4.png","alt":"链式模式中的转发顺序、智能选择和固定跳数","h2":"选择出站路径与入口冗余","h3":"","w":1396,"h":1060}]},{"section":"核心功能","title":"证书管理与自动续期","slug":"certificates","summary":"申请或上传 TLS 证书，绑定入站代理与转发端点，并验证续期、同步和域名匹配。","shots":[{"f":"zfc-tutorial-20261018-certificate-request-c921543dee40.png","alt":"Let's Encrypt 申请表单：域名列表、DNS 配置与 Zone","h2":"用 DNS 验证申请证书","h3":"","w":1198,"h":610}]},{"section":"核心功能","title":"出口代理","slug":"outbound-proxy","summary":"为入站代理配置 SOCKS5、Hysteria2、TUIC、Juicity 上游，导入分享链接或引用已有端口与共同规则。","shots":[{"f":"zfc-tutorial-20261018-egress-socks5-1b538f7555ad.png","alt":"SOCKS5 出口协议、分享链接导入及上游认证字段","h2":"配置 SOCKS5 上游","h3":"","w":1400,"h":1005},{"f":"zfc-tutorial-20261018-egress-hy2-773968602239.png","alt":"Hysteria2 出口的认证、SNI、证书校验、ALPN 和混淆设置","h2":"配置 Hysteria2、TUIC 或 Juicity","h3":"","w":1400,"h":1595},{"f":"zfc-tutorial-20261018-egress-reference-3139cd0b0fcf.png","alt":"出口引用模式：对象类型、搜索选择和地址自动展开","h2":"引用已有端口或共同规则","h3":"","w":1400,"h":1030}]},{"section":"核心功能","title":"客户端订阅与模板","slug":"client-subscriptions","summary":"把入站代理端口组织为客户端订阅，配置选择器、代理组、路由、拉取策略和 Token 轮换。","shots":[{"f":"zfc-tutorial-20261018-subscription-create-50e382a6625f.png","alt":"订阅链接的新建表单、源模板和导出格式","h2":"从模板或空白创建链接","h3":"","w":1115,"h":1008},{"f":"zfc-tutorial-20261018-subscription-selector-3efca074822d.png","alt":"代理选择器：包含／排除、AND／OR 与实时匹配预览","h2":"配置模板的五个部分","h3":"用选择器筛出节点","w":1276,"h":1109},{"f":"zfc-tutorial-20261018-subscription-policy-4f34b208aa7e.png","alt":"订阅链接的功能三态、数量上限、拉取防火墙、UA 与限流","h2":"设置功能、额度和拉取策略","h3":"","w":2200,"h":705}]},{"section":"核心功能","title":"带宽限速","slug":"bandwidth-speed-limit","summary":"通过带宽设置配置独立、总带宽和动态限速，理解多层限制与流量额度。","shots":[{"f":"zfc-tutorial-20261018-bandwidth-port-8fe00e5248ea.png","alt":"端口带宽模式与动态带宽限速设置","h2":"端口限速入口","h3":"","w":1313,"h":655}]},{"section":"核心功能","title":"NAT 穿透","slug":"nat-traversal","summary":"用公网 worker 为内网服务提供入口，区分业务端口、隧道端口和内网目标，并逐段验证。","shots":[{"f":"zfc-tutorial-20261018-nat-form-f830a9fd3ebf.png","alt":"NAT 穿透新建表单与高级选项","h2":"新建穿透配置","h3":"","w":1200,"h":1090}]},{"section":"核心功能","title":"WireGuard 组网","slug":"wireguard-network","summary":"创建虚拟网络，添加服务器成员和设备，配置 P2P、网关回退、中继与出口节点。","shots":[{"f":"zfc-tutorial-20261018-wg-network-adea28ea8897.png","alt":"WireGuard 网络的网段、网关、出口和传输设置","h2":"创建一个仅网关网络","h3":"","w":1117,"h":1728}]},{"section":"核心功能","title":"解锁服务与分流","slug":"unlock-traffic-routing-guide","summary":"用可视化匹配、出口策略和规则集配置分流，结合解锁检测、防火墙与规则测试验证。","shots":[{"f":"zfc-tutorial-20261018-routing-match-4202789d3861.png","alt":"域名后缀使用逐行输入，不必填写 JSON","h2":"第一步：创建匹配规则","h3":"","w":1594,"h":1428},{"f":"zfc-tutorial-20261018-routing-selector-4fa44045b806.png","alt":"出口选择器的策略字段和自动生成的 JSON 预览","h2":"第二步：创建出口选择器","h3":"","w":1794,"h":1678},{"f":"zfc-tutorial-20261018-routing-ruleset-edfb93e52448.png","alt":"规则集的默认行为与添加规则入口","h2":"第四步：组织规则集并绑定端口","h3":"","w":1794,"h":1141},{"f":"zfc-tutorial-20261018-routing-test-0c9294fab30b.png","alt":"规则测试的测试范围、目标、协议和来源字段","h2":"第五步：先做规则测试，再做真实访问","h3":"","w":2950,"h":865},{"f":"zfc-tutorial-20261018-unlock-service-7a7cb1707875.png","alt":"解锁检测的脚本来源、参数、超时和缓存设置","h2":"可选：配置解锁服务","h3":"","w":1390,"h":1884}]},{"section":"核心功能","title":"防火墙与访问限制","slug":"firewall","summary":"创建允许或拒绝规则，绑定入站、出站与订阅拉取，并检查节点下发和协议过滤状态。","shots":[{"f":"zfc-tutorial-20261018-firewall-rule-91a813caafc5.png","alt":"防火墙规则关联匹配条件、动作与优先级","h2":"创建一条防火墙规则","h3":"","w":1402,"h":1120},{"f":"zfc-tutorial-20261018-firewall-ruleset-569add36eff0.png","alt":"入站规则集的方向、默认动作、采集开关与规则列表","h2":"组织规则集","h3":"","w":1800,"h":1450}]},{"section":"场景实践","title":"国内机器最佳实践","slug":"china-server","summary":"为入口 worker 配置可达的控制通信路径，并独立选择业务是否走隧道。","shots":[{"f":"zfc-tutorial-20261018-server-forward-be5426fded2c.png","alt":"服务器的转发模式及“使用转发端点作为传输”开关","h2":"只为管理连接配置中转","h3":"","w":1396,"h":660}]},{"section":"场景实践","title":"IX 使用说明","slug":"ix-guide","summary":"区分 IX 的业务中转与控制通信，配置可达地址、端口及必经层。","shots":[{"f":"zfc-tutorial-20261018-endpoint-basic-277ef4dcc27c.png","alt":"转发端点的对外服务端口与本机绑定设置","h2":"第一步：部署 IX 转发端点","h3":"","w":1276,"h":1190},{"f":"zfc-tutorial-20261018-server-forward-be5426fded2c.png","alt":"服务器默认转发与业务传输开关","h2":"第二步：选择业务配置层次","h3":"","w":1396,"h":660},{"f":"zfc-tutorial-20261018-port-basic-33afbae1bbab.png","alt":"端口目标、入口服务端口与转发模式","h2":"第三步：添加和验证端口","h3":"","w":1396,"h":1060},{"f":"zfc-tutorial-20261018-port-chain-316e0f9fa2d4.png","alt":"链式路径的固定前后跳数","h2":"多跳 IX / 专线","h3":"","w":1396,"h":1060}]},{"section":"场景实践","title":"Halo IX 机器","slug":"halo-ix","summary":"为受限网络的 IX 节点准备可达管理路径，并核对离线部署所需实例文件。","shots":[{"f":"zfc-tutorial-20261018-endpoint-basic-277ef4dcc27c.png","alt":"转发端点的对外地址、服务端口与本机绑定设置","h2":"第一步：准备可达的香港对端","h3":"","w":1276,"h":1190},{"f":"zfc-tutorial-20261018-server-forward-be5426fded2c.png","alt":"服务器的转发配置与业务传输开关","h2":"第二步：为 IX 创建服务器记录","h3":"","w":1396,"h":660},{"f":"zfc-tutorial-20261018-port-chain-316e0f9fa2d4.png","alt":"链式转发的顺序、智能选择与固定跳数","h2":"第五步：配置业务与必经路径","h3":"","w":1396,"h":1060}]},{"section":"场景实践","title":"一机拉全球","slug":"global-cdn-config","summary":"以一台入口接入多个地区落地，用端点组、链式路径和规则分流管理出口。","shots":[{"f":"zfc-tutorial-20261018-endpoint-group-5019d01db2e6.png","alt":"端点组的成员与顺序管理","h2":"第一步：部署并组织落地端点","h3":"","w":2196,"h":1872},{"f":"zfc-tutorial-20261018-inbound-ss-e696b23951e1.png","alt":"入站代理的协议、认证和连通性测试目标","h2":"第二步：创建入站代理端口","h3":"","w":1396,"h":1900},{"f":"zfc-tutorial-20261018-port-chain-316e0f9fa2d4.png","alt":"链式路径的智能选择和固定前后跳数","h2":"第三步：选择出站路径","h3":"","w":1396,"h":1060},{"f":"zfc-tutorial-20261018-routing-match-4202789d3861.png","alt":"匹配规则已经支持直接逐行填写域名后缀","h2":"第四步：用规则指定地区或解锁出口","h3":"","w":1594,"h":1428}]},{"section":"场景实践","title":"沪日美专线组网","slug":"jp-us-lan","summary":"把 IX、日美内网映射与落地端点组织成可验证的多层路径。","shots":[{"f":"zfc-tutorial-20261018-endpoint-basic-277ef4dcc27c.png","alt":"对外服务端口与本机绑定端口分别配置","h2":"第一步：部署美国端点","h3":"","w":1276,"h":1190},{"f":"zfc-tutorial-20261018-port-basic-33afbae1bbab.png","alt":"普通端口转发的线路、目标与服务端口","h2":"第二步：建立日本到美国的内网映射","h3":"","w":1396,"h":1060},{"f":"zfc-tutorial-20261018-endpoint-group-5019d01db2e6.png","alt":"端点组的成员与候选顺序","h2":"第四步：组织候选组和链","h3":"","w":2196,"h":1872},{"f":"zfc-tutorial-20261018-port-chain-316e0f9fa2d4.png","alt":"链式路径、智能选择和固定前后跳数","h2":"第四步：组织候选组和链","h3":"","w":1396,"h":1060},{"f":"zfc-tutorial-20261018-inbound-ss-e696b23951e1.png","alt":"入站代理配置表单","h2":"第五步：按需提供入站代理","h3":"","w":1396,"h":1900}]},{"section":"场景实践","title":"延迟实测","slug":"latency-test","summary":"保留历史 300 并发测试数据，说明测量条件和当前配置入口。","shots":[{"f":"zfc-tutorial-20261018-latency-history-00-cbe96b94378c.png","alt":"直接Ping目标服务器","h2":"场景一：直连基准测试","h3":"","w":1044,"h":230},{"f":"7cdfadba-5e0a-4aad-a3aa-f4964bc1738a.png","alt":"直连测试1分钟","h2":"场景一：直连基准测试","h3":"","w":2970,"h":1962},{"f":"2cda5077-fab2-4163-a608-c1730add95d9.png","alt":"直连测试2分钟","h2":"场景一：直连基准测试","h3":"","w":2964,"h":1962},{"f":"6683aee4-edb0-42cc-a753-69f2c0c1d3a3.png","alt":"直连测试3分钟","h2":"场景一：直连基准测试","h3":"","w":2962,"h":1858},{"f":"ae0e71df-23c5-4eca-af2a-e145fd9fb0bc.png","alt":"Zero转发测试1分钟","h2":"场景二：本地直接转发测试","h3":"Zero转发工具测试","w":2964,"h":1884},{"f":"61b92394-bc15-4a69-a45e-77029e7eaa40.png","alt":"Zero转发测试3分钟","h2":"场景二：本地直接转发测试","h3":"Zero转发工具测试","w":2948,"h":1948},{"f":"7a94edd3-9c3f-4e9e-8db3-1943965e74bd.png","alt":"Realm转发测试1分钟","h2":"场景二：本地直接转发测试","h3":"Realm转发工具测试","w":2976,"h":1930},{"f":"e7a24b9f-fd53-432f-a62e-90872a06cdad.png","alt":"Realm转发测试2分钟","h2":"场景二：本地直接转发测试","h3":"Realm转发工具测试","w":2966,"h":1982},{"f":"3e48d4c8-b4e3-4f27-b388-eecf9d65b224.png","alt":"Realm转发测试3分钟","h2":"场景二：本地直接转发测试","h3":"Realm转发工具测试","w":2974,"h":1942},{"f":"zfc-tutorial-20261018-latency-history-09-83f1954ff180.png","alt":"本机到洛杉矶延迟","h2":"场景三：一级隧道转发测试","h3":"","w":1000,"h":188},{"f":"zfc-tutorial-20261018-latency-history-10-c048f7a6c0c6.png","alt":"洛杉矶到目标服务器延迟","h2":"场景三：一级隧道转发测试","h3":"","w":982,"h":198},{"f":"7f5d0cb8-080c-4667-a1e3-59dd25e5506f.png","alt":"隧道转发测试1分钟","h2":"场景三：一级隧道转发测试","h3":"","w":2958,"h":1898},{"f":"0cab776c-8565-4763-8bcf-9266e8a5caba.png","alt":"隧道转发测试2分钟","h2":"场景三：一级隧道转发测试","h3":"","w":2974,"h":1950},{"f":"zfc-tutorial-20261018-latency-history-13-a62f07027d2a.png","alt":"链式转发配置","h2":"场景四：链式转发测试","h3":"","w":1290,"h":798},{"f":"zfc-tutorial-20261018-latency-history-14-4399b1ffa230.png","alt":"西雅图到洛杉矶延迟","h2":"场景四：链式转发测试","h3":"","w":974,"h":246},{"f":"3b31ffe3-5547-4964-ba7c-cc9740d3e54a.png","alt":"链式转发测试1分钟","h2":"场景四：链式转发测试","h3":"","w":2966,"h":1964},{"f":"039f1e0d-a175-49f7-b9fa-efe32f0e46f3.png","alt":"链式转发测试3分钟","h2":"场景四：链式转发测试","h3":"","w":2984,"h":1988},{"f":"f9b34b17-3505-498b-b5e6-c71879daaa0e.png","alt":"多级端口转发测试1分钟","h2":"场景五：多级端口转发测试","h3":"","w":2968,"h":1970},{"f":"d0c939b9-2365-4ae9-8c59-973b4742c3d7.png","alt":"多级端口转发测试3分钟","h2":"场景五：多级端口转发测试","h3":"","w":2954,"h":1964},{"f":"zfc-tutorial-20261018-latency-history-19-68af881181b8.png","alt":"智能转发系统配置","h2":"场景六：智能链式转发测试","h3":"","w":1354,"h":882},{"f":"76d5235d-fe8f-47df-825e-5010670d4c37.png","alt":"求和模式测试1分钟","h2":"场景六：智能链式转发测试","h3":"求和模式测试","w":2940,"h":1940},{"f":"d56b0479-eb61-4bac-849f-8d22d314e8bd.png","alt":"求和模式测试2分钟","h2":"场景六：智能链式转发测试","h3":"求和模式测试","w":2940,"h":1940},{"f":"9a019377-de6a-4054-aa2b-dbb60655d7b9.png","alt":"求和模式测试3分钟","h2":"场景六：智能链式转发测试","h3":"求和模式测试","w":2968,"h":2000},{"f":"zfc-tutorial-20261018-latency-history-23-ad518c1f5a51.png","alt":"智能选择转发路径","h2":"场景六：智能链式转发测试","h3":"管道模式测试","w":732,"h":686},{"f":"374990ba-400b-411a-9edd-7fece5fe7170.png","alt":"管道模式测试1分钟","h2":"场景六：智能链式转发测试","h3":"管道模式测试","w":2986,"h":1950},{"f":"97d3d3b3-b3d4-44a1-936e-55319c36fba1.png","alt":"管道模式测试2分钟","h2":"场景六：智能链式转发测试","h3":"管道模式测试","w":2964,"h":1916},{"f":"f72f231a-eab2-40ac-8de7-97a72cd69775.png","alt":"管道模式测试3分钟","h2":"场景六：智能链式转发测试","h3":"管道模式测试","w":2958,"h":1916},{"f":"zfc-tutorial-20261018-latency-history-27-4275c2162079.png","alt":"智能选择转发路径","h2":"场景六：智能链式转发测试","h3":"管道模式测试","w":542,"h":928}]},{"section":"帮助支持","title":"连接诊断与测速","slug":"diagnostics-speed-test","summary":"用实时连接、拦截记录、延迟监控和速度诊断定位问题，区分测速范围、限速影响与流量计费。","shots":[{"f":"zfc-tutorial-20261018-connection-stats-ff9ac671e813.png","alt":"连接统计：实时连接、累计统计、转发器分布、拦截记录和探测采集","h2":"查看端口连接统计","h3":"","w":4740,"h":1535},{"f":"zfc-tutorial-20261018-speed-diag-disabled-58e727a07763.png","alt":"服务器未允许测速时的权限提示","h2":"端口速度诊断","h3":"先确认权限与适用范围","w":1520,"h":485},{"f":"zfc-tutorial-20261018-global-speed-config-25fee6810a24.png","alt":"全球测速：选择服务器或端点、自定义 URL、时长和 TCP 流数量","h2":"管理员全球测速","h3":"","w":2400,"h":1063},{"f":"zfc-tutorial-20261018-global-speed-speedtest-ee9e11bf1e2e.png","alt":"Speedtest 服务器模式：测试方向、按时长或数据量以及并行流设置","h2":"管理员全球测速","h3":"","w":2400,"h":1207}]},{"section":"帮助支持","title":"告警与通知","slug":"alerts-notifications","summary":"查看故障和趋势，配置告警阈值、Telegram、邮件与租户通知策略，并区分记录状态和真实恢复。","shots":[{"f":"zfc-tutorial-20261018-alerts-overview-8eb044cc2bdf.png","alt":"告警统计、控制面网络状态、筛选与操作入口","h2":"阅读告警与趋势","h3":"","w":2200,"h":374},{"f":"zfc-tutorial-20261018-alert-settings-2a40049b879b.png","alt":"告警类型的 Telegram 通知开关，具体状态以自己的面板为准","h2":"配置检测阈值与发送开关","h3":"","w":1808,"h":2240}]}];
+const DOCS = '../zeroforwarder-docs/';
+const SITE = 'https://www.zeroforwarder.com/docs/';
+const IMG = 'img/';
+
+const $ = id => document.getElementById(id);
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const total = PAGES.reduce((n, p) => n + p.shots.length, 0);
+const uniq = new Set(PAGES.flatMap(p => p.shots.map(s => s.f))).size;
+$('brandStat').textContent = `${PAGES.length} 个功能页 · ${uniq} 张截图`;
+
+let current = 'all';  // 'all' 或页面 slug
+let query = '';
+let visible = [];     // 当前可见截图，供大图翻页
+
+function renderNav() {
+  let html = `<button data-slug="all" class="${current === 'all' ? 'on' : ''}"><span>全部截图</span><span class="n">${total}</span></button>`;
+  let sec = '';
+  for (const p of PAGES) {
+    if (p.section !== sec) { sec = p.section; html += `<h4>${esc(sec)}</h4>`; }
+    html += `<button data-slug="${p.slug}" class="${current === p.slug ? 'on' : ''}"><span>${esc(p.title)}</span><span class="n">${p.shots.length}</span></button>`;
+  }
+  $('nav').innerHTML = html;
+  let opts = `<option value="all">全部截图（${total}）</option>`, og = '';
+  for (const p of PAGES) {
+    if (p.section !== og) { if (og) opts += '</optgroup>'; og = p.section; opts += `<optgroup label="${esc(og)}">`; }
+    opts += `<option value="${p.slug}">${esc(p.title)}（${p.shots.length}）</option>`;
+  }
+  $('pick').innerHTML = opts + '</optgroup>';
+  $('pick').value = current;
+}
+
+function hl(text) {
+  if (!query) return esc(text);
+  const i = text.toLowerCase().indexOf(query.toLowerCase());
+  if (i < 0) return esc(text);
+  return esc(text.slice(0, i)) + '<mark>' + esc(text.slice(i, i + query.length)) + '</mark>' + esc(text.slice(i + query.length));
+}
+
+function matches(p, s) {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return [s.alt, s.h2, s.h3, p.title, p.section].some(t => t && t.toLowerCase().includes(q));
+}
+
+function render() {
+  visible = [];
+  let html = '';
+  for (const p of PAGES) {
+    if (current !== 'all' && p.slug !== current) continue;
+    const shots = p.shots.filter(s => matches(p, s));
+    if (!shots.length) continue;
+    html += `<section class="page" id="p-${p.slug}">
+      <div class="page-head">
+        <span class="sec">${esc(p.section)}</span>
+        <h2>${hl(p.title)}</h2>
+        <span class="links"><a href="${DOCS}${p.slug}/index.md" target="_blank">本地文档</a><a href="${SITE}${p.slug}/" target="_blank" rel="noopener">官网原文 ↗</a></span>
+      </div>
+      <p class="summary">${esc(p.summary)}</p>
+      <div class="grid">`;
+    for (const s of shots) {
+      const idx = visible.push({ p, s }) - 1;
+      const where = [s.h2, s.h3].filter(Boolean).join(' › ');
+      html += `<button class="card" data-i="${idx}" title="${esc(s.alt)}">
+        <div class="thumb"><img src="${IMG}${s.f}" loading="lazy" width="${s.w}" height="${s.h}" alt="${esc(s.alt)}"></div>
+        <div class="cap"><div class="alt">${hl(s.alt || '（无说明）')}</div>${where ? `<div class="where">${hl(where)}</div>` : ''}</div>
+      </button>`;
+    }
+    html += `</div></section>`;
+  }
+  $('content').innerHTML = html || `<div class="empty">没有匹配“${esc(query)}”的截图</div>`;
+  $('stat').textContent = query || current !== 'all' ? `显示 ${visible.length} / ${total} 张` : `共 ${total} 张（${uniq} 张不重复）`;
+}
+
+function go(slug, push = true) {
+  current = slug;
+  renderNav();
+  render();
+  window.scrollTo(0, 0);
+  if (push) history.replaceState(null, '', slug === 'all' ? location.pathname : '#' + slug);
+  document.querySelector('nav button.on')?.scrollIntoView({ block: 'nearest' });
+}
+
+$('nav').addEventListener('click', e => {
+  const b = e.target.closest('button[data-slug]');
+  if (b) go(b.dataset.slug);
+});
+$('content').addEventListener('click', e => {
+  const c = e.target.closest('.card');
+  if (c) openLb(+c.dataset.i);
+});
+$('pick').addEventListener('change', e => go(e.target.value));
+let qTimer;
+$('q').addEventListener('input', e => {
+  clearTimeout(qTimer);
+  qTimer = setTimeout(() => { query = e.target.value.trim(); render(); }, 120);
+});
+
+/* 大图预览 */
+let at = -1;
+function openLb(i) {
+  $('lb').classList.add('open');
+  document.body.style.overflow = 'hidden';
+  $('lbStrip').innerHTML = visible.map((v, j) =>
+    `<button data-j="${j}" title="${esc(v.s.alt)}"><img src="${IMG}${v.s.f}" loading="lazy" alt=""></button>`).join('');
+  show(i);
+}
+function closeLb() {
+  $('lb').classList.remove('open');
+  document.body.style.overflow = '';
+  document.querySelector(`.card[data-i="${at}"]`)?.focus({ preventScroll: false });
+}
+function show(i) {
+  at = (i + visible.length) % visible.length;
+  const { p, s } = visible[at];
+  $('lbStage').classList.remove('zoom');
+  $('lbZoom').textContent = '原始尺寸';
+  $('lbImg').src = IMG + s.f;
+  $('lbImg').alt = s.alt;
+  $('lbCrumb').innerHTML = `${esc(p.section)} › <b>${esc(p.title)}</b>${s.h2 ? ' › ' + esc(s.h2) : ''}${s.h3 ? ' › ' + esc(s.h3) : ''}`;
+  $('lbCount').textContent = `${at + 1} / ${visible.length}`;
+  $('lbAlt').textContent = s.alt || '（无说明）';
+  $('lbMeta').textContent = `${s.w} × ${s.h} · ${s.f}`;
+  $('lbStage').scrollTo(0, 0);
+  document.querySelectorAll('#lbStrip button').forEach((b, j) => b.classList.toggle('on', j === at));
+  document.querySelector(`#lbStrip button[data-j="${at}"]`)?.scrollIntoView({ inline: 'center', block: 'nearest' });
+  for (const d of [1, -1]) new Image().src = IMG + visible[(at + d + visible.length) % visible.length].s.f;
+}
+function toggleZoom() {
+  const z = $('lbStage').classList.toggle('zoom');
+  $('lbZoom').textContent = z ? '适应窗口' : '原始尺寸';
+}
+$('lbPrev').onclick = () => show(at - 1);
+$('lbNext').onclick = () => show(at + 1);
+$('lbClose').onclick = closeLb;
+$('lbZoom').onclick = toggleZoom;
+$('lbImg').onclick = toggleZoom;
+$('lbOpen').onclick = () => window.open($('lbImg').src, '_blank');
+$('lbStage').addEventListener('click', e => { if (e.target === $('lbStage')) closeLb(); });
+$('lbStrip').addEventListener('click', e => {
+  const b = e.target.closest('button[data-j]');
+  if (b) show(+b.dataset.j);
+});
+
+document.addEventListener('keydown', e => {
+  if ($('lb').classList.contains('open')) {
+    if (e.key === 'Escape') closeLb();
+    else if (e.key === 'ArrowLeft') show(at - 1);
+    else if (e.key === 'ArrowRight') show(at + 1);
+    else if (e.key === 'z' || e.key === 'Z') toggleZoom();
+    else return;
+    e.preventDefault();
+  } else if (e.key === '/' && document.activeElement !== $('q')) {
+    e.preventDefault(); $('q').focus();
+  } else if (e.key === 'Escape' && document.activeElement === $('q')) {
+    $('q').value = ''; query = ''; render(); $('q').blur();
+  }
+});
+
+const start = location.hash.slice(1);
+go(PAGES.some(p => p.slug === start) ? start : 'all', false);
+</script>
+</body>
+</html>
