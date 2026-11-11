@@ -242,6 +242,32 @@ func (p *Panel) changeNodeToken(w http.ResponseWriter, r *http.Request, reset bo
 	}
 }
 
+// 名称只用于展示，不进入节点配置，改名不推进配置版本。
+func (p *Panel) renameNode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	body.Name = strings.TrimSpace(body.Name)
+	if body.Name == "" || len(body.Name) > 200 {
+		problem(w, 400, "节点名称须为 1–200 字节")
+		return
+	}
+	result, err := p.db.ExecContext(r.Context(), "UPDATE nodes SET name = ? WHERE id = ?", body.Name, r.PathValue("id"))
+	if err != nil {
+		problem(w, 503, "存储暂不可用")
+		return
+	}
+	count, _ := result.RowsAffected()
+	if count == 0 {
+		problem(w, 404, "节点不存在")
+		return
+	}
+	respond(w, 204, nil)
+}
+
 func (p *Panel) maintainNode(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Enabled *bool `json:"enabled"`

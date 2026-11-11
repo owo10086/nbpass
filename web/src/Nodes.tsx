@@ -62,6 +62,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   const [adding, setAdding] = useState(false);
   const [saving, setSaving] = useState(false);
   const [installation, setInstallation] = useState<Installation>();
+  const [renameNode, setRenameNode] = useState<NodeRow>();
   const [regionNode, setRegionNode] = useState<NodeRow>();
   const [recordNode, setRecordNode] = useState<string>();
   const [rotationNode, setRotationNode] = useState<string>();
@@ -70,6 +71,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   const [probeNode, setProbeNode] = useState<string>();
   const [validation, setValidation] = useState<{ id: string; mode: NodeValidationMode }>();
   const [form] = Form.useForm();
+  const [renameForm] = Form.useForm();
   const expired = useRef(onSessionExpired);
   expired.current = onSessionExpired;
   const rowClassName = useFocusRow(focus, loaded);
@@ -106,6 +108,16 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
     finally { setSaving(false); }
   }
 
+  async function rename(values: { name: string }) {
+    if (!renameNode) return;
+    setSaving(true);
+    try {
+      await api(`/nodes/${renameNode.id}/name`, 'PUT', values);
+      setRenameNode(undefined); await load();
+    } catch (e) { failed(e); }
+    finally { setSaving(false); }
+  }
+
   async function credential(row: NodeRow, operation: 'reset' | 'revoke') {
     try {
       const result = await api<Installation>(`/nodes/${row.id}/token/${operation}`, 'POST');
@@ -137,7 +149,8 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   }
 
   function more(row: NodeRow, key: string) {
-    if (key === 'region') setRegionNode(row);
+    if (key === 'rename') setRenameNode(row);
+    else if (key === 'region') setRegionNode(row);
     else if (key === 'record') setRecordNode(row.id);
     else if (key === 'rotation') setRotationNode(row.id);
     else if (key === 'maintenance') void maintenance(row);
@@ -213,6 +226,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
             <Button size="small" type="text" onClick={() => setProbeNode(row.id)}>探针</Button>
             <Button size="small" type="text" onClick={() => setSelfCheckNode(row.id)}>自测</Button>
             <Dropdown trigger={['click']} placement="bottomRight" menu={{ onClick: ({ key }) => more(row, key), items: [
+              { key: 'rename', label: '重命名' },
               { key: 'region', label: '地区与检测点' },
               { key: 'rotation', label: '换 IP' },
               { key: 'record', label: '域名与地址' },
@@ -239,6 +253,12 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
       <Form form={form} layout="vertical" onFinish={add} clearOnDestroy>
         <Form.Item name="name" label="节点名称" rules={[{ required: true, whitespace: true, message: '请输入节点名称' }]}><Input autoFocus maxLength={200} placeholder="例如：HK-CN2-01" /></Form.Item>
         <Button block type="primary" htmlType="submit" loading={saving}>生成安装命令</Button>
+      </Form>
+    </Modal>
+    <Modal title="重命名节点" open={!!renameNode} onCancel={() => setRenameNode(undefined)} footer={null} destroyOnHidden>
+      <Form form={renameForm} layout="vertical" onFinish={rename} initialValues={{ name: renameNode?.name }} clearOnDestroy>
+        <Form.Item name="name" label="节点名称" rules={[{ required: true, whitespace: true, message: '请输入节点名称' }]}><Input autoFocus maxLength={200} /></Form.Item>
+        <Button block type="primary" htmlType="submit" loading={saving}>保存</Button>
       </Form>
     </Modal>
     <Modal title="安装节点" open={!!installation} onCancel={() => setInstallation(undefined)} footer={<Button type="primary" onClick={() => setInstallation(undefined)}>完成</Button>} width={760} destroyOnHidden>
