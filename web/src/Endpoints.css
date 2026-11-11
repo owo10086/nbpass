@@ -1,6 +1,6 @@
 .endpoint-page { min-width: 0; }
-.endpoint-id.ant-typography { display: block; width: 138px; max-width: 100%; }
-.endpoint-group-members { max-width: 380px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.endpoint-id.ant-typography { display: block; width: 100%; max-width: 100%; }
+.endpoint-group-members { overflow-wrap: anywhere; }
 .endpoint-row-actions { flex-wrap: wrap; }
 .endpoint-health { margin-top: var(--space-xl); }
 .endpoint-section-heading { margin-bottom: var(--space-md); }

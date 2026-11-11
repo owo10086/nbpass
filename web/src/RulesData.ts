@@ -11,6 +11,7 @@ export type Rule = RuleInput & {
 };
 export type Group = { id: string; name: string };
 export type RuleFilters = { search?: string; line?: string; kind?: RuleInput['kind']; enabled?: boolean };
+export type RuleDetailSort = 'id-ascend' | 'id-descend' | 'sync-ascend' | 'sync-descend';
 export type RuleFormValues = Omit<RuleInput, 'entry_group_id' | 'entry_node_id' | 'target_family' | 'listen_port'> & {
   line: string; listen_port?: number; random_port?: boolean;
 };
@@ -27,6 +28,13 @@ export function filterRules<T extends FilterableRule>(rows: T[], filters: RuleFi
     && (!filters.line || ruleLine(row) === filters.line)
     && (!filters.kind || row.kind === filters.kind)
     && (filters.enabled === undefined || row.enabled === filters.enabled));
+}
+
+export function sortRuleDetails<T extends Pick<Rule, 'id' | 'sync_status'>>(rows: T[], sort?: RuleDetailSort): T[] {
+  if (!sort) return rows;
+  const key = sort.startsWith('id-') ? 'id' : 'sync_status';
+  const direction = sort.endsWith('ascend') ? 1 : -1;
+  return [...rows].sort((a, b) => direction * a[key].localeCompare(b[key], 'zh-CN', { numeric: true }));
 }
 
 export function buildRuleInput(values: RuleFormValues): RuleInput & { random_port?: boolean } {

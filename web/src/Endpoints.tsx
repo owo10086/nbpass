@@ -90,12 +90,12 @@ export function Endpoints({ focus, onSessionExpired }: { focus?: string; onSessi
       <FilterField label="端点组" htmlFor="endpoint-group"><Select id="endpoint-group" showSearch optionFilterProp="label" allowClear placeholder="全部分组" value={group} onChange={value => { setGroup(value); setPage(1); }} options={[{ value: 'ungrouped', label: '未分组' }, ...groups.map(group => ({ value: group.id, label: group.name }))]} /></FilterField>
     </FilterCard>
     <TableCard<Endpoint> title="转发端点列表" rowKey="node_id" dataSource={visible} loading={loading} pagination={{ current: page, pageSize: 10, showSizeChanger: false, onChange: setPage }} rowClassName={row => focused(row.node_id)} scroll={{ x: 1050 }} locale={{ emptyText: query.trim() || status || group ? '没有匹配的转发端点' : '暂无转发端点，请先添加服务器并配置 WSS 地址。' }} columns={[
-      { title: 'ID', dataIndex: 'node_id', width: 170, render: value => <Typography.Text className="endpoint-id mono" ellipsis={{ tooltip: value }} copyable>{value}</Typography.Text> },
-      { title: '名称 / 地址', width: 230, render: (_, row) => <><span className="node-name">{nodeName(row.node_id)}</span><span className="cell-sub mono">{row.address}:{row.listen_port}</span></> },
-      { title: '协议', width: 90, render: () => <ColorTag tone="blue">WSS</ColorTag> },
-      { title: '状态', width: 135, render: (_, row) => { const node = nodes.find(node => node.id === row.node_id); return <StatusDot tone={!node ? 'muted' : node.connected ? 'ok' : 'danger'}>{!node ? '控制状态未知' : node.connected ? '控制在线' : '控制离线'}</StatusDot>; } },
+      { title: 'ID', dataIndex: 'node_id', fixed: 'left', width: 120, render: value => <Typography.Text className="endpoint-id mono" ellipsis={{ tooltip: value }} copyable={{ text: value }}>{value.slice(0, 8)}…</Typography.Text> },
+      { title: '名称 / 地址', fixed: 'left', width: 220, render: (_, row) => <><span className="node-name">{nodeName(row.node_id)}</span><span className="cell-sub mono">{row.address}:{row.listen_port}</span></> },
+      { title: '协议', width: 72, render: () => <ColorTag tone="blue">WSS</ColorTag> },
+      { title: '状态', width: 120, render: (_, row) => { const node = nodes.find(node => node.id === row.node_id); return <StatusDot tone={!node ? 'muted' : node.connected ? 'ok' : 'danger'}>{!node ? '控制状态未知' : node.connected ? '控制在线' : '控制离线'}</StatusDot>; } },
       { title: '所属端点组', render: (_, row) => { const memberships = endpointGroups(row.node_id); return <Space wrap size={[4, 4]}>{memberships.length ? memberships.map(group => <a key={group.id} href={`#/endpoint-groups?focus=${encodeURIComponent(group.id)}`}><ColorTag>{group.name}</ColorTag></a>) : <span className="muted">未分组</span>}</Space>; } },
-      { title: '操作', key: 'actions', width: 310, align: 'right', render: (_, row) => <div className="row-actions endpoint-row-actions">
+      { title: '操作', key: 'actions', fixed: 'right', width: 280, align: 'right', render: (_, row) => <div className="row-actions endpoint-row-actions">
         <Button type="text" size="small" onClick={() => edit(row)}>编辑</Button>
         <TunnelRotation nodeID={row.node_id} onSessionExpired={onSessionExpired} onChanged={() => void load()} />
         <ExitBlocked nodeID={row.node_id} onSessionExpired={onSessionExpired} onChanged={() => void load()} />

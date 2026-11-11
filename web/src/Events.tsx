@@ -88,7 +88,7 @@ export function Events({ onSessionExpired }: { onSessionExpired: () => void }) {
       </FilterCard>
       </Form>
     {error && <Alert title={error} type="error" showIcon className="message" />}
-      <TableCard<EventRow> title="事件记录" rowKey="sequence" dataSource={rows} loading={loading} pagination={{ pageSize: 100, showSizeChanger: false }} scroll={{ x: 1100 }} locale={{ emptyText: '暂无符合条件的事件' }} footer={() => <div className="zf-other-table-footer"><span className="muted num">已加载 {rows.length} 条</span><Button disabled={next === null} loading={loading} onClick={() => next !== null && void load(next)}>{next === null ? '已显示全部事件' : '加载更早的记录'}</Button></div>} columns={[
+      <TableCard<EventRow> title="事件记录" rowKey="sequence" dataSource={rows} loading={loading} pagination={{ pageSize: 100, showSizeChanger: false }} scroll={{ x: 1080 }} locale={{ emptyText: '暂无符合条件的事件' }} footer={() => <div className="zf-other-table-footer"><span className="muted num">已加载 {rows.length} 条</span><Button disabled={next === null} loading={loading} onClick={() => next !== null && void load(next)}>{next === null ? '已显示全部事件' : '加载更早的记录'}</Button></div>} columns={[
         { title: '发生时间', dataIndex: 'occurred_at', render: value => <span className="num">{date(value)}</span>, width: 185 },
         { title: '服务器', key: 'node', render: (_, row) => row.node_name || row.node_id || '面板' },
         { title: '类型', dataIndex: 'type', render: (type: string) => <StatusDot tone={type === 'event_gap' ? 'warn' : type === 'sync_failed' ? 'danger' : 'muted'}>{labels[type] || type}</StatusDot> },

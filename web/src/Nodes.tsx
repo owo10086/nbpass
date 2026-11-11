@@ -194,35 +194,35 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
       <Dropdown trigger={['click']} menu={{ selectedKeys: extraSort ? [extraSort] : [], items: extraSorts.map(sort => ({ key: sort.value, label: sort.label })), onClick: ({ key }) => { order.onChange(undefined, undefined, {}); setExtraSort(key); setPage(1); } }}><Button size="small" icon={<SortAscendingOutlined />}>{activeExtraSort?.label || '更多排序'}</Button></Dropdown>
       {activeExtraSort ? <Button size="small" onClick={() => setExtraSort(undefined)}>恢复自定义顺序</Button> : order.restore}
     </>} rowKey="id" dataSource={visible} loading={!loaded && !error}
-      rowSelection={{ selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} onChange={(pagination, filters, sorter, extra) => { if (extra.action === 'sort') { setExtraSort(undefined); setPage(1); } order.onChange(pagination, filters, sorter); }} onRow={order.onRow}
+      rowSelection={{ fixed: true, columnWidth: 30, selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} onChange={(pagination, filters, sorter, extra) => { if (extra.action === 'sort') { setExtraSort(undefined); setPage(1); } order.onChange(pagination, filters, sorter); }} onRow={order.onRow}
       rowClassName={row => `${rowClassName(row.id)} ${order.rowClass(row.id)}`}
-      pagination={{ current: currentPage, pageSize: 20, showSizeChanger: false, onChange: setPage }} scroll={{ x: 1390 }}
+      pagination={{ current: currentPage, pageSize: 20, showSizeChanger: false, onChange: setPage }} scroll={{ x: 1080 }}
       locale={{ emptyText: rows.length ? '没有符合条件的服务器' : '暂无服务器。添加服务器后，将安装命令复制到目标机器执行。' }} columns={[
-        order.handle,
-        { title: 'ID', width: 100, ...order.sorted('id'), sorter: byText(row => row.id), render: (_, row) => <Tooltip title={row.id}><Button size="small" type="text" className="servers-id mono" aria-label={`查看 ${row.name} 的完整 ID`} onClick={() => action(row, 'details')}>{row.id.slice(0, 8)}</Button></Tooltip> },
-        { title: '显示名称 / 入口地址', fixed: 'left', width: 240, ...order.sorted('name'), sorter: byText(row => row.name), render: (_, row) => <>
+        { ...order.handle, width: 28 },
+        { title: 'ID', fixed: 'left', width: 88, ...order.sorted('id'), sorter: byText(row => row.id), render: (_, row) => <Tooltip title={row.id}><Button size="small" type="text" className="servers-id mono" aria-label={`查看 ${row.name} 的完整 ID`} onClick={() => action(row, 'details')}>{row.id.slice(0, 8)}</Button></Tooltip> },
+        { title: '显示名称 / 入口地址', fixed: 'left', width: 146, ...order.sorted('name'), sorter: byText(row => row.name), render: (_, row) => <>
           <Button type="link" className="servers-name" onClick={() => action(row, 'details')}>{row.name}</Button>
           <span className="cell-sub mono">{row.managed_record?.hostname || row.confirmed_ipv4 || row.public_ipv4 || '尚未查询到 IP'}</span>
           {row.public_ipv4 && row.public_ipv4 !== row.confirmed_ipv4 && <Button size="small" type="text" className="servers-address-warning" onClick={() => action(row, 'record')}>地址待确认</Button>}
           {row.apply_error && <span className="cell-danger">配置同步失败 · 详情中查看</span>}
         </> },
-        { title: '状态', width: 140, ...order.sorted('status'), sorter: (a, b) => statusRank(a) - statusRank(b), render: (_, row) => <>
+        { title: '状态', width: 102, ...order.sorted('status'), sorter: (a, b) => statusRank(a) - statusRank(b), render: (_, row) => <>
           <StatusDot tone={serverTone(row)}>{row.status_label}</StatusDot>
           {row.status === 'online' && !row.connected && <span className="cell-danger">控制连接已中断</span>}
           {row.status === 'maintenance' && row.maintenance_until ? <span className="cell-sub">至 <span className="num">{new Date(row.maintenance_until).toLocaleTimeString()}</span></span> : row.probe?.uptime_seconds != null && <span className="cell-sub">运行 {uptime(row.probe.uptime_seconds)}</span>}
         </> },
-        { title: '服务器组', width: 170, ...order.sorted('groups'), sorter: byText(row => serverGroupsFor(row.id, groups).map(group => group.name).join('、')), render: (_, row) => {
+        { title: '服务器组', width: 100, ...order.sorted('groups'), sorter: byText(row => serverGroupsFor(row.id, groups).map(group => group.name).join('、')), render: (_, row) => {
           const memberships = serverGroupsFor(row.id, groups);
           return <Space wrap size={[4, 4]}>{memberships.length ? memberships.map(group => <ColorTag key={group.id}>{group.name}</ColorTag>) : <ColorTag>未分组</ColorTag>}</Space>;
         } },
-        { title: '资源使用', width: 170, ...order.sorted('cpu'), sortDirections: ['descend', 'ascend'], sorter: byMetric<ServerRow>(row => row.probe?.cpu_percent), render: (_, row) => <div className="servers-resources"><div><span>CPU</span><CpuCell probe={row.probe} /></div><div><span>内存</span><MemoryCell probe={row.probe} /></div></div> },
-        { title: <Tooltip title="本机及所属服务器组中已启用的业务监听端口数，不含隧道与检测预留端口；实际应用状态见详情。">端口数</Tooltip>, width: 100, ...order.sorted('ports'), sorter: (a, b) => serverPortCount(a.id, groups, ports) - serverPortCount(b.id, groups, ports), render: (_, row) => <span className="mono">{serverPortCount(row.id, groups, ports)}</span> },
-        { title: <Tooltip title="实测网卡上下行速率，包含该机器上的其他网络流量。">网络速率</Tooltip>, width: 150, ...order.sorted('network'), sortDirections: ['descend', 'ascend'], sorter: byMetric<ServerRow>(row => networkRate(row.probe)), render: (_, row) => <NetworkCell probe={row.probe} /> },
-        { title: '版本', width: 160, render: (_, row) => <>
+        { title: '资源使用', width: 128, ...order.sorted('cpu'), sortDirections: ['descend', 'ascend'], sorter: byMetric<ServerRow>(row => row.probe?.cpu_percent), render: (_, row) => <div className="servers-resources"><div><span>CPU</span><CpuCell probe={row.probe} /></div><div><span>内存</span><MemoryCell probe={row.probe} /></div></div> },
+        { title: <Tooltip title="本机及所属服务器组中已启用的业务监听端口数，不含隧道与检测预留端口；实际应用状态见详情。">端口数</Tooltip>, width: 76, ...order.sorted('ports'), sorter: (a, b) => serverPortCount(a.id, groups, ports) - serverPortCount(b.id, groups, ports), render: (_, row) => <span className="mono">{serverPortCount(row.id, groups, ports)}</span> },
+        { title: <Tooltip title="实测网卡上下行速率，包含该机器上的其他网络流量。">网络速率</Tooltip>, width: 102, ...order.sorted('network'), sortDirections: ['descend', 'ascend'], sorter: byMetric<ServerRow>(row => networkRate(row.probe)), render: (_, row) => <NetworkCell probe={row.probe} /> },
+        { title: '版本', width: 116, render: (_, row) => <>
           <span className="mono">{row.software_version || '尚未接入'}</span>
           <Button type="link" size="small" className="servers-version" onClick={() => action(row, 'upgrade')}>{row.upgrade ? '查看升级进度' : row.version_mismatch ? '有版本差异' : '版本与升级'}</Button>
         </> },
-        { title: '操作', key: 'actions', fixed: 'right', width: 124, align: 'right', render: (_, row) => <div className="row-actions">
+        { title: '操作', key: 'actions', fixed: 'right', width: 104, align: 'right', render: (_, row) => <div className="row-actions">
           <Button size="small" type="link" onClick={() => edit(row)}>编辑</Button>
           <Dropdown trigger={['click']} placement="bottomRight" menu={{ onClick: ({ key }) => action(row, key), items: [
             { key: 'details', label: '服务器详情' }, { key: 'install', label: '安装脚本' }, { key: 'upgrade', label: '升级与版本' },

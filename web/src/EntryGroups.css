@@ -1,8 +1,8 @@
 .sg-page .sg-filter-search { width: 240px; }
-.sg-name { font-weight: 550; }
+.sg-name { font-weight: 550; overflow-wrap: anywhere; }
 .sg-sub { display: block; margin-top: 4px; color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
 .sg-help { color: var(--text-3); font-size: 12px; }
-.sg-id { display: inline-block; max-width: 100px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+.sg-id { display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
 .sg-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; white-space: nowrap; }
 .sg-count { display: inline-block; min-width: 26px; padding: 1px 8px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-variant-numeric: tabular-nums; }
 .sg-modal .ant-modal-body { max-height: 72vh; overflow-y: auto; }

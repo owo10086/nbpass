@@ -148,19 +148,19 @@ export function EntryGroups({ focus, onSessionExpired }: { focus?: string; onSes
     </FilterCard>
     <TableCard<EntryGroup> title="服务器组" actions={order.restore} rowKey="id" dataSource={visible} loading={!loaded && loading}
       pagination={{ current: page, pageSize: 10, showSizeChanger: false, onChange: setPage }}
-      onChange={order.onChange} onRow={order.onRow} rowClassName={row => `${rowClassName(row.id)} ${order.rowClass(row.id)}`} scroll={{ x: 1150 }}
+      onChange={order.onChange} onRow={order.onRow} rowClassName={row => `${rowClassName(row.id)} ${order.rowClass(row.id)}`} scroll={{ x: 1000 }}
       locale={{ emptyText: filtered ? '没有符合条件的服务器组' : '暂无服务器组，请先添加服务器，再创建组。' }} columns={[
-        order.handle,
-        { title: 'ID', dataIndex: 'id', width: 125, render: value => <Tooltip title={value}><span className="mono sg-id">{value}</span></Tooltip> },
-        { title: '显示名称 / 入口域名', dataIndex: 'name', ...order.sorted('name'), sorter: byText(row => row.name), render: (value, row) => <>
+        { ...order.handle, width: 28 },
+        { title: 'ID', dataIndex: 'id', fixed: 'left', width: 100, render: value => <Tooltip title={value}><span className="mono sg-id">{value}</span></Tooltip> },
+        { title: '显示名称 / 入口域名', dataIndex: 'name', fixed: 'left', width: 220, ...order.sorted('name'), sorter: byText(row => row.name), render: (value, row) => <>
           <span className="sg-name">{value}</span>
           <span className="sg-sub mono">{domains[row.id]?.error ? <Tooltip title={domains[row.id].error}>域名读取失败</Tooltip> : domains[row.id]?.hostname || (domains[row.id] ? '未绑定受管域名' : '正在读取域名…')}</span>
         </> },
-        { title: '发布模式', width: 115, render: (_, row) => <ColorTag tone={row.publication_mode === 'all' ? 'blue' : 'purple'}>{row.publication_mode === 'all' ? '全部发布' : '主备'}</ColorTag> },
-        { title: '服务器', width: 95, ...order.sorted('members'), sorter: (a, b) => a.members.length - b.members.length, render: (_, row) => <Tooltip title={row.members.map((id, i) => `${nodes.find(n => n.id === id)?.name ?? id}${i === 0 && row.publication_mode !== 'all' ? '（首选入口）' : ''}`).join('、')}><span className="sg-count">{row.members.length}</span></Tooltip> },
-        { title: <Tooltip title="显示真实发布阶段；绑定并首次发布后，按健康条件维护 DNS。仅观测会抑制后续自动动作。">DNS 自动切换 <InfoCircleOutlined /></Tooltip>, width: 185, render: (_, row) => <><StatusDot tone={publicationTone(row.publication_status)}>{row.publication_status}</StatusDot><span className="sg-sub">配置同步：{row.sync_status}</span></> },
-        { title: '仅观测', width: 100, render: (_, row) => <Switch size="small" checked={row.observation_enabled} loading={observing.includes(row.id)} checkedChildren="开" unCheckedChildren="关" aria-label={`${row.name}仅观测`} onChange={enabled => void observe(row, enabled)} /> },
-        { title: '操作', key: 'actions', width: 195, align: 'right', render: (_, row) => <div className="sg-actions">
+        { title: '发布模式', width: 104, render: (_, row) => <ColorTag tone={row.publication_mode === 'all' ? 'blue' : 'purple'}>{row.publication_mode === 'all' ? '全部发布' : '主备'}</ColorTag> },
+        { title: '服务器', width: 80, ...order.sorted('members'), sorter: (a, b) => a.members.length - b.members.length, render: (_, row) => <Tooltip title={row.members.map((id, i) => `${nodes.find(n => n.id === id)?.name ?? id}${i === 0 && row.publication_mode !== 'all' ? '（首选入口）' : ''}`).join('、')}><span className="sg-count">{row.members.length}</span></Tooltip> },
+        { title: <Tooltip title="显示真实发布阶段；绑定并首次发布后，按健康条件维护 DNS。仅观测会抑制后续自动动作。">DNS 自动切换 <InfoCircleOutlined /></Tooltip>, width: 164, render: (_, row) => <><StatusDot tone={publicationTone(row.publication_status)}>{row.publication_status}</StatusDot><span className="sg-sub">配置同步：{row.sync_status}</span></> },
+        { title: '仅观测', width: 80, render: (_, row) => <Switch size="small" checked={row.observation_enabled} loading={observing.includes(row.id)} checkedChildren="开" unCheckedChildren="关" aria-label={`${row.name}仅观测`} onChange={enabled => void observe(row, enabled)} /> },
+        { title: '操作', key: 'actions', fixed: 'right', width: 180, align: 'right', render: (_, row) => <div className="sg-actions">
           <Button size="small" type="link" onClick={() => edit(row)}>编辑</Button>
           <Button size="small" type="link" onClick={() => setStatusID(row.id)}>DNS 状态</Button>
           <Popconfirm title="删除服务器组？" description="须先删除使用本组的端口。解绑后的旧 DNSPod 记录保持原状，请自行核对处理。" onConfirm={() => remove(row.id)}><Button danger size="small" type="text">删除</Button></Popconfirm>

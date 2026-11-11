@@ -7,7 +7,7 @@ export type TableCardProps<T extends object> = Omit<TableProps<T>, 'title'> & { 
 export function TableCard<T extends object>({ title, actions, pagination, ...props }: TableCardProps<T>) {
   return <section className="table-card" aria-label={title}>
     {(title || actions) && <div className="table-card-head">{title && <h2>{title}</h2>}{actions && <div className="table-card-actions">{actions}</div>}</div>}
-    <Table<T> {...props} pagination={pagination === false ? false : {
+    <Table<T> tableLayout="fixed" {...props} pagination={pagination === false ? false : {
       showTotal: total => `共 ${total} 条`, placement: ['bottomEnd'], ...pagination,
     }} />
   </section>;

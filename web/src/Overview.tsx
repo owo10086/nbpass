@@ -31,7 +31,7 @@ export function Overview({ state }: { state: OperationsState }) {
       {[
         { title: '当前异常与自动处理', rows: data.current_incidents }, { title: '最近结束的故障', rows: data.recent_incidents },
       ].map(({title, rows}) => <TableCard<Incident> title={title} actions={<Button size="small" onClick={() => go('incidents')}>全部故障与筛选</Button>} key={title}
-        rowKey="id" dataSource={rows} pagination={false} scroll={{ x: 600 }} locale={{ emptyText: data.incident_error ? '整理状态待确认，请稍后刷新' : '当前没有记录' }} columns={[
+        rowKey="id" dataSource={rows} pagination={false} scroll={{ x: 500 }} locale={{ emptyText: data.incident_error ? '整理状态待确认，请稍后刷新' : '当前没有记录' }} columns={[
           { title: '故障', render: (_, r) => <Button type="link" onClick={() => go('incidents', r.id)}>{r.title}</Button> },
           { title: '影响 / 处理', render: (_, r) => <><StatusDot tone={r.impact === 'abnormal' ? 'danger' : r.impact === 'unknown' ? 'warn' : 'muted'}>{impactLabels[r.impact] || r.impact}</StatusDot><span className="cell-sub">{handlingLabels[r.handling]}{r.closure && ` · ${r.closure}`}</span></> },
           { title: '关联服务器组', render: (_, r) => r.refs.filter(ref => ref.kind === 'group').map(ref => ref.name).join('、') || '—' },

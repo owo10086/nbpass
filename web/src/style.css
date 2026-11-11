@@ -71,6 +71,14 @@ body { margin: 0; min-width: 320px; }
 .table-card-head h2 { margin: 0; font-size: var(--font-size); font-weight: 600; }
 .table-card-actions { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-left: auto; }
 .table-card .ant-table-pagination { padding: var(--space-sm) 14px; margin: 0 !important; }
+.table-card .ant-table-cell { overflow-wrap: anywhere; }
+.table-card :is(.color-tag, .status) { max-width: 100%; white-space: normal; }
+.table-card .color-tag { overflow-wrap: anywhere; }
+.table-card .ant-table-tbody .ant-btn-link { height: auto; max-width: 100%; white-space: normal; text-align: left; }
+@media (max-width: 700px) {
+  .table-card :is(.ant-table-cell-fix-start, .ant-table-cell-fix-end) { position: static !important; }
+  .table-card :is(.ant-table-cell-fix-start-shadow, .ant-table-cell-fix-end-shadow)::after { display: none; }
+}
 .form-section { border-bottom: 1px solid var(--line); padding: 4px 0 6px; margin-bottom: 14px; }
 .form-section:last-child { border-bottom: 0; margin-bottom: 0; }
 .form-section h2 { margin: 0; font-size: var(--font-section); font-weight: 600; }

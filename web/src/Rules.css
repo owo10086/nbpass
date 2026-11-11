@@ -2,9 +2,10 @@
 .ports-page .filter-field:nth-child(3) > .ant-select,
 .ports-page .filter-field:nth-child(4) > .ant-select { width: 130px; }
 .ports-page .table-card-actions { align-items: center; width: 100%; }
+.ports-page .table-card-actions > .ant-select { width: 160px; margin-left: auto; }
 .ports-selection { margin-right: auto; color: var(--text-2); font-size: var(--font-description); }
 .ports-selection b { color: var(--accent); font-weight: 600; }
-.ports-page .ports-id { font-size: var(--font-small); white-space: nowrap; }
+.ports-page .ports-id { color: var(--text-3); font-size: var(--font-small); white-space: nowrap; }
 .ports-name, .ports-target { overflow-wrap: anywhere; }
 .ports-traffic { white-space: nowrap; }
 .ports-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0; white-space: nowrap; }

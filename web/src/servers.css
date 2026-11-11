@@ -7,9 +7,10 @@
 .servers-page .cell-sub { overflow-wrap: anywhere; }
 .servers-page .servers-address-warning { display: block; height: auto; padding: 0; color: var(--warn); font-size: 12px; }
 .servers-resources { display: grid; gap: 7px; font-size: 12px; }
-.servers-resources > div { display: flex; align-items: center; gap: 8px; }
-.servers-resources > div > span:first-child { min-width: 28px; color: var(--text-3); }
-.servers-resources .usage-track { width: 48px; height: 4px; }
+.servers-resources > div { display: flex; align-items: center; gap: 4px; }
+.servers-resources > div > span:first-child { min-width: 24px; color: var(--text-3); }
+.servers-resources .usage-track { width: 28px; height: 4px; }
+.servers-resources .usage { gap: 6px; }
 .servers-resources .usage-value { font-size: 12px; }
 .servers-page .servers-version { display: block; height: auto; padding: 0; font-size: 12px; }
 .servers-page .row-actions .ant-btn-link { color: var(--accent); }

@@ -43,7 +43,7 @@ export const themeConfig: ThemeConfig = {
   },
   components: {
     Button: { primaryShadow: 'none', defaultShadow: 'none', dangerShadow: 'none', fontWeight: 500, primaryColor: tokens.white },
-    Table: { headerBg: tokens['bg-head'], headerColor: tokens.text, headerSplitColor: 'transparent', cellPaddingBlock: 12, cellPaddingInline: 14, rowHoverBg: tokens['bg-hover'], headerBorderRadius: 0 },
+    Table: { headerBg: tokens['bg-head'], headerColor: tokens.text, headerSplitColor: 'transparent', cellPaddingBlock: 12, cellPaddingInline: 8, rowHoverBg: tokens['bg-hover'], headerBorderRadius: 0 },
     Card: { headerFontSize: 14 }, Modal: { titleFontSize: 16 },
     Tag: { defaultBg: tokens['tag-bg'], defaultColor: tokens['text-2'] },
   },

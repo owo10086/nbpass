@@ -104,7 +104,7 @@ export function DNSWatch({ focus, onSessionExpired }: { focus?: string; onSessio
       <p className="zf-other-note">每 5 分钟采样，入口切换后每 30 秒观察传播。手工域名可选填期望 IP；服务器组域名由活动入口维护期望。同路径连续 3 次不符才判异常，旧 TTL 内保留缓存宽限。</p>
     </FilterCard>
     {error && <Alert className="message" title={error} type="error" showIcon />}
-    <TableCard title="域名监控" rowKey="id" dataSource={rows} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 1100 }} locale={{ emptyText: '暂无解析监控。添加域名后每 5 分钟查询一次。' }} columns={[
+    <TableCard title="域名监控" rowKey="id" dataSource={rows} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 1080 }} locale={{ emptyText: '暂无解析监控。添加域名后每 5 分钟查询一次。' }} columns={[
       { title: '域名', dataIndex: 'domain', render: (_, row) => <><Typography.Link className="node-name" onClick={() => setSelected(row.id)}>{row.domain}</Typography.Link><Tooltip title="查看按天 IP 变化"><button type="button" className="watch-days" onClick={() => setSelected(row.id)}>IP 观测 · 今日 {row.today_switches} · 昨日 {row.yesterday_switches}</button></Tooltip></> },
       { title: '期望 IP', render: (_, row) => row.expected_ips.length ? <span className="mono">{ips(row.expected_ips)}</span> : <span className="muted">仅观察</span> },
       { title: '状态', render: (_, row) => <><Space wrap><StatusDot tone={tone(row.status)}>{row.status}</StatusDot>{row.propagation_status && <ColorTag>{row.propagation_status}</ColorTag>}</Space><span className="cell-sub">{row.coverage_label}</span></> },

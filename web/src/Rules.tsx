@@ -12,7 +12,7 @@ import { ColorTag } from './ColorTag';
 import { FormSection } from './FormSection';
 import { byMetric, byText, useDragOrder } from './ListOrder';
 import { PortSyncDetails, PortSyncStatus } from './PortSyncDetails';
-import { buildRuleInput, filterRules, ruleLine, type Group, type Rule, type RuleFilters, type RuleFormValues } from './RulesData';
+import { buildRuleInput, filterRules, ruleLine, sortRuleDetails, type Group, type Rule, type RuleDetailSort, type RuleFilters, type RuleFormValues } from './RulesData';
 import './Rules.css';
 
 type BatchAction = 'enable' | 'disable' | 'delete';
@@ -44,6 +44,7 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
   const [filters, setFilters] = useState<RuleFilters>({});
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [detailSort, setDetailSort] = useState<RuleDetailSort>();
   const [form] = Form.useForm<RuleFormValues>();
   const kind = Form.useWatch('kind', form);
   const line = Form.useWatch('line', form);
@@ -68,8 +69,8 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
     finally { setLoading(false); }
   }
   const filtered = !!(filters.search?.trim() || filters.line || filters.kind || filters.enabled !== undefined);
-  const visibleRows = filterRules(rows, filters, focus);
-  const order = useDragOrder(rows, setRows, '/rules', { filtered: filtered || !!focus, onError: failed, reload: load });
+  const visibleRows = sortRuleDetails(filterRules(rows, filters, focus), detailSort);
+  const order = useDragOrder(rows, setRows, '/rules', { filtered: filtered || !!focus || !!detailSort, onError: failed, reload: load });
   useEffect(() => {
     void load();
     const timer = window.setInterval(() => { if (!order.busy()) void load(); }, 5000);
@@ -175,28 +176,30 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
       {filtered && <Button type="text" onClick={() => { setFilters({}); setPage(1); }}>重置筛选</Button>}
     </FilterCard>
 
-    <TableCard<Rule> rowKey="id" dataSource={visibleRows} actions={(selectedIDs.length > 0 || order.restore) && <>
+    <TableCard<Rule> rowKey="id" dataSource={visibleRows} actions={<>
       {selectedIDs.length > 0 && <><span className="ports-selection">已选 <b className="num">{selectedIDs.length}</b> 条（含其他页及筛选外的端口）</span><Button type="text" disabled={mutating} onClick={() => setSelectedIDs([])}>取消选择</Button></>}
-      {order.restore}
+      <Select aria-label="ID 与同步状态排序" placeholder="更多排序" allowClear value={detailSort} options={[
+        { value: 'id-ascend', label: 'ID 升序' }, { value: 'id-descend', label: 'ID 降序' },
+        { value: 'sync-ascend', label: '同步状态升序' }, { value: 'sync-descend', label: '同步状态降序' },
+      ]} onChange={value => { order.onChange(undefined, undefined, {}); setDetailSort(value); setPage(1); }} />
+      {detailSort ? <Button onClick={() => setDetailSort(undefined)}>恢复自定义顺序</Button> : order.restore}
     </>}
-      rowSelection={{ selectedRowKeys: selectedIDs, preserveSelectedRowKeys: true, onChange: keys => setSelectedIDs(keys.map(String)), getCheckboxProps: () => ({ disabled: mutating }) }}
-      onChange={(pagination, tableFilters, sorter) => { setPage(pagination.current ?? 1); setPageSize(pagination.pageSize ?? 20); order.onChange(pagination, tableFilters, sorter); }}
+      rowSelection={{ fixed: true, columnWidth: 30, selectedRowKeys: selectedIDs, preserveSelectedRowKeys: true, onChange: keys => setSelectedIDs(keys.map(String)), getCheckboxProps: () => ({ disabled: mutating }) }}
+      onChange={(pagination, tableFilters, sorter, extra) => { if (extra.action === 'sort') setDetailSort(undefined); setPage(pagination.current ?? 1); setPageSize(pagination.pageSize ?? 20); order.onChange(pagination, tableFilters, sorter); }}
       onRow={order.onRow} rowClassName={row => order.rowClass(row.id)} loading={!loaded && !error}
       pagination={{ current: Math.max(1, Math.min(page, Math.ceil(visibleRows.length / pageSize))), pageSize, showSizeChanger: true, pageSizeOptions: [20, 50, 100] }}
-      scroll={{ x: 1715 }} locale={{ emptyText: filtered || focus ? '没有符合条件的端口。' : '暂无端口，请先接入服务器，再添加端口转发。' }}
-      expandable={{ expandedRowKeys: expandedIDs, onExpandedRowsChange: keys => setExpandedIDs([...keys]), expandedRowRender: row => <PortSyncDetails members={row.sync_members} /> }} columns={[
-        order.handle,
-        { title: 'ID', dataIndex: 'id', width: 120, ...order.sorted('id'), sorter: byText(row => row.id), render: value => <Typography.Text className="ports-id mono" copyable={{ text: value }}><Tooltip title={value}><span>{value.length > 8 ? `${value.slice(0, 8)}…` : value}</span></Tooltip></Typography.Text> },
-        { title: '名称', dataIndex: 'name', width: 150, ...order.sorted('name'), sorter: byText(row => row.name), render: value => <span className="node-name ports-name">{value}</span> },
-        { title: '线路', width: 145, ...order.sorted('entry'), sorter: byText(entryName), render: (_, row) => <><span className="ports-name">{entryName(row)}</span><span className="cell-sub">{row.entry_node_id ? '服务器' : '服务器组'}</span></> },
-        { title: '服务端口', dataIndex: 'listen_port', width: 110, ...order.sorted('listen_port'), sorter: (a, b) => a.listen_port - b.listen_port, render: value => <span className="mono">{value}</span> },
-        { title: '目标', width: 200, ...order.sorted('target'), sorter: byText(row => `${row.target_address}:${row.target_port}`), render: (_, row) => <><span className="mono ports-target">{row.target_address}:{row.target_port}</span><span className="cell-sub">{row.allow_private ? '允许私网目标' : '仅公网目标'}</span></> },
-        { title: '转发模式', width: 140, render: (_, row) => <><ColorTag tone={row.kind === 'tunnel' ? 'blue' : 'neutral'}>{row.kind === 'tunnel' ? '单跳转发' : '直连'}</ColorTag>{row.kind === 'tunnel' && <span className="cell-sub ports-name">{exitGroups.find(group => group.id === row.exit_group_id)?.name ?? row.exit_group_id}</span>}</> },
-        { title: '状态', width: 100, ...order.sorted('enabled'), sorter: (a, b) => Number(b.enabled) - Number(a.enabled), render: (_, row) => <StatusDot tone={row.enabled ? 'ok' : 'warn'}>{row.enabled ? '已启用' : '已暂停'}</StatusDot> },
-        { title: '同步状态', width: 110, ...order.sorted('sync'), sorter: byText(row => row.sync_status), render: (_, row) => <PortSyncStatus status={row.sync_status} /> },
-        { title: '流量', width: 140, ...order.sorted('traffic'), sortDirections: ['descend', 'ascend'], sorter: byMetric<Rule>(row => row.traffic ? row.traffic.upload_bytes + row.traffic.download_bytes : null), render: (_, row) => <span className="num ports-traffic" title={`上行 ${(row.traffic?.upload_bytes ?? 0).toLocaleString()} B，下行 ${(row.traffic?.download_bytes ?? 0).toLocaleString()} B`}>↑ {bytes(row.traffic?.upload_bytes ?? 0)}<span className="cell-sub">↓ {bytes(row.traffic?.download_bytes ?? 0)}</span></span> },
-        { title: '连接', width: 90, ...order.sorted('connections'), sortDirections: ['descend', 'ascend'], sorter: byMetric<Rule>(row => row.traffic?.active_connections), render: (_, row) => row.traffic?.active_connections == null ? <span className="muted">缺测</span> : <span className="num">{row.traffic.active_connections.toLocaleString()}</span> },
-        { title: '操作', key: 'actions', fixed: 'right', width: 180, align: 'right', render: (_, row) => <div className="ports-row-actions">
+      scroll={{ x: 1080 }} locale={{ emptyText: filtered || focus ? '没有符合条件的端口。' : '暂无端口，请先接入服务器，再添加端口转发。' }}
+      expandable={{ fixed: 'left', columnWidth: 30, expandedRowKeys: expandedIDs, onExpandedRowsChange: keys => setExpandedIDs([...keys]), expandedRowRender: row => <PortSyncDetails members={row.sync_members} /> }} columns={[
+        { ...order.handle, width: 28 },
+        { title: '名称 / ID', dataIndex: 'name', fixed: 'left', width: 146, ...order.sorted('name'), sorter: byText(row => row.name), render: (value, row) => <><span className="node-name ports-name">{value}</span><span className="cell-sub"><Typography.Text className="ports-id mono" copyable={{ text: row.id }}><Tooltip title={row.id}><span>{row.id.length > 8 ? `${row.id.slice(0, 8)}…` : row.id}</span></Tooltip></Typography.Text></span></> },
+        { title: '线路', width: 100, ...order.sorted('entry'), sorter: byText(entryName), render: (_, row) => <><span className="ports-name">{entryName(row)}</span><span className="cell-sub">{row.entry_node_id ? '服务器' : '服务器组'}</span></> },
+        { title: '服务端口', dataIndex: 'listen_port', width: 88, ...order.sorted('listen_port'), sorter: (a, b) => a.listen_port - b.listen_port, render: value => <span className="mono">{value}</span> },
+        { title: '目标', width: 140, ...order.sorted('target'), sorter: byText(row => `${row.target_address}:${row.target_port}`), render: (_, row) => <><span className="mono ports-target">{row.target_address}:{row.target_port}</span><span className="cell-sub">{row.allow_private ? '允许私网目标' : '仅公网目标'}</span></> },
+        { title: '转发模式', width: 100, render: (_, row) => <><ColorTag tone={row.kind === 'tunnel' ? 'blue' : 'neutral'}>{row.kind === 'tunnel' ? '单跳转发' : '直连'}</ColorTag>{row.kind === 'tunnel' && <span className="cell-sub ports-name">{exitGroups.find(group => group.id === row.exit_group_id)?.name ?? row.exit_group_id}</span>}</> },
+        { title: '状态 / 同步', width: 100, ...order.sorted('enabled'), sorter: (a, b) => Number(b.enabled) - Number(a.enabled), render: (_, row) => <><StatusDot tone={row.enabled ? 'ok' : 'warn'}>{row.enabled ? '已启用' : '已暂停'}</StatusDot><span className="cell-sub"><PortSyncStatus status={row.sync_status} /></span></> },
+        { title: '流量', width: 96, ...order.sorted('traffic'), sortDirections: ['descend', 'ascend'], sorter: byMetric<Rule>(row => row.traffic ? row.traffic.upload_bytes + row.traffic.download_bytes : null), render: (_, row) => <span className="num ports-traffic" title={`上行 ${(row.traffic?.upload_bytes ?? 0).toLocaleString()} B，下行 ${(row.traffic?.download_bytes ?? 0).toLocaleString()} B`}>↑ {bytes(row.traffic?.upload_bytes ?? 0)}<span className="cell-sub">↓ {bytes(row.traffic?.download_bytes ?? 0)}</span></span> },
+        { title: '连接', width: 70, ...order.sorted('connections'), sortDirections: ['descend', 'ascend'], sorter: byMetric<Rule>(row => row.traffic?.active_connections), render: (_, row) => row.traffic?.active_connections == null ? <span className="muted">缺测</span> : <span className="num">{row.traffic.active_connections.toLocaleString()}</span> },
+        { title: '操作', key: 'actions', fixed: 'right', width: 152, align: 'right', render: (_, row) => <div className="ports-row-actions">
           <Button size="small" type="link" disabled={mutating} onClick={() => edit(row)}>编辑</Button>
           <Popconfirm title={row.enabled ? '暂停该端口并断开所有现有连接？' : '启用该端口？'} onConfirm={() => toggle(row)}><Button size="small" type="text" disabled={mutating} loading={actingID === row.id}>{row.enabled ? '暂停' : '启用'}</Button></Popconfirm>
           <Dropdown trigger={['click']} menu={{ items: [

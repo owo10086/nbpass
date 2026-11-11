@@ -1,6 +1,21 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildRuleInput, filterRules } from './RulesData.ts';
+import * as data from './RulesData.ts';
+
+test('合并列后仍可按完整 ID 与同步状态双向排序，清除后恢复自定义顺序', () => {
+  const ports = [
+    { id: 'port10', sync_status: '同步失败' },
+    { id: 'port2', sync_status: '正常' },
+    { id: 'port1', sync_status: '待确认' },
+  ];
+  assert.deepEqual(data.sortRuleDetails(ports, 'id-ascend').map(row => row.id), ['port1', 'port2', 'port10']);
+  assert.deepEqual(data.sortRuleDetails(ports, 'id-descend').map(row => row.id), ['port10', 'port2', 'port1']);
+  assert.deepEqual(data.sortRuleDetails(ports, 'sync-ascend').map(row => row.id), ['port1', 'port10', 'port2']);
+  assert.deepEqual(data.sortRuleDetails(ports, 'sync-descend').map(row => row.id), ['port2', 'port10', 'port1']);
+  assert.deepEqual(data.sortRuleDetails(ports).map(row => row.id), ['port10', 'port2', 'port1']);
+  assert.deepEqual(ports.map(row => row.id), ['port10', 'port2', 'port1']);
+});
 
 const rows = [
   { id: 'a', name: '香港 Web', entry_node_id: 'shared', kind: 'direct', enabled: true, target_address: 'Web.Example.com', target_port: 443 },
