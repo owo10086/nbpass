@@ -1,0 +1,16 @@
+.zf-auth-page { background: var(--bg); }
+.zf-auth-page .auth-box { max-width: 440px; }
+.zf-auth-page .auth-brand { justify-content: center; margin-bottom: var(--space-lg); font-size: 18px; }
+.zf-auth-page .auth-card { padding: var(--space-lg); box-shadow: none; }
+.zf-auth-page .page-header { margin-bottom: var(--space-sm); }
+.zf-auth-page .page-header h1 { font-size: var(--font-title); }
+.zf-auth-page .page-header p { line-height: 1.7; }
+.zf-auth-page .form-section { padding: 0; }
+.zf-auth-page .form-section h2 { font-size: var(--font-size); }
+.zf-auth-page .form-section-heading { padding-bottom: var(--space-md); }
+.zf-auth-page .ant-form-item-extra { color: var(--text-3); font-size: var(--font-small); padding-top: 6px; }
+.zf-auth-page .ant-btn-primary { margin-top: 4px; }
+@media (max-width: 480px) {
+  .zf-auth-page { padding: var(--space-md); }
+  .zf-auth-page .auth-card { padding: var(--space-md); }
+}
