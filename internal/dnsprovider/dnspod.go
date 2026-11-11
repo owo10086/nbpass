@@ -87,8 +87,14 @@ type podResponse struct {
 	} `json:"status"`
 	Record  podRecord   `json:"record"`
 	Records []podRecord `json:"records"`
-	Info    struct {
-		Total scalar `json:"record_total"`
+	Domains []struct {
+		Name     string `json:"name"`
+		Punycode string `json:"punycode"`
+		Status   string `json:"status"`
+	} `json:"domains"`
+	Info struct {
+		Total       scalar `json:"record_total"`
+		DomainTotal scalar `json:"domain_total"`
 	} `json:"info"`
 }
 
@@ -187,6 +193,77 @@ func (d DNSPod) ReadRecord(ctx context.Context, auth Credentials, key Key) (Read
 	}
 	return ReadResult{}, errors.New("DNSPod 同名记录过多，无法完整核对")
 }
+
+// listPageLength 是 DNSPod 单页上限；列表最多读 listPages 页，超出时报错而不是返回残缺列表。
+const (
+	listPageLength = 3000
+	listPages      = 10
+)
+
+func (d DNSPod) ListDomains(ctx context.Context, auth Credentials) ([]Domain, error) {
+	domains := []Domain{}
+	for range listPages {
+		page, err := d.call(ctx, auth, "Domain.List", url.Values{"type": {"all"}, "offset": {strconv.Itoa(len(domains))}, "length": {strconv.Itoa(listPageLength)}})
+		var rejection *RejectionError
+		if errors.As(err, &rejection) && rejection.Code == "9" { // 账号下没有域名
+			return domains, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, wire := range page.Domains {
+			name := wire.Punycode
+			if name == "" {
+				name = wire.Name
+			}
+			domains = append(domains, Domain{Name: name, Status: wire.Status})
+		}
+		if len(page.Domains) == 0 && page.Info.DomainTotal == "" {
+			return domains, nil
+		}
+		total, err := strconv.Atoi(string(page.Info.DomainTotal))
+		if err != nil || total < 0 {
+			return nil, errors.New("DNSPod 域名列表总量无效")
+		}
+		if len(domains) >= total {
+			return domains, nil
+		}
+		if len(page.Domains) == 0 {
+			return nil, errors.New("DNSPod 域名列表不完整")
+		}
+	}
+	return nil, errors.New("DNSPod 域名过多，无法完整列出")
+}
+
+func (d DNSPod) ListRecords(ctx context.Context, auth Credentials, domain string) ([]Record, error) {
+	records := []Record{}
+	offset := 0
+	for range listPages {
+		page, err := d.call(ctx, auth, "Record.List", url.Values{"domain": {domain}, "offset": {strconv.Itoa(offset)}, "length": {strconv.Itoa(listPageLength)}})
+		if err != nil {
+			return nil, err
+		}
+		for _, wire := range page.Records {
+			// 个别字段异常的记录本就无法绑定，跳过即可；绑定时仍会完整读回同名记录。
+			if r, err := wire.record(); err == nil {
+				records = append(records, r)
+			}
+		}
+		offset += len(page.Records)
+		total, err := strconv.Atoi(string(page.Info.Total))
+		if err != nil || total < 0 {
+			return nil, errors.New("DNSPod 记录列表总量无效")
+		}
+		if offset >= total {
+			return records, nil
+		}
+		if len(page.Records) == 0 {
+			return nil, errors.New("DNSPod 记录列表不完整")
+		}
+	}
+	return nil, errors.New("DNSPod 记录过多，无法完整列出")
+}
+
 func (d DNSPod) WriteRecord(ctx context.Context, auth Credentials, key Key, r Record) error {
 	if r.ID != key.RecordID || r.Type != "A" || r.Proxied || r.LineID == "" {
 		return errors.New("DNSPod 写入记录不受支持")

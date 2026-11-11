@@ -75,6 +75,7 @@ func (p *Panel) managedDNSRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/entry-groups/{id}/managed-record", p.getManagedRecord)
 	mux.HandleFunc("PUT /api/entry-groups/{id}/managed-record", p.bindManagedRecord)
 	mux.HandleFunc("POST /api/dns-accounts", p.addDNSAccount)
+	p.dnsAccountBrowseRoutes(mux)
 }
 
 func (p *Panel) listDNSAccounts(w http.ResponseWriter, r *http.Request) {

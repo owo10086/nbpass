@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Descriptions, Form, Input, Modal, Select, Space, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
+import { DNSRecordPicker } from './DNSRecordPicker';
 import { EntryBlockedPolicy } from './EntryBlockedPolicy';
 import { EntryMembers } from './EntryMembers';
 import { EntryReadiness, type EntryMemberState } from './EntryReadiness';
@@ -120,11 +121,8 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
       </Card>
       <Alert type="info" showIcon title="绑定后先核对当前记录，再由你明确选择活动入口并首次发布。" description="只管理这一条单线路 A 记录，发布 TTL 为 60 秒。" />
       <Card title="DNSPod 受管记录" loading={loading} extra={!started && <Button onClick={() => setAddingAccount(true)}>添加 DNSPod 账号</Button>}>
-        {!started && <Form form={bindingForm} layout="vertical" onFinish={bind} onValuesChange={() => { bindingDirty.current = true; }} initialValues={{ line_id: '0' }}>
-          <Form.Item name="account_id" label="DNSPod 账号" rules={[{ required: true, message: '请选择账号' }]}><Select options={accounts.map(a => ({ value: a.id, label: a.name }))} /></Form.Item>
-          <Form.Item name="domain" label="DNSPod 主域名" rules={[{ required: true, message: '请输入主域名' }]}><Input placeholder="example.com" maxLength={253} /></Form.Item>
-          <Form.Item name="record_id" label="记录 ID" rules={[{ required: true, message: '请输入受管记录 ID' }]}><Input maxLength={100} /></Form.Item>
-          <Form.Item name="line_id" label="线路 ID" extra="默认线路为 0；不支持同名多线路配置。" rules={[{ required: true, message: '请指定单一线路' }]}><Input maxLength={100} /></Form.Item>
+        {!started && <Form form={bindingForm} layout="vertical" onFinish={bind} onValuesChange={() => { bindingDirty.current = true; }}>
+          <DNSRecordPicker accounts={accounts} onError={failed} />
           <Button type="primary" htmlType="submit" loading={saving}>绑定并读取当前记录</Button>
         </Form>}
         {binding && <>

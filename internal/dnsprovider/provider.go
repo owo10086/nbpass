@@ -34,7 +34,16 @@ type ReadResult struct {
 	Related []Record
 }
 
+// Domain 是账号下可浏览的主域名；Name 为 ASCII 形式，可直接用于绑定。
+type Domain struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}
+
 type Provider interface {
+	// ListDomains 与 ListRecords 仅供管理员绑定时挑选记录，绑定仍以 ReadRecord 读回为准。
+	ListDomains(context.Context, Credentials) ([]Domain, error)
+	ListRecords(context.Context, Credentials, string) ([]Record, error)
 	ReadRecord(context.Context, Credentials, Key) (ReadResult, error)
 	WriteRecord(context.Context, Credentials, Key, Record) error
 	SetRecordEnabled(context.Context, Credentials, Key, bool) error

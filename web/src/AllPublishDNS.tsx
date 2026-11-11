@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Select, Space, Table, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Checkbox, Form, Input, InputNumber, Modal, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import { api, APIError } from './api';
+import { DNSRecordPicker } from './DNSRecordPicker';
 import { EntryDomainWatch } from './EntryDomainWatch';
 import type { EntryMemberState } from './EntryReadiness';
 
@@ -72,7 +73,7 @@ export function AllPublishDNS({ group, nodes, onClose, onSessionExpired }: { gro
       <Space wrap>
         <Button onClick={() => setAddingAccount(true)}>添加 DNSPod 账号</Button>
         {members.map(m => <Space key={m.node_id}>
-          {!m.record && <Button disabled={!!pending} onClick={() => { bindingForm.resetFields(); bindingForm.setFieldsValue({ line_id: '0' }); setBindingMember(m.node_id); }}>绑定 {name(m.node_id)} 的记录</Button>}
+          {!m.record && <Button disabled={!!pending} onClick={() => { bindingForm.resetFields(); setBindingMember(m.node_id); }}>绑定 {name(m.node_id)} 的记录</Button>}
           {m.record && !pending && <Button onClick={() => { bindingForm.setFieldsValue(m.record); setBindingMember(m.node_id); }}>更换 {name(m.node_id)} 的记录</Button>}
           {m.record && publication?.first_published && <>
             <Popconfirm title={`手动摘除 ${name(m.node_id)}？`} description="暂停记录并锁定，之后不会自动加回。不能摘除最后一条启用记录。" onConfirm={() => run(() => api(`${path}/members/${m.node_id}/withdraw`, 'POST', { expected_version: publication.desired_version }))}><Button disabled={saving || !!pending || (m.manual_locked && !m.record.current_enabled && !m.last_error)}>摘除 {name(m.node_id)}</Button></Popconfirm>
@@ -102,10 +103,7 @@ export function AllPublishDNS({ group, nodes, onClose, onSessionExpired }: { gro
     </Space>
     <Modal open={!!bindingMember} title={`绑定 ${bindingMember ? name(bindingMember) : ''} 的记录`} footer={null} onCancel={() => setBindingMember(null)}>
       <Form form={bindingForm} layout="vertical" onFinish={values => run(async () => { await api(`${path}/members/${bindingMember}/managed-record`, 'PUT', { account_id: values.account_id, domain: values.domain, record_id: values.record_id, line_id: values.line_id }); setBindingMember(null); })}>
-        <Form.Item name="account_id" label="DNSPod 账号" rules={[{ required: true }]}><Select options={accounts.map(a => ({ value: a.id, label: a.name }))} /></Form.Item>
-        <Form.Item name="domain" label="DNSPod 主域名" rules={[{ required: true }]}><Input placeholder="example.com" maxLength={253} /></Form.Item>
-        <Form.Item name="record_id" label="已有记录 ID" rules={[{ required: true }]}><Input maxLength={100} /></Form.Item>
-        <Form.Item name="line_id" label="线路 ID" rules={[{ required: true }]}><Input maxLength={100} /></Form.Item>
+        <DNSRecordPicker accounts={accounts} onError={failed} />
         <Button htmlType="submit" type="primary" loading={saving}>绑定并读取当前记录</Button>
       </Form>
     </Modal>
