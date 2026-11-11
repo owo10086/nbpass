@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { App, AutoComplete, Button, Form, Modal, Radio, Select, Space, Typography } from 'antd';
+import { Alert, App, AutoComplete, Button, Form, Modal, Radio, Select, Space, Typography } from 'antd';
 import { api, APIError } from './api';
+import './EntryGroups.css';
 
 type Domain = { name: string; status: string };
 type PickedRecord = { id: string; name: string; type: string; hostname: string; line: string; line_id: string; value: string; enabled: boolean; reason: string; owner: string };
@@ -56,11 +57,11 @@ export function DNSRecordPicker({ accounts, onError, allowCNAME }: { accounts: {
         options={domains.map(d => ({ value: d.name, label: d.status && d.status !== 'enable' ? `${d.name}（${d.status === 'pause' ? '已暂停解析' : d.status}）` : d.name }))} />
     </Form.Item>
     {allowCNAME && <Form.Item name="type" label="记录类型" initialValue="A"
-      extra={kind === 'CNAME' ? 'CNAME 指向活动入口自己的节点记录域名（节点“域名与地址”里绑定的记录），切换时只改指向；没有已发布节点记录的成员不能成为活动入口。' : 'A 记录直接写活动入口的公网 IPv4。'}>
+      extra={kind === 'CNAME' ? 'CNAME 指向活动服务器的受管域名（服务器“域名与地址”中绑定的记录），切换时只改指向；目标记录须已首次发布、启用且地址一致。' : 'A 记录直接写服务器的公网 IPv4。'}>
       <Radio.Group options={[{ value: 'A', label: 'A 记录' }, { value: 'CNAME', label: 'CNAME 记录' }]} />
     </Form.Item>}
-    <Form.Item label="主机记录" required
-      extra={<>填 www、@ 等，记录类型为 {kind}{allowCNAME ? '' : '（这里须直接指向节点 IP，CNAME 只用于主备入口组）'}。没有同名记录时面板在默认线路新建一条暂停的记录，首次发布或加回时启用；已有时接管，有多条或类型不同时再让你选。<Button type="link" size="small" style={{ padding: 0 }} disabled={!domain || loading.records} onClick={loadRecords}>重新读取已有记录</Button></>}>
+    <Form.Item label="主机记录" required className="sg-record-input"
+      extra={<>填 www、@ 等，记录类型为 {kind}{allowCNAME ? '' : '（这里须直接指向服务器 IP，CNAME 只用于主备服务器组）'}。没有同名记录时面板在默认线路新建一条暂停的记录，首次发布或加回时启用；已有时接管，有多条或类型不同时再让你选。面板不会删除远端记录。<Button type="link" size="small" style={{ padding: 0 }} disabled={!domain || loading.records} onClick={loadRecords}>重新读取已有记录</Button></>}>
       <Space.Compact style={{ width: '100%' }}>
         <Form.Item name="name" noStyle rules={[{ required: true, whitespace: true, message: '请填写主机记录名' }]}>
           <AutoComplete placeholder={domain ? '输入或选择已有记录' : '请先选择主域名'} disabled={!domain} allowClear
@@ -70,7 +71,7 @@ export function DNSRecordPicker({ accounts, onError, allowCNAME }: { accounts: {
               {(r.reason || r.owner) && <Typography.Text type={r.reason ? 'danger' : 'warning'} style={{ fontSize: 12 }}>{r.reason || `已绑定：${r.owner}`}</Typography.Text>}
             </div> })).filter((o, i, all) => all.findIndex(x => x.value === o.value) === i)} />
         </Form.Item>
-        {domain && <Typography.Text type="secondary" style={{ padding: '4px 11px', whiteSpace: 'nowrap' }}>.{domain}</Typography.Text>}
+        {domain && <span className="sg-record-suffix">.{domain}</span>}
       </Space.Compact>
     </Form.Item>
     {(loadError.domains || loadError.records) && <Typography.Paragraph type="danger">{loadError.domains || loadError.records}</Typography.Paragraph>}
@@ -101,9 +102,10 @@ export function useRecordBinding(put: (body: Record<string, unknown>) => Promise
   }
   const kind = choice?.values.type ?? 'A';
   const describe = (r: ProviderRecord) => `${r.type} ${r.value} · ${r.line} · ${r.enabled ? '启用' : '暂停'} · ID ${r.id}`;
-  const chooser = <Modal open={!!choice} title="选择要绑定的记录" okText="确认" okButtonProps={{ disabled: !picked }} onOk={confirm} onCancel={() => setChoice(null)} destroyOnHidden>
+  const chooser = <Modal open={!!choice} className="sg-modal" title="选择要绑定的记录" okText={picked.startsWith('convert:') ? '确认改类型并接管' : '确认绑定'} okButtonProps={{ disabled: !picked, danger: picked.startsWith('convert:') }} onOk={confirm} onCancel={() => setChoice(null)} destroyOnHidden>
     <Typography.Paragraph>{choice?.message}</Typography.Paragraph>
-    <Radio.Group value={picked} onChange={e => setPicked(e.target.value)} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    {picked.startsWith('convert:') && <Alert type="warning" showIcon title="将覆盖所选记录原来的类型和值，并暂停该记录。请核对记录 ID 后确认。" className="message" />}
+    <Radio.Group className="sg-record-choice" value={picked} onChange={e => setPicked(e.target.value)}>
       {choice?.candidates.map(r => <Radio key={r.id} value={`adopt:${r.id}`}>接管 {describe(r)}</Radio>)}
       {choice?.conflicts.map(r => <Radio key={r.id} value={`convert:${r.id}`}>把这条 {describe(r)} 改成 {kind} 并接管（改后暂停，原值不保留）</Radio>)}
       {!!choice?.candidates.length && <Radio value="create">在默认线路新建一条暂停的 {kind} 记录</Radio>}

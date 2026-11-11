@@ -1,0 +1,47 @@
+.sg-page .sg-filter-search { width: 240px; }
+.sg-name { font-weight: 550; }
+.sg-sub { display: block; margin-top: 4px; color: var(--text-3); font-size: 12px; overflow-wrap: anywhere; }
+.sg-help { color: var(--text-3); font-size: 12px; }
+.sg-id { display: inline-block; max-width: 100px; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+.sg-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; white-space: nowrap; }
+.sg-count { display: inline-block; min-width: 26px; padding: 1px 8px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); font-variant-numeric: tabular-nums; }
+.sg-modal .ant-modal-body { max-height: 72vh; overflow-y: auto; }
+.sg-modal .form-section { min-width: 0; }
+.sg-modal .ant-tabs-content-holder { min-width: 0; }
+.sg-modal .ant-descriptions-item-content { overflow-wrap: anywhere; }
+.sg-dialog-heading { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.sg-dialog-heading strong { font-size: 16px; margin-right: auto; }
+.sg-sunken { padding: 16px; margin-bottom: 18px; background: var(--bg-sunken); border: 1px solid var(--line); border-radius: var(--radius-lg); }
+.sg-toggle { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.sg-toggle p { margin: 4px 0 0; color: var(--text-3); font-size: 13px; }
+.sg-form-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding-top: 16px; }
+.sg-mode-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.sg-mode-options .ant-radio-wrapper { padding: 14px; margin: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-sunken); align-items: flex-start; }
+.sg-mode-options .ant-radio-wrapper-checked { border-color: var(--accent); background: var(--accent-soft); }
+.sg-mode-options small { display: block; margin-top: 5px; color: var(--text-3); line-height: 1.6; }
+.sg-transfer { display: flex; align-items: center; width: 100%; }
+.sg-transfer .ant-transfer-list { flex: 1; min-width: 0; width: auto; height: 340px; background: var(--bg-sunken); border-radius: var(--radius-lg); }
+.sg-transfer .ant-transfer-list-content-item { padding: 8px; }
+.sg-transfer .ant-transfer-list-content-item-text { overflow: visible; }
+.sg-transfer-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.sg-transfer-name { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; overflow-wrap: anywhere; min-width: 0; }
+.sg-member-index { padding: 1px 5px; border-radius: var(--radius-sm); background: var(--bg-head); color: var(--text-2); font-family: var(--mono); font-size: 12px; }
+.sg-record-input .ant-space-compact { flex-wrap: wrap; }
+.sg-record-input .ant-select { min-width: 160px; flex: 1; }
+.sg-record-input .sg-record-suffix { padding: 4px 10px; color: var(--text-3); overflow-wrap: anywhere; }
+.sg-record-choice { display: flex; flex-direction: column; gap: 12px; }
+.sg-record-choice .ant-radio-wrapper { margin: 0; padding: 12px; background: var(--bg-sunken); border: 1px solid var(--line); border-radius: var(--radius); overflow-wrap: anywhere; }
+.sg-record-choice .ant-radio-wrapper-checked { border-color: var(--accent); }
+.sg-record-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.sg-record-actions .ant-btn { padding-inline: 6px; }
+.sg-inline-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
+.sg-inline-form .ant-input-number { width: 100px; }
+@media (max-width: 640px) {
+  .sg-mode-options { grid-template-columns: 1fr; }
+  .sg-transfer { flex-direction: column; align-items: stretch; gap: 12px; }
+  .sg-transfer .ant-transfer-list { flex: auto; width: 100%; height: 270px; }
+  .sg-transfer .ant-transfer-actions { flex-direction: row; justify-content: center; margin: 0; }
+  .sg-modal .ant-modal-body { max-height: 76vh; }
+  .sg-page .filter-field { width: 100%; }
+  .sg-page .filter-field > :is(.ant-input-affix-wrapper, .ant-select) { flex: 1; width: auto; }
+}
