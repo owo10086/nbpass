@@ -89,7 +89,7 @@ function App() {
           : page === 'servers' ? <Nodes focus={route.focus} onSessionExpired={expired} />
           : page === 'server-groups' ? <EntryGroups focus={route.focus} onSessionExpired={expired} />
           : page === 'endpoints' ? <Endpoints focus={route.focus} onSessionExpired={expired} />
-          : page === 'endpoint-groups' ? <ExitGroups onSessionExpired={expired} />
+          : page === 'endpoint-groups' ? <ExitGroups focus={route.focus} onSessionExpired={expired} />
           : page === 'ports' ? <Rules focus={route.focus} onSessionExpired={expired} />
           : page === 'chains' ? <PlannedPage title="转发链管理" description="未来将支持编排多个转发端点组成转发链。" />
           : page === 'smart-dns' ? <PlannedPage title="智能 DNS" description="未来将支持按线路与可用性管理 DNS 解析策略。" />
