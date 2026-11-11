@@ -1,9 +1,9 @@
 # 08 端口链式模式、完整路径与逐跳同步展示
 
 Status: ready-for-agent
-Blocked by: 06, 07
-Migration: 无（消费 06 的 51；不新增迁移）
-Parallel: 在 06/07 完成后实施，避免改动尚未稳定的 API 或 main.tsx；本票独占 Rules/RulesData/RulesTransfer 与端口详情的最终联调。
+Blocked by: 06c, 07（CRUD 与多跳集成两个边界均完成）
+Migration: 无（消费 06a 的 51；不新增迁移）
+Parallel: 在 06c/07 完成后串行联调；本票独占 Rules/RulesData/RulesTransfer 与端口详情，不与 07 同改 main.tsx。
 
 ## 目标
 
@@ -11,10 +11,10 @@ Parallel: 在 06/07 完成后实施，避免改动尚未稳定的 API 或 main.t
 
 ## 具体改动点
 
-- `web/src/Rules.tsx` 当前在文件内直接实现编辑 Modal，并无独立 RuleEditor 文件。扩展该表单及 `RulesData.ts`：UI 增加 mode=`direct|single|chain`，提交仍按 06 的真实 API 形状转换为 `kind=direct|tunnel`，single 只带 exit_group_id，chain 只带 chain_id，direct 两者均不带。切换模式使用 preserve=false/明确清理，防止旧引用留在启停、编辑和复制请求里。
+- `web/src/Rules.tsx` 当前在文件内直接实现编辑 Modal，并无独立 RuleEditor 文件。扩展该表单及 `RulesData.ts`：UI 增加 mode=`direct|single|chain`，提交按 06a 的 API 形状转换为 `kind=direct|tunnel`，single 只带 exit_group_id，chain 只带 chain_id，direct 两者均不带。切换模式使用 preserve=false/明确清理，防止旧引用留在启停、编辑和复制请求里。
 - 加载 `/forward-chains` 供链选择，保留原 `/exit-groups` 的单跳选择；链编辑提供前往 `#/chains?focus=...` 的入口。未创建链时显示可操作引导，既有规则的引用临时缺失不能默默改为直连。
-- 规则列表、筛选、展开详情与模式标签增加链式转发。基于 06 的 rule.path / 05 的 hops 形状显示入口（单节点或组）、第 1…N 组、各组主备与所选地址/端口、最终目标；有定义路径但无实时选择证据时按定义展示，不能伪造「当前正在走」的唯一服务器。
-- `PortSyncDetails.tsx`、`ConfigSync.tsx` 扩展逐跳应用/授权错误与 01 configuration_blockers 的可读展示，区分需升级、未应用、等待下一跳确认、链路健康和历史观测；普通入口规则行继续显示原监听版本，relay 不伪造监听端口。
+- 规则列表、筛选、展开详情与模式标签增加链式转发。基于 06a 的 rule.path / 05 hops 显示入口（单节点或组）、第 1…N 组、各组主备与所选地址/端口、最终目标；无实时证据时按定义展示，不能伪造「当前正在走」的唯一服务器。组入口保留逐 A1/A2 就绪，不能只显示合并结果。
+- `PortSyncDetails.tsx`、`ConfigSync.tsx` 展示逐边/grant 应用确认、失败归属与 configuration_blockers，区分「整条阻塞（需升级服务器）」与「可运行但备用成员能力不足」，保留具体 node/address/capability/reason。备用升级需重新确认才列候选。本边健康、后续路径失败、控制离线/历史证据分别显示；普通入口行显示监听版本，relay 不伪造监听端口。关联 06c 的 operations/incidents 受影响端口与历史原因，现有页面需要适配时归本票。
 - `RulesTransfer.tsx` 更新格式 3 与 chain_id 引用说明，仍提示导入不会自动创建被引用的链/组/服务器；保留格式 1/2 的服务端兼容。`NodeServerData.ts` 等使用端口定义的类型只按实际需要加 chain_id，保持服务器组/节点入口、批量启停、随机端口、流量和列表排序原行为。
 
 ## 迁移与兼容要求
@@ -25,14 +25,14 @@ Parallel: 在 06/07 完成后实施，避免改动尚未稳定的 API 或 main.t
 ## 测试要求
 
 - 前端单元 `RulesData.test.mjs`：三模式往返、从链切直连/单跳的字段清理、链式筛选、启停序列化、单节点/组入口、随机端口；新增路径展示/逐跳错误数据测试，覆盖主备多成员、域名/映射端口、缺失引用、无证据及历史健康。运行 `npm --prefix web test -- src/RulesData.test.mjs src/ChainsData.test.mjs` 与其他新增测试、`npm --prefix web run build`。
-- clusterharness：复用并补强 06 场景的 HTTP 契约断言：三种模式通过同一路径创建/互改、完整 path、configuration_blockers 与逐跳错误、共享链编辑影响所有规则、格式 3 往返及 1/2 兼容，原端口流量不重置。运行对应 IX/链/导入定向测试，业务字节断言沿用真实节点。
+- clusterharness：复用 06c 的真实场景补 HTTP 契约：三模式互改、完整 path、具体 blocker/逐边与 grant 原因、仅备用不足及升级重新确认、共享链编辑影响所有引用、格式 3 往返及 1/2 兼容，流量不重置。主备组/全部发布组→同链矩阵（仅 A1 专线坏、后跳全坏、恢复、控制离线）核对逐成员就绪、DNS 动作及换 IP 归属，仍经 ADR 0005 协调者。运行对应定向测试，字节断言沿用真实节点。
 - 编排者最终人工核对三种模式、列表/详情完整路径、联动编辑链、升级提示、窄屏及会话过期。本次任务不打开浏览器。
 
 ## 验收标准
 
 - [ ] 三模式提交互斥且编辑回填正确，不残留隐藏字段。
 - [ ] 完整路径、地址、主备和最终目标能看懂，引用共享链的影响明确。
-- [ ] 逐跳失败/需升级定位到服务器，无证据不误报实际路径或健康。
+- [ ] 逐边/grant/blocker 定位到服务器与地址，整条阻塞和备用不足有区别，无证据不误报实际路径/健康；组入口矩阵与事故关联已联调。
 - [ ] 旧单跳/直连、批量操作、导入导出和前端构建均通过回归。
 
 ## 不做的事

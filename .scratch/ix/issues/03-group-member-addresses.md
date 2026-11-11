@@ -14,11 +14,12 @@ Parallel: 完成本票后 04 与 05 可分流；本票独占端点组 API、成�
 - 新建 `internal/panel/ix_member_addresses_migration.go`；迁移 48 给 `exit_group_members` 增加 `address_id TEXT NOT NULL DEFAULT 'public'`。保留现有 `(group_id,node_id)` 主键、`(group_id,position)` 唯一及原顺序；用校验/触发器约束非 public 地址属于同一 node_id，禁止删除被引用专线。不能用地址 ID 替换 node_id 导致同服务器重复入组。
 - `tunnel_api.go:exitGroupView/loadExitGroups/saveExitGroup`：新增 `member_addresses: [{node_id,address_id}]` 有序数组。为现有客户端保留 `members: string[]` 投影；只传旧 members 表示这些成员全部使用公网，两个数组同时提供须长度、节点及顺序一致，否则 400。GET 两者始终一致；新 UI 使用 member_addresses 作为事实来源。保留 PrimaryBackup，仅按数组顺序选择。
 - `tunnel_snapshots.go` 按成员选中的地址生成端点，`address_id='public'` 读取公网，其余读取对应专线；有效端口遵循 02，凭据和证书仍按服务器节点对共享。修改专线/监听端口/组成员时重编译所有受影响规则；引用不存在或不属于服务器的地址必须整笔回滚。
-- 在 `api/control/v1/control.proto` 给 `TunnelEndpoint` 增加 `string address_id = 280`，给 `ExitHealth` 增加同名字段 280；旧字段号不改。旧公网配置可省略 address_id，节点统一把空值解释为 public。运行 `make proto`，提交 `internal/controlpb/control.pb.go`（若生成器改变 gRPC 文件也一并核对），不手改生成文件。
+- 在 `api/control/v1/control.proto` 给 `TunnelEndpoint` 增加 `string address_id = 280`，给 `ExitHealth` 增加同名字段 280；复用 02 的 `endpoint_config_digest = 281` 并把 address_id 纳入摘要，旧字段号不改。旧公网配置可省略 address_id，节点统一把空值解释为 public。运行 `make proto`，提交 `internal/controlpb/control.pb.go`（若生成器改变 gRPC 文件也一并核对），不手改生成文件。
 - `internal/forwarding/engine.go:tunnelEndpoints/applyTunnelClients/selectTunnel`、`tunnel_snapshot.go`、`exit_failover.go`、`exit_health.go`、`tunnel_rotation.go`、`readiness.go`：客户端/会话/健康键改为 `(node_id,address_id)`；同一地址重复出现必须配置一致，不同地址允许并存。组内仍按 node_id 去重；`AuthorizedExitIds` 继续表示节点授权，不把地址 ID 混入认证身份。轮换时更新同节点的全部地址客户端，旧业务载体的退役、资源预算和恢复观察不能丢失。
-- `internal/panel/exit_health.go` 的上报去重与合法性检查按 `(exit_id,address_id)`，除节点对凭据外核对当前下发的地址引用，不能凭历史 tunnel_pairs 接受任意地址证据；API 保留 exit_id 并输出 address_id。公网换 IP 进度 `exit_blocked.go`、`internal/node/exit_address.go` 按地址标识匹配，专线端点不携带公网 address_version，不等待专线拨号者确认公网换 IP。
+- `internal/panel/exit_health.go` 的去重与合法性检查按 `(exit_id,address_id)`，除节点对凭据外核对当前下发的引用与 `endpoint_config_digest`；摘要覆盖身份、地址、有效拨号端口、传输与 TLS 身份，地址或端口修改即失效旧证据。同 address_id 的迟到旧样本丢弃，不能按接收时间刷新为有效；不能凭历史 tunnel_pairs 接受证据。API 输出 address_id/摘要。公网换 IP 进度 `exit_blocked.go`、`internal/node/exit_address.go` 按地址标识匹配，专线不携带公网 address_version，不等待专线拨号者确认。
+- `internal/panel/entry_readiness.go:309/319` 的 health 键改为 `(exit_id,address_id,endpoint_config_digest)`，tunnelReady 按该规则选中的组端点和已确认授权匹配，不能把同服务器公网成功用于专线规则。保留现有进程/会话/接收新鲜度及探测成功时效门槛，两地址健康互不替代。06c 在此基础上接入后续路径就绪。
 - `web/src/EndpointData.ts`、`EndpointMembers.tsx`、`ExitGroups.tsx`、`Endpoints.tsx`、`EndpointHealth.tsx`：选项显示「服务器 · 公网/专线名称」和有效地址端口；选中同服务器另一地址时要求替换现有选择，不添加第二个服务器成员。保持排序与编辑回填；归属搜索不再假定所有成员只有节点 ID。健康表区分地址并保留 10 秒新鲜度语义。
-- 选用专线地址要求拨号节点的 `ix_addresses`；纯公网、无新语义路径保留旧快照。完整地址 ID 不得发给旧节点让其忽略，纯公网可编译为原形状。
+- 完成后新增宣告 `ix_member_identity`：专线成员或同服务器多地址会话/健康隔离要求消费节点支持此能力；域名/映射另按 02 检查 `ix_address_dialing`。纯公网域名/映射可继续给仅有 02 拨号能力的节点，省略 address_id、使用 public 与 02 摘要形状；不能因 03 面板上线就要求它具备成员身份能力。完整地址 ID 不发给旧节点让其忽略；专线备用不足保留 blocker，有其他可用路径时不整条阻塞。
 
 ## 迁移与兼容要求
 
@@ -29,6 +30,8 @@ Parallel: 完成本票后 04 与 05 可分流；本票独占端点组 API、成�
 ## 测试要求
 
 - 单元：迁移 47→48，旧成员顺序/默认公网、跨节点地址 ID、双数组不一致、同节点两地址入同组、被引用删除、事务失败不推进 revision；同节点两地址跨组快照通过、同一地址冲突拒绝、健康/轮换/Restore 不串用。
+- 单元/clusterharness：双地址一好一坏时，引用坏地址的规则不因同节点好地址而就绪；同 address_id 修改地址或端口，注入旧摘要迟到成功后仍待新证据，收到新摘要才就绪。分别验证面板入口就绪、健康 API、换 IP 确认均不串用。
+- 兼容：真实 02 版节点二进制（或由该版真实源码构建的节点）× 03 版面板；只修改新版节点声明不足以代替版本组合验收，纯公网 IPv4/域名/映射可运行；专线/多地址隔离被门禁，收包无新身份字段；主成员支持、备用不足时仍可运行并保留具体 blocker，备用升级须新应用/授权确认后才加入候选，不能用旧样本补齐。
 - clusterharness 新建 `ix_member_addresses_test.go`：A 的两个端口分别经两组连 B 的公网和专线（含域名 + 真实端口映射），记录实际拨号地址并传真实业务字节；阻断公网只影响公网路径，专线保持可用。B 换公网 IP 后专线规则地址、会话和健康不被替换；公网确认进度只列公网消费者；面板/节点重启恢复地址选择。旧 A 上的专线规则被拦，纯公网规则正常。
 - 回归 `tunnel_rotation_test.go`、`exit_health_test.go`、`exit_blocked_test.go`；运行 `go test ./internal/panel ./internal/forwarding ./internal/node -timeout=10m` 和 IX/隧道轮换相关 clusterharness 定向测试。前端执行 `npm --prefix web test -- src/EndpointData.test.mjs`、新增成员数据测试与构建。
 
@@ -38,6 +41,7 @@ Parallel: 完成本票后 04 与 05 可分流；本票独占端点组 API、成�
 - [ ] 两地址的连接、健康、失败和恢复相互隔离，证书/凭据仍属于同一服务器身份。
 - [ ] 专线引用有删除保护，公网换 IP 不覆盖或等待专线路径。
 - [ ] 旧库、旧 members 客户端、旧公网节点保持兼容。
+- [ ] 面板入口就绪按规则地址和配置摘要匹配；两地址一好一坏、迟到旧样本与 02×03 兼容验收通过。
 
 ## 不做的事
 
