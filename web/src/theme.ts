@@ -46,5 +46,10 @@ export const themeConfig: ThemeConfig = {
     Table: { headerBg: tokens['bg-head'], headerColor: tokens.text, headerSplitColor: 'transparent', cellPaddingBlock: 12, cellPaddingInline: 8, rowHoverBg: tokens['bg-hover'], headerBorderRadius: 0 },
     Card: { headerFontSize: 14 }, Modal: { titleFontSize: 16 },
     Tag: { defaultBg: tokens['tag-bg'], defaultColor: tokens['text-2'] },
+    Segmented: {
+      trackBg: tokens['bg-sunken'], itemColor: tokens['text-2'],
+      itemHoverBg: tokens['bg-hover'], itemHoverColor: tokens.text, itemActiveBg: tokens['accent-soft'],
+      itemSelectedBg: tokens.accent, itemSelectedColor: tokens.white,
+    },
   },
 };
