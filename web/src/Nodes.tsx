@@ -216,7 +216,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
           return <Space wrap size={[4, 4]}>{memberships.length ? memberships.map(group => <ColorTag key={group.id}>{group.name}</ColorTag>) : <ColorTag>未分组</ColorTag>}</Space>;
         } },
         { title: '资源使用', width: 128, ...order.sorted('cpu'), sortDirections: ['descend', 'ascend'], sorter: byMetric<ServerRow>(row => row.probe?.cpu_percent), render: (_, row) => <div className="servers-resources"><div><span>CPU</span><CpuCell probe={row.probe} /></div><div><span>内存</span><MemoryCell probe={row.probe} /></div></div> },
-        { title: <Tooltip title="本机及所属服务器组中已启用的业务监听端口数，不含隧道与检测预留端口；实际应用状态见详情。">端口数</Tooltip>, width: 76, ...order.sorted('ports'), sorter: (a, b) => serverPortCount(a.id, groups, ports) - serverPortCount(b.id, groups, ports), render: (_, row) => <span className="mono">{serverPortCount(row.id, groups, ports)}</span> },
+        { title: <Tooltip title="本机及所属服务器组中已启用的业务监听端口数，不含转发与检测预留端口；实际应用状态见详情。">端口数</Tooltip>, width: 76, ...order.sorted('ports'), sorter: (a, b) => serverPortCount(a.id, groups, ports) - serverPortCount(b.id, groups, ports), render: (_, row) => <span className="mono">{serverPortCount(row.id, groups, ports)}</span> },
         { title: <Tooltip title="实测网卡上下行速率，包含该机器上的其他网络流量。">网络速率</Tooltip>, width: 102, ...order.sorted('network'), sortDirections: ['descend', 'ascend'], sorter: byMetric<ServerRow>(row => networkRate(row.probe)), render: (_, row) => <NetworkCell probe={row.probe} /> },
         { title: '版本', width: 116, render: (_, row) => <>
           <span className="mono">{row.software_version || '尚未接入'}</span>

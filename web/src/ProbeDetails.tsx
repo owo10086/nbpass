@@ -11,7 +11,7 @@ type Node = { id: string; name: string; status: string; status_label: string; co
 const metrics = [
   ['cpu_percent', 'CPU', '%'], ['memory_used_bytes', '内存已用', 'B'], ['disk_used_bytes', '根文件系统已用', 'B'],
   ['network_receive_bytes_per_second', '网卡接收速率', 'B/s'], ['network_transmit_bytes_per_second', '网卡发送速率', 'B/s'],
-  ['business_connections', '业务连接数', ''], ['tunnel_connections', '隧道连接数', ''], ['system_tcp_connections', '系统 TCP 连接数', ''],
+  ['business_connections', '业务连接数', ''], ['tunnel_connections', '单跳转发连接数', ''], ['system_tcp_connections', '系统 TCP 连接数', ''],
   ['uptime_seconds', '服务器进程运行时长', 's'],
 ] as const;
 
@@ -101,7 +101,7 @@ export function ProbeDetails({ node, onClose, onSessionExpired }: { node: Node; 
       <Typography.Paragraph type="secondary">每 5 秒采样；最近样本：{view.sampled_at ? new Date(view.sampled_at).toLocaleString() : '尚未采样'}。运行时长从服务器进程启动起算。</Typography.Paragraph>
       <Card title="实时资源" className="probe-card">
         <Descriptions column={{ xs: 1, sm: 2 }} items={metrics.map(([key, label, unit]) => ({ key, label, children: <span>{format(realtime?.[key], unit)}{key === 'memory_used_bytes' && <> / {format(realtime?.memory_total_bytes, 'B')}</>}{key === 'disk_used_bytes' && <> / {format(realtime?.disk_total_bytes, 'B')}</>}</span> }))} />
-        <Typography.Text type="secondary">业务连接与隧道连接分别计数；系统 TCP 显示已建立连接总数（含控制连接）。</Typography.Text>
+        <Typography.Text type="secondary">业务连接与单跳转发连接分别计数；系统 TCP 显示已建立连接总数（含控制连接）。</Typography.Text>
       </Card>
       <Card title="最近 24 小时" className="probe-card" extra={<Select aria-label="曲线指标" value={metric} onChange={setMetric} options={metrics.map(([value, label]) => ({ value, label }))} className="probe-metric-select" />}>
         <MinuteChart minutes={view.minutes} metric={metrics.find(m => m[0] === metric)!} />

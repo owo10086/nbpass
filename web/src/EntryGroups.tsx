@@ -172,7 +172,7 @@ export function EntryGroups({ focus, onSessionExpired }: { focus?: string; onSes
       <Form form={form} layout="vertical" onFinish={save} disabled={saving}>
         {formError && <Alert title={formError} type="error" showIcon className="message" />}
         <FormSection title="基本信息" icon={<InfoCircleOutlined />}>
-          <Form.Item name="name" label="显示名称" rules={[{ required: true, whitespace: true, message: '请输入服务器组名称' }]}><Input maxLength={200} placeholder="例如：华东入口组" /></Form.Item>
+          <Form.Item name="name" label="显示名称" rules={[{ required: true, whitespace: true, message: '请输入服务器组名称' }]}><Input maxLength={200} placeholder="例如：华东服务器组" /></Form.Item>
           <Form.Item name="publication_mode" label="发布模式" extra="创建后不能更改；需要换模式时，新建组并修改端口的线路。" rules={[{ required: true }]}>
             <Radio.Group className="sg-mode-options" disabled={!!editing || saving}>
               <Radio value="primary_backup"><strong>主备</strong><small>只发布活动入口，按首选顺序切换。支持 A / CNAME 记录。</small></Radio>

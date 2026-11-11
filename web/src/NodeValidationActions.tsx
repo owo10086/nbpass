@@ -58,8 +58,8 @@ export function NodeValidationActions({ node, mode, onClose, onSaved, onError }:
     <Modal title={`服务器「${node.name}」的监听端口`} open={view === 'ports'} onCancel={onClose} footer={null} className="servers-modal" forceRender>
       <Form form={form} layout="vertical" onFinish={save}>
         {error && <Alert title={error} type="error" showIcon className="message" />}
-        <FormSection title="监听端口" icon={<CodeOutlined />} description="固定检测服务监听下方检测端口，用于国内检测点补判，请放行相应 TCP 入站连接。业务端口不能占用检测端口或隧道预留端口。">
-        <Form.Item name="tunnel_listen_port" label="隧道监听端口" rules={[{ required: true, message: '请输入隧道监听端口' }]}><InputNumber min={1} max={65535} precision={0} disabled={loading} style={{ width: '100%' }} /></Form.Item>
+        <FormSection title="监听端口" icon={<CodeOutlined />} description="固定检测服务监听下方检测端口，用于国内检测点补判，请放行相应 TCP 入站连接。业务端口不能占用检测端口或转发预留端口。">
+        <Form.Item name="tunnel_listen_port" label="转发监听端口" rules={[{ required: true, message: '请输入转发监听端口' }]}><InputNumber min={1} max={65535} precision={0} disabled={loading} style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="check_port" label="固定检测端口" rules={[{ required: true, message: '请输入检测端口' }]}><InputNumber min={1} max={65535} precision={0} disabled={loading} style={{ width: '100%' }} /></Form.Item>
         </FormSection>
         <Button type="primary" htmlType="submit" block loading={loading}>保存端口</Button>

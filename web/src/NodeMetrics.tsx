@@ -81,7 +81,7 @@ export function ConnectionsCell({ probe }: { probe: NodeProbe }) {
   if (probe?.business_connections == null) return missing;
   return <Detail rows={[
     ['业务连接', count(probe.business_connections)],
-    ['隧道连接', count(probe.tunnel_connections)],
+    ['单跳转发连接', count(probe.tunnel_connections)],
     ['系统 TCP', count(probe.system_tcp_connections)],
   ]}><span className="num">{count(probe.business_connections)}</span></Detail>;
 }

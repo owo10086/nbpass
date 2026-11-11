@@ -112,7 +112,7 @@ export function Endpoints({ focus, onSessionExpired }: { focus?: string; onSessi
           {!editing && configured && <Alert type="info" showIcon title="该服务器已有转发端点，保存将更新其地址与端口。" className="message" />}
           <Form.Item name="address" label="可直接入站的 IPv4" extra="填写入口可以访问的端点地址；出站公网 IP 观测值不能证明可入站。" rules={[{ required: true, whitespace: true, message: '请输入端点 IPv4' }]}><Input maxLength={15} placeholder="例如：203.0.113.20" /></Form.Item>
           <div className="endpoint-form-grid">
-            <Form.Item label="传输协议" extra="使用加密的 WebSocket 隧道。"><ColorTag tone="blue">WSS</ColorTag></Form.Item>
+            <Form.Item label="传输协议" extra="使用 WSS（加密 WebSocket）转发连接。"><ColorTag tone="blue">WSS</ColorTag></Form.Item>
             <Form.Item name="listen_port" label="WSS 监听端口" extra="须在所属服务器上放行此端口。" rules={[{ required: true, message: '请输入监听端口' }]}><InputNumber min={1} max={65535} precision={0} className="endpoint-port" placeholder="1–65535" /></Form.Item>
           </div>
         </FormSection>

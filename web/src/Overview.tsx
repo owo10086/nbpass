@@ -2,6 +2,7 @@ import { Alert, Button, Empty, Skeleton, Space } from 'antd';
 import { ExclamationCircleOutlined, QuestionCircleOutlined, ClusterOutlined, ToolOutlined } from '@ant-design/icons';
 import { go } from './route';
 import { displaySystemText, handlingLabels, impactLabels, type Incident } from './Incidents';
+import { displayIncidentTitle } from './IncidentDisplay';
 import { PageHeader } from './PageHeader';
 import { FilterCard } from './FilterCard';
 import { TableCard } from './TableCard';
@@ -32,7 +33,7 @@ export function Overview({ state }: { state: OperationsState }) {
         { title: '当前异常与自动处理', rows: data.current_incidents }, { title: '最近结束的故障', rows: data.recent_incidents },
       ].map(({title, rows}) => <TableCard<Incident> title={title} actions={<Button size="small" onClick={() => go('incidents')}>全部故障与筛选</Button>} key={title}
         rowKey="id" dataSource={rows} pagination={false} scroll={{ x: 500 }} locale={{ emptyText: data.incident_error ? '整理状态待确认，请稍后刷新' : '当前没有记录' }} columns={[
-          { title: '故障', render: (_, r) => <Button type="link" onClick={() => go('incidents', r.id)}>{r.title}</Button> },
+          { title: '故障', render: (_, r) => <Button type="link" onClick={() => go('incidents', r.id)}>{displayIncidentTitle(r)}</Button> },
           { title: '影响 / 处理', render: (_, r) => <><StatusDot tone={r.impact === 'abnormal' ? 'danger' : r.impact === 'unknown' ? 'warn' : 'muted'}>{impactLabels[r.impact] || r.impact}</StatusDot><span className="cell-sub">{handlingLabels[r.handling]}{r.closure && ` · ${r.closure}`}</span></> },
           { title: '关联服务器组', render: (_, r) => r.refs.filter(ref => ref.kind === 'group').map(ref => ref.name).join('、') || '—' },
           { title: '最近更新', render: (_, r) => <span className="num">{new Date(r.updated_at).toLocaleString()}</span> },
@@ -41,7 +42,7 @@ export function Overview({ state }: { state: OperationsState }) {
       <TableCard<OperationRule> title="端口影响与证据" rowKey="id" dataSource={data.rules} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 900 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无端口，请先添加服务器并创建端口" /> }} columns={[
           { title: '端口', render: (_, r) => <><strong>{r.name}</strong><div className="muted">{r.group_id ? data.groups.find(g => g.id === r.group_id)?.name : name(r.node_id || '')}</div></> },
           { title: '当前判断', render: (_, r) => <StatusDot tone={r.status === 'abnormal' ? 'danger' : r.status === 'unknown' ? 'warn' : 'muted'}>{operationLabels[r.status] || r.status}</StatusDot> },
-          { title: '原因 / 证据', render: (_, r) => <Space orientation="vertical" size={2}>{r.reasons.map((reason, i) => <span key={i}>{reason.node_id && `${name(reason.node_id)}：`}{displaySystemText(reason.message)}<span className="cell-sub">{displaySystemText(reason.source)} · {reason.observed_at ? new Date(reason.observed_at).toLocaleString() : '时间待确认'}</span></span>)}{r.reasons.length === 0 && <span className="muted">{r.enabled ? '当前端口应用及所需隧道证据未显示异常' : '停用端口不计入异常统计'}</span>}</Space> },
+          { title: '原因 / 证据', render: (_, r) => <Space orientation="vertical" size={2}>{r.reasons.map((reason, i) => <span key={i}>{reason.node_id && `${name(reason.node_id)}：`}{displaySystemText(reason.message)}<span className="cell-sub">{displaySystemText(reason.source)} · {reason.observed_at ? new Date(reason.observed_at).toLocaleString() : '时间待确认'}</span></span>)}{r.reasons.length === 0 && <span className="muted">{r.enabled ? '当前端口应用及所需单跳转发证据未显示异常' : '停用端口不计入异常统计'}</span>}</Space> },
           { title: '操作', render: (_, r) => <Space wrap><Button size="small" type="link" onClick={() => go('ports', r.id)}>查看端口</Button>{r.incident_id && <Button size="small" type="link" onClick={() => go('incidents', r.incident_id)}>追查故障</Button>}</Space> },
         ]} />
         <TableCard title="服务器组发布与冗余" rowKey="id" dataSource={data.groups} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 900 }} columns={[
