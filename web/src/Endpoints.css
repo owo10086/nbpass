@@ -1,0 +1,42 @@
+.endpoint-page { min-width: 0; }
+.endpoint-id.ant-typography { display: block; width: 138px; max-width: 100%; }
+.endpoint-group-members { max-width: 380px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.endpoint-row-actions { flex-wrap: wrap; }
+.endpoint-health { margin-top: var(--space-xl); }
+.endpoint-section-heading { margin-bottom: var(--space-md); }
+.endpoint-section-heading h2 { margin: 0 0 6px; font-size: var(--font-section); font-weight: 600; }
+.endpoint-section-heading p { margin: 0; color: var(--text-2); font-size: var(--font-description); }
+.endpoint-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md); }
+.endpoint-modal .endpoint-port { width: 100%; }
+.endpoint-certificate { overflow-wrap: anywhere; }
+.endpoint-certificate-pem { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow-y: auto; padding: var(--space-sm); background: var(--bg-sunken); border: 1px solid var(--line); border-radius: var(--radius); }
+.endpoint-form-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-xs); padding-top: var(--space-lg); }
+.endpoint-modal .endpoint-progress { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); margin-bottom: var(--space-md); }
+.endpoint-modal .endpoint-action-id { margin-top: var(--space-sm); overflow-wrap: anywhere; }
+.endpoint-rotation-entries { display: grid; gap: var(--space-xs); margin: 0; padding: 0; list-style: none; }
+.endpoint-rotation-entries li { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-sm); padding: 10px var(--space-sm); border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-sunken); }
+.endpoint-rotation-entries strong { margin-right: auto; }
+
+.endpoint-member-transfer { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: var(--space-sm); }
+.endpoint-member-panel { min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg-sunken); }
+.endpoint-member-head { display: flex; align-items: center; justify-content: space-between; padding: 14px var(--space-md); border-bottom: 1px solid var(--line); }
+.endpoint-member-tools { display: grid; gap: var(--space-sm); padding: var(--space-sm); }
+.endpoint-member-list { min-height: 220px; max-height: 340px; overflow-y: auto; margin: 0; padding: 0 var(--space-xs) var(--space-xs); list-style: none; }
+.endpoint-member-list > li { display: flex; align-items: center; gap: var(--space-xs); min-height: 54px; margin-bottom: 6px; padding: var(--space-xs); border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-elev); }
+.endpoint-member-list > li:hover { border-color: var(--line-strong); }
+.endpoint-member-list > li.is-checked { border-color: var(--accent); background: var(--accent-soft); }
+.endpoint-member-index { flex: none; padding: 2px 6px; border-radius: var(--radius-sm); font: var(--font-small) var(--mono); background: var(--bg-head); }
+.endpoint-member-name { flex: 1; min-width: 0; }
+.endpoint-member-name strong { display: block; font-weight: 500; overflow-wrap: anywhere; }
+.endpoint-member-name > span { display: block; color: var(--text-3); overflow-wrap: anywhere; }
+.endpoint-member-transfer-actions { display: flex; flex-direction: column; align-self: center; gap: var(--space-xs); }
+.endpoint-member-order { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); margin-top: var(--space-sm); color: var(--text-3); font-size: var(--font-description); }
+.endpoint-member-list > .endpoint-member-empty { justify-content: center; border: 0; background: transparent; }
+
+@media (max-width: 700px) {
+  .endpoint-form-grid, .endpoint-member-transfer { grid-template-columns: minmax(0, 1fr); }
+  .endpoint-member-transfer-actions { flex-direction: row; justify-content: center; }
+  .endpoint-member-list { min-height: 120px; max-height: 240px; }
+  .endpoint-page .filter-field { width: 100%; }
+  .endpoint-page .filter-field > :is(.ant-input-affix-wrapper, .ant-select) { flex: 1; min-width: 140px; }
+}
