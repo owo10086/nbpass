@@ -1,25 +1,43 @@
 import { useEffect, useState } from 'react';
 
-export type Page = 'overview' | 'nodes' | 'entry-groups' | 'exit-groups' | 'rules' | 'dns-watch' | 'incidents' | 'events' | 'telegram' | 'security' | 'retention';
+export const pageTitles = {
+  overview: '概览', ports: '端口管理', servers: '服务器管理', endpoints: '转发端点',
+  'endpoint-groups': '端点组管理', chains: '转发链管理', 'server-groups': '服务器组管理',
+  'smart-dns': '智能 DNS', latency: '延迟监控总览', 'dns-watch': '解析监控',
+  incidents: '故障', events: '事件日志', telegram: 'Telegram 通知', security: '安全设置', retention: '保留期',
+};
+export type Page = keyof typeof pageTitles;
 export type Route = { page: Page; focus?: string };
 
-const pages: Page[] = ['overview', 'nodes', 'entry-groups', 'exit-groups', 'rules', 'dns-watch', 'incidents', 'events', 'telegram', 'security', 'retention'];
+const aliases = { rules: 'ports', nodes: 'servers', 'entry-groups': 'server-groups', 'exit-groups': 'endpoint-groups' } as const;
+type LegacyPage = keyof typeof aliases;
 
-// 地址形如 #/nodes?focus=<节点 ID>；focus 让目标页把对应行滚动到可见处并短暂高亮。
-function parse(): Route {
-  const [path, query = ''] = window.location.hash.replace(/^#\/?/, '').split('?');
-  const page = pages.includes(path as Page) ? path as Page : 'overview';
-  return { page, focus: new URLSearchParams(query).get('focus') ?? undefined };
+// 查询串原样保留，避免通知旧链接中的重复参数、编码或未知参数丢失。
+export function resolveRoute(hash: string): Route & { hash: string } {
+  const raw = hash.replace(/^#\/?/, '');
+  const queryAt = raw.indexOf('?');
+  const path = queryAt < 0 ? raw : raw.slice(0, queryAt);
+  const query = queryAt < 0 ? '' : raw.slice(queryAt);
+  const canonical = Object.hasOwn(aliases, path) ? aliases[path as LegacyPage] : path;
+  const page = Object.hasOwn(pageTitles, canonical) ? canonical as Page : 'overview';
+  return { page, focus: new URLSearchParams(query).get('focus') ?? undefined, hash: `#/${page}${query}` };
 }
 
-export function go(page: Page, focus?: string) {
-  window.location.hash = `/${page}${focus ? `?focus=${encodeURIComponent(focus)}` : ''}`;
+function readRoute(): Route {
+  const { hash, ...route } = resolveRoute(window.location.hash);
+  if (hash !== window.location.hash) window.history.replaceState(null, '', hash);
+  return route;
+}
+
+// 旧业务调用仍可使用原名字，地址栏始终生成新路由。
+export function go(page: Page | LegacyPage, focus?: string) {
+  window.location.hash = resolveRoute(`#/${page}${focus ? `?focus=${encodeURIComponent(focus)}` : ''}`).hash.slice(1);
 }
 
 export function useRoute() {
-  const [route, setRoute] = useState(parse);
+  const [route, setRoute] = useState(readRoute);
   useEffect(() => {
-    const update = () => setRoute(parse());
+    const update = () => setRoute(readRoute());
     window.addEventListener('hashchange', update);
     return () => window.removeEventListener('hashchange', update);
   }, []);

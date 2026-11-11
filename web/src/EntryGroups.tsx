@@ -56,7 +56,7 @@ export function EntryGroups({ focus, onSessionExpired }: { focus?: string; onSes
     try { await api(`/entry-groups/${id}`, 'DELETE'); await load(); } catch (e) { failed(e); }
   }
   return <>
-    <PageHeader title="入口组" description="将转发规则应用到入口节点。单成员入口组无需绑定 DNS 即可使用。展开一行查看成员就绪与同步详情。">
+    <PageHeader title="服务器组管理" description="将转发规则应用到入口节点。单成员入口组无需绑定 DNS 即可使用。展开一行查看成员就绪与同步详情。">
       <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建入口组</Button>
     </PageHeader>

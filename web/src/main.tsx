@@ -1,14 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, App as AntApp, Button, ConfigProvider, Dropdown, Form, Input, Spin } from 'antd';
-import {
-  CloudServerOutlined, DashboardOutlined, GlobalOutlined, HistoryOutlined, LoginOutlined, LogoutOutlined,
-  SafetyOutlined, SendOutlined, SwapOutlined, UnorderedListOutlined, UserOutlined,
-} from '@ant-design/icons';
+import { Alert, App as AntApp, Button, ConfigProvider, Form, Input, Spin } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import 'antd/dist/reset.css';
 import './style.css';
-import { api, APIError } from './api';
+import { api } from './api';
 import { EntryGroups } from './EntryGroups';
 import { ExitGroups } from './ExitGroups';
 import { Rules } from './Rules';
@@ -21,30 +17,12 @@ import { DNSWatch } from './DNSWatch';
 import { Retention } from './Retention';
 import { Overview } from './Overview';
 import { useOperations } from './Operations';
-import { useRoute, type Page } from './route';
+import { useRoute } from './route';
+import { AppShell } from './AppShell';
+import { PlannedPage } from './PlannedPage';
+import { applyTheme, themeConfig } from './theme';
 
 type AuthStatus = { setup_required: boolean; authenticated: boolean };
-type Counts = { nodes: number; entry: number; exit: number; rules: number; alerts: number };
-
-const navigation: { title?: string; items: { page: Page; label: string; icon: React.ReactNode; count?: keyof Counts }[] }[] = [
-  { items: [{ page: 'overview', label: '概览', icon: <DashboardOutlined />, count: 'alerts' }] },
-  { title: '转发', items: [
-    { page: 'nodes', label: '节点', icon: <CloudServerOutlined />, count: 'nodes' },
-    { page: 'entry-groups', label: '入口组', icon: <LoginOutlined />, count: 'entry' },
-    { page: 'exit-groups', label: '出口组', icon: <LogoutOutlined />, count: 'exit' },
-    { page: 'rules', label: '转发规则', icon: <SwapOutlined />, count: 'rules' },
-  ] },
-  { title: '监控', items: [
-    { page: 'dns-watch', label: '解析监控', icon: <GlobalOutlined /> },
-    { page: 'incidents', label: '故障', icon: <HistoryOutlined /> },
-    { page: 'events', label: '事件日志', icon: <UnorderedListOutlined /> },
-  ] },
-  { title: '设置', items: [
-    { page: 'telegram', label: 'Telegram 通知', icon: <SendOutlined /> },
-    { page: 'security', label: '安全设置', icon: <SafetyOutlined /> },
-    { page: 'retention', label: '保留期设置', icon: <HistoryOutlined /> },
-  ] },
-];
 
 function App() {
   const [status, setStatus] = useState<AuthStatus>();
@@ -104,49 +82,23 @@ function App() {
     const expired = () => void refresh();
     const page = route.page;
     return (
-      <div className="shell">
-        <aside className="sidebar">
-          <div className="brand"><span className="brand-mark">n</span>nbpass</div>
-          <nav className="nav" aria-label="主导航">
-            {navigation.map((group, i) => <div className="nav-group" key={group.title ?? i}>
-              {group.title && <div className="nav-group-title">{group.title}</div>}
-              {group.items.map(item => {
-                const value = item.count && counts?.[item.count];
-                const alert = item.count === 'alerts';
-                return <a key={item.page} href={`#/${item.page}`} className="nav-item" aria-current={page === item.page ? 'page' : undefined}>
-                  {item.icon}{item.label}
-                  {alert ? !!value && <span className="nav-count alert" aria-label={`${value} 项需要处理`}>{value}</span> : value !== undefined && <span className="nav-count">{value}</span>}
-                </a>;
-              })}
-            </div>)}
-          </nav>
-          <div className="account">
-            <Dropdown trigger={['click']} placement="topLeft" menu={{ items: [
-              { key: 'note', type: 'group', label: '会话空闲 24 小时或登录满 7 天后需重新登录' },
-              { key: 'logout', label: '退出登录', onClick: () => void endSession() },
-              { key: 'revoke', label: '退出所有会话', danger: true, onClick: () => void endSession(true) },
-            ] }}>
-              <button type="button" className="nav-item" disabled={busy}><UserOutlined />管理员</button>
-            </Dropdown>
-          </div>
-        </aside>
-        <main className="main">
-          <div className="page" key={page}>
-            {error && <Alert title={error} type="error" showIcon className="message" />}
-            {page === 'overview' ? <Overview state={operations} />
-              : page === 'nodes' ? <Nodes focus={route.focus} onSessionExpired={expired} />
-              : page === 'entry-groups' ? <EntryGroups focus={route.focus} onSessionExpired={expired} />
-              : page === 'exit-groups' ? <ExitGroups onSessionExpired={expired} />
-              : page === 'rules' ? <Rules focus={route.focus} onSessionExpired={expired} />
-              : page === 'dns-watch' ? <DNSWatch focus={route.focus} onSessionExpired={expired} />
-              : page === 'incidents' ? <Incidents focus={route.focus} operations={operations.data} onSessionExpired={expired} />
-              : page === 'events' ? <Events onSessionExpired={expired} />
-              : page === 'telegram' ? <Telegram onSessionExpired={expired} />
-              : page === 'retention' ? <Retention onSessionExpired={expired} />
-              : <Security onSessionExpired={expired} onPasswordChanged={() => { setNotice('密码已修改，全部会话已退出，请使用新密码登录。'); void refresh(); }} />}
-          </div>
-        </main>
-      </div>
+      <AppShell page={page} counts={counts} busy={busy} onLogout={all => void endSession(all)}>
+        {error && <Alert title={error} type="error" showIcon className="message" />}
+        {page === 'overview' ? <Overview state={operations} />
+          : page === 'servers' ? <Nodes focus={route.focus} onSessionExpired={expired} />
+          : page === 'server-groups' ? <EntryGroups focus={route.focus} onSessionExpired={expired} />
+          : page === 'endpoints' || page === 'endpoint-groups' ? <ExitGroups title={page === 'endpoints' ? '转发端点' : '端点组管理'} onSessionExpired={expired} />
+          : page === 'ports' ? <Rules focus={route.focus} onSessionExpired={expired} />
+          : page === 'chains' ? <PlannedPage title="转发链管理" description="未来将支持编排多个转发端点组成转发链。" />
+          : page === 'smart-dns' ? <PlannedPage title="智能 DNS" description="未来将支持按线路与可用性管理 DNS 解析策略。" />
+          : page === 'latency' ? <PlannedPage title="延迟监控总览" description="未来将汇总线路延迟与连通性监控结果。" />
+          : page === 'dns-watch' ? <DNSWatch focus={route.focus} onSessionExpired={expired} />
+          : page === 'incidents' ? <Incidents focus={route.focus} operations={operations.data} onSessionExpired={expired} />
+          : page === 'events' ? <Events onSessionExpired={expired} />
+          : page === 'telegram' ? <Telegram onSessionExpired={expired} />
+          : page === 'retention' ? <Retention onSessionExpired={expired} />
+          : <Security onSessionExpired={expired} onPasswordChanged={() => { setNotice('密码已修改，全部会话已退出，请使用新密码登录。'); void refresh(); }} />}
+      </AppShell>
     );
   }
 
@@ -174,25 +126,8 @@ function App() {
   );
 }
 
-const theme = {
-  token: {
-    colorPrimary: '#2563eb', colorLink: '#2563eb', colorText: '#18181b', colorTextSecondary: '#5f5f67', colorTextTertiary: '#75757d',
-    colorBorder: '#e8e8eb', colorBorderSecondary: '#e8e8eb', colorSuccess: '#16a34a', colorWarning: '#d97706', colorError: '#dc2626',
-    borderRadius: 6, borderRadiusLG: 8, fontSize: 14, controlHeight: 32,
-    fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'PingFang SC', 'Segoe UI', 'Microsoft YaHei', sans-serif",
-    fontFamilyCode: "'SF Mono', 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace",
-    boxShadowSecondary: '0 1px 2px rgb(0 0 0 / 4%), 0 8px 24px -8px rgb(0 0 0 / 14%)',
-    motionDurationMid: '0.15s', motionDurationSlow: '0.2s',
-  },
-  components: {
-    Button: { primaryShadow: 'none', defaultShadow: 'none', dangerShadow: 'none', fontWeight: 500 },
-    Table: { headerBg: '#fafafa', headerColor: '#5f5f67', headerSplitColor: 'transparent', cellPaddingBlock: 10, cellPaddingInline: 12, rowHoverBg: '#fafafa', headerBorderRadius: 0 },
-    Card: { headerFontSize: 14 },
-    Modal: { titleFontSize: 16 },
-    Tag: { defaultBg: '#f4f4f5' },
-  },
-};
+applyTheme();
 
 createRoot(document.getElementById('root')!).render(
-  <React.StrictMode><ConfigProvider locale={zhCN} theme={theme} button={{ autoInsertSpace: false }}><AntApp><App /></AntApp></ConfigProvider></React.StrictMode>,
+  <React.StrictMode><ConfigProvider locale={zhCN} theme={themeConfig} button={{ autoInsertSpace: false }}><AntApp><App /></AntApp></ConfigProvider></React.StrictMode>,
 );

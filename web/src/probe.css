@@ -1,10 +1,10 @@
 .probe-status { margin-bottom: 16px; }
 .probe-card { margin-bottom: 20px; }
 .probe-chart { display: block; width: 100%; min-width: 280px; margin-top: 12px; }
-.probe-chart text { fill: #778398; font-size: 10px; }
+.probe-chart text { fill: var(--text-3); font-size: 10px; }
 .probe-chart-legend { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; }
 .probe-average { color: var(--accent); }
-.probe-maximum { color: #d97706; }
+.probe-maximum { color: var(--warn); }
 .probe-minute-slider { width: 100%; accent-color: var(--accent); }
 .probe-point { min-height: 48px; margin: 12px 0; font-size: 13px; }
 .probe-metric-select { width: 180px; }

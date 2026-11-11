@@ -13,7 +13,7 @@ type HealthReport = { fresh: boolean; sampled_at: string | null; exits: ExitHeal
 type Member = { id: string; name: string };
 type Exit = { node_id: string; address: string; listen_port: number; transport: 'wss'; server_name: string; certificate_pem: string };
 
-export function ExitGroups({ onSessionExpired }: { onSessionExpired: () => void }) {
+export function ExitGroups({ title = '端点组管理', onSessionExpired }: { title?: string; onSessionExpired: () => void }) {
   const [rows, setRows] = useState<Group[]>([]);
   const [nodes, setNodes] = useState<Member[]>([]);
   const [exits, setExits] = useState<Exit[]>([]);
@@ -80,7 +80,7 @@ export function ExitGroups({ onSessionExpired }: { onSessionExpired: () => void 
   }
   const nodeName = (id: string) => nodes.find(n => n.id === id)?.name ?? id;
   return <>
-    <PageHeader title="出口组" description="先配置出口的 WSS 地址和监听端口，再将节点加入出口组供隧道规则使用。">
+    <PageHeader title={title} description="先配置出口的 WSS 地址和监听端口，再将节点加入出口组供隧道规则使用。">
       <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
       <Button onClick={() => configure()}>配置出口</Button>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建出口组</Button>

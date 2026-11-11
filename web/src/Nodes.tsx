@@ -165,7 +165,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   const validationNode = rows.find(row => row.id === validation?.id);
 
   return <>
-    <PageHeader title="节点" description="控制连接、实时资源与配置版本。每 10 秒刷新。">
+    <PageHeader title="服务器管理" description="控制连接、实时资源与配置版本。每 10 秒刷新。">
       <Button icon={<SettingOutlined />} onClick={() => setSelfCheckSettings(true)}>自测设置</Button>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => setAdding(true)}>添加节点</Button>
     </PageHeader>

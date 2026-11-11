@@ -7,7 +7,7 @@ import { handlingLabels, impactLabels, type Incident } from './Incidents';
 
 type Entry = { sequence: number; stage: string; message: string; source: string; version: number; occurred_at: string | null; observed_at: string };
 type Timeline = { entries: Entry[]; next_before: number | null };
-const routes: Record<string, Page> = { node: 'nodes', group: 'entry-groups', rule: 'rules', watch: 'dns-watch' };
+const routes: Record<string, Page> = { node: 'servers', group: 'server-groups', rule: 'ports', watch: 'dns-watch' };
 const kinds: Record<string, string> = { node: '节点', group: '入口组', rule: '规则', watch: '解析监控' };
 
 export function IncidentDetails({ id, onSessionExpired }: { id: string; onSessionExpired: () => void }) {

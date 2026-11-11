@@ -45,7 +45,7 @@ export function Retention({ onSessionExpired }: { onSessionExpired: () => void }
   }
 
   return <>
-    <PageHeader title="保留期设置" description="按数据类型设置保留时间，控制历史数据占用的磁盘空间。" />
+    <PageHeader title="保留期" description="按数据类型设置保留时间，控制历史数据占用的磁盘空间。" />
     {error && <Alert title={error} type="error" showIcon className="message" action={!loaded && <Button onClick={() => setReload(v => v + 1)}>重新加载</Button>} />}
     {notice && <Alert title={notice} type="success" showIcon className="message" />}
     <SettingsSection title="历史数据" description="缩短保留期会删除过期历史，延长保留期无法恢复已清理的数据。清理不影响换 IP 额度、进行中的动作、配置版本和规则累计流量。">

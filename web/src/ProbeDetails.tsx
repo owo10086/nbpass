@@ -50,11 +50,11 @@ function MinuteChart({ minutes, metric }: { minutes: Minute[]; metric: typeof me
       const bounds = e.currentTarget.getBoundingClientRect();
       setSelected(Math.max(0, Math.min(minutes.length - 1, Math.round(((e.clientX - bounds.left) / bounds.width * 920 - 56) / 828 * (minutes.length - 1)))));
     }}>
-      {[0, .5, 1].map(f => <g key={f}><line x1="56" x2="884" y1={y(ceiling * f)} y2={y(ceiling * f)} stroke="#e8e8eb" /><text x="50" y={y(ceiling * f) + 4} textAnchor="end">{unit === 's' ? `${Math.round(ceiling * f / 3600)}h` : format(ceiling * f, unit)}</text></g>)}
-      <path d={line('maximum')} fill="none" stroke="#d97706" strokeWidth="1.7" />
-      <path d={line('average')} fill="none" stroke="#2563eb" strokeWidth="1.7" />
-      {minutes.map((p, i) => <g key={p.minute}>{p.maximum?.[key] != null && <circle cx={x(i)} cy={y(p.maximum[key]!)} r="1.3" fill="#d97706" />}{p.average?.[key] != null && <circle cx={x(i)} cy={y(p.average[key]!)} r="1.3" fill="#2563eb" />}</g>)}
-      {point && <line x1={x(selected)} x2={x(selected)} y1="25" y2="210" stroke="#a1a1aa" strokeDasharray="3 3" />}
+      {[0, .5, 1].map(f => <g key={f}><line x1="56" x2="884" y1={y(ceiling * f)} y2={y(ceiling * f)} stroke="var(--line)" /><text x="50" y={y(ceiling * f) + 4} textAnchor="end">{unit === 's' ? `${Math.round(ceiling * f / 3600)}h` : format(ceiling * f, unit)}</text></g>)}
+      <path d={line('maximum')} fill="none" stroke="var(--warn)" strokeWidth="1.7" />
+      <path d={line('average')} fill="none" stroke="var(--accent)" strokeWidth="1.7" />
+      {minutes.map((p, i) => <g key={p.minute}>{p.maximum?.[key] != null && <circle cx={x(i)} cy={y(p.maximum[key]!)} r="1.3" fill="var(--warn)" />}{p.average?.[key] != null && <circle cx={x(i)} cy={y(p.average[key]!)} r="1.3" fill="var(--accent)" />}</g>)}
+      {point && <line x1={x(selected)} x2={x(selected)} y1="25" y2="210" stroke="var(--muted)" strokeDasharray="3 3" />}
       <text x="56" y="237">{minutes[0] ? new Date(minutes[0].minute).toLocaleString() : ''}</text>
       <text x="884" y="237" textAnchor="end">{minutes.at(-1) ? new Date(minutes.at(-1)!.minute).toLocaleString() : ''}</text>
     </svg>

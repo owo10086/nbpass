@@ -90,7 +90,7 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
   }
   const entryName = (row: Rule) => row.entry_node_id ? nodes.find(n => n.id === row.entry_node_id)?.name ?? row.entry_node_id : groups.find(g => g.id === row.entry_group_id)?.name ?? row.entry_group_id ?? '';
   return <>
-    <PageHeader title="转发规则" description="将入口节点或入口组的 TCP 监听端口通过直连或出口组转发到一个 IPv4 或域名目标。每 5 秒刷新。">
+    <PageHeader title="端口管理" description="将入口节点或入口组的 TCP 监听端口通过直连或出口组转发到一个 IPv4 或域名目标。每 5 秒刷新。">
       <RulesTransfer selectedIDs={selectedIDs} onChanged={load} onSessionExpired={onSessionExpired} />
       <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建转发规则</Button>
