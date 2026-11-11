@@ -1,6 +1,6 @@
 # nbpass 设计系统
 
-本面板采用 Zero Forwarder 原型的深色橙色视觉，用 React + Ant Design 6 实现。需求来源是 `.scratch/zf-ui/spec.md`；原型仅供视觉与交互参考，不代表后端能力。现有功能继续保留，后续 02–06 票逐页接入共用组件。
+本面板采用 Zero Forwarder 原型的深色橙色视觉，用 React + Ant Design 6 实现。需求来源是 `.scratch/zf-ui/spec.md`；原型仅供视觉与交互参考，不代表后端能力。现有功能继续保留，各业务页面复用以下共用组件。
 
 ## Token 与主题
 
@@ -29,13 +29,13 @@
 
 `AppShell.tsx` 持有导航、账户菜单和响应式布局，接收 `page`、`counts`、`busy`、`onLogout(all?)` 和页面 `children`。侧栏品牌为 nbpass，概览是顶层单项，其余按规格固定顺序分为「端口管理」「监控告警」「系统设置」，组标题可用鼠标或键盘折叠。进入其他页面时展开其所在组，当前项用橙底白字标识，数量来自现有概览接口。
 
-顶栏显示「分组 / 页面」面包屑，右侧账户菜单保留退出登录、退出所有会话和会话期限说明。内容区桌面内边距为 `20px 24px 48px`。≤860px 时侧栏变成左侧抽屉，由顶栏菜单按钮打开；点击菜单项（包括当前页）、任意 hash 变化（包括同页查询参数变化、浏览器前进后退和直接修改地址）、切换屏幕宽度时关闭，支持关闭按钮、遮罩和 Escape。≤640px 时表格右侧操作列解除固定，保留横向滚动空间。
+顶栏显示「分组 / 页面」面包屑，右侧账户菜单保留退出登录、退出所有会话和会话期限说明。内容区桌面内边距为 `20px 24px 48px`。≤860px 时侧栏变成左侧抽屉，由顶栏菜单按钮打开；点击菜单项（包括当前页）、任意 hash 变化（包括同页查询参数变化、浏览器前进后退和直接修改地址）、切换屏幕宽度时关闭，支持关闭按钮、遮罩和 Escape。≤700px 时表格卡片左右固定列均解除固定，保留横向滚动空间。
 
 侧栏和抽屉共用同一套导航：仅 `aria-current="page"` 使用橙底白字，选中态跟随当前路由。导航链接聚焦时使用 2px 次级文字色描边，未选中项可加轻微灰色背景；抽屉自动聚焦、鼠标悬停或键盘聚焦均不能产生橙色选中底色。聚焦描边向内偏移 2px，避免被导航滚动区裁切。
 
 `route.ts` 管理页面标题、新 hash 路由与旧链接兼容。旧的 rules、nodes、entry-groups、exit-groups 分别替换为 ports、servers、server-groups、endpoint-groups；通过 `history.replaceState` 原地替换地址，保留原查询串、重复参数与编码。`go(page, focus?)` 兼容旧调用名，生成新地址；`useFocusRow` 继续保留定位高亮。
 
-## 共用组件 API（02–06 票复用）
+## 共用组件 API
 
 组件均位于扁平目录 `web/src/`，命名导入：
 
@@ -44,7 +44,7 @@
 | `PageHeader.tsx` / `PageHeader` | `title`、`description?`、`actions?`、`children?` | 大标题与右侧操作；兼容旧的 children 写法，主操作用 AntD `Button type="primary"` |
 | `FilterCard.tsx` / `FilterCard` | `children`、`onRefresh?`、`loading?` | 筛选卡片，提供回调时显示刷新按钮；筛选值由页面管理 |
 | 同上 / `FilterField` | `label`、`htmlFor`、`children` | 横排标签与控件，控件 `id` 必须匹配 `htmlFor` |
-| `TableCard.tsx` / `TableCard<T>` | AntD `TableProps<T>`（`title` 改为字符串卡片标题），另有 `actions?` | 透传列、选择、排序、滚动、加载与分页；默认右下角分页显示「共 N 条」，可用 `pagination` 配置覆盖，`false` 关闭 |
+| `TableCard.tsx` / `TableCard<T>` | AntD `TableProps<T>`（`title` 改为字符串卡片标题），另有 `actions?` | 默认 `tableLayout="fixed"`，允许显式覆盖；透传列、选择、排序、滚动、加载与分页；默认右下角分页显示「共 N 条」，可用 `pagination` 配置覆盖，`false` 关闭 |
 | `StatusDot.tsx` / `StatusDot` | `tone?: ok / warn / danger / info / muted`、`children` | 7px 圆点 + 状态文字，默认 muted；颜色必须配合文字 |
 | `ColorTag.tsx` / `ColorTag` | `tone?: neutral / green / red / orange / gold / blue / purple`、`children` | 表示转发模式等分类的彩色小标签，默认 neutral；不用于替代状态圆点 |
 | `FormSection.tsx` / `FormSection` | `title`、`icon`、`description?`、`collapsible?`、`defaultCollapsed?`、`children` | 弹窗或抽屉内的图标 + 标题区块；折叠隐藏但不卸载表单字段，默认展开 |
@@ -75,6 +75,15 @@
 - 橙色用于主操作、链接、当前导航与普通控件的聚焦环；导航聚焦使用灰色描边。语义色只用于对应状态或分类。业务静态卡片无阴影，登录卡片和浮层使用统一 `shadow-popup`。
 - 表单使用 AntD Modal / Drawer + Form，区块复用 `FormSection`；字段说明放入 `Form.Item extra`，用次级文字。
 - 表格头为 `bg-head`、行底为 `bg-elev`、悬停为 `bg-hover`；行定位使用 `accent-soft`，保持约 2.4 秒后移除。
-- 既有 AntD 状态 Tag 暂以 CSS 转为圆点 + 文字；后续业务票迁移到 `StatusDot`。分类标签使用 `ColorTag`，避免被兼容样式影响。
-- 转发链、智能 DNS、延迟监控总览使用 `PlannedPage`。转发端点本票暂复用 `ExitGroups`，04 票再拆分。其余业务内部文案和布局按 02–06 票迁移。
+- 既有 AntD 状态 Tag 通过兼容 CSS 转为圆点 + 文字；新增状态展示使用 `StatusDot`。分类标签使用 `ColorTag`，避免被兼容样式影响。
+- 转发链、智能 DNS、延迟监控总览使用 `PlannedPage`。转发端点与端点组分别使用 `Endpoints` 和 `ExitGroups`，保留原路由兼容跳转。
 - 不引入后端没有的字段、假数据、假操作，也不改变 API、数据库或业务判定。
+
+## 表格与表单收尾约定
+
+- 在 1366–1440px 桌面视口，主列表应一屏显示全部列。列宽总和与 `scroll.x` 必须一起核算，并留出侧栏、页面内边距和卡片边框；仅更窄的内容区横向滚动。
+- 表格水平内边距为 8px；长名称、地址、版本和标签允许换行。次要信息用 `.cell-sub`，不得用裁切隐藏现有字段。完整 ID 必须可查看，已有复制入口保留。
+- 左固定列从最左边连续，包括选择、展开、拖动、ID 和名称中实际存在的列；只允许操作列右固定。端口名称下方显示 ID，状态下方显示同步状态；ID 与同步状态的双向排序位于表格顶部「更多排序」。
+- 全站 `Segmented` 的选中项使用 `accent` 橙底和白字，未选中项使用深色底与次级文字；统一由主题组件 token 配置。
+- 故障和事件筛选的原生日期时间输入使用 `color-scheme: dark`，底色与边框沿用主题变量；保留原有本地时间输入和 ISO 时间请求格式。
+- 后端文案只按已知系统模板在展示时转换。`IncidentDisplay.ts` 集中处理证据正文和故障标题；标题按故障类型识别固定后缀，资源名称、原始错误和策略语义中的“规则”保持原文。
