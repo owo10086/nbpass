@@ -1,57 +1,53 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Dropdown, Form, Input, Modal, Segmented, Table, Typography } from 'antd';
-import { MoreOutlined, PlusOutlined, ReloadOutlined, SearchOutlined, SettingOutlined } from '@ant-design/icons';
+import { Alert, App, Button, Dropdown, Form, Input, Modal, Select, Space, Tooltip, Typography } from 'antd';
+import { CodeOutlined, GlobalOutlined, InfoCircleOutlined, MoreOutlined, PlusOutlined, SearchOutlined, SettingOutlined, SortAscendingOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
-import { NodeUpgrade, type NodeUpgradeFields } from './NodeUpgrade';
-import { NodeManagedRecord, type NodeRecord } from './NodeManagedRecord';
-import { NodeRegion, type NodeRegionFields } from './NodeRegion';
+import { NodeManagedRecord } from './NodeManagedRecord';
+import { NodeRegion } from './NodeRegion';
 import { ProbeDetails } from './ProbeDetails';
 import { NodeValidationActions, type NodeValidationMode } from './NodeValidationActions';
 import { NodeRotation } from './NodeRotation';
 import { NodeSelfCheck, SelfCheckSettings } from './NodeSelfCheck';
+import { NodeInstallation, type Installation } from './NodeInstallation';
+import { NodeServerDetails, serverTone, type ServerAction, type ServerDetailTab } from './NodeServerDetails';
+import { matchesServer, serverGroupsFor, serverPortCount, type ServerGroup, type ServerPort, type ServerRow } from './NodeServerData';
 import { useFocusRow } from './route';
 import { PageHeader } from './PageHeader';
-import { ConnectionsCell, CpuCell, MemoryCell, memoryPercent, NetworkCell, networkRate, uptime, type NodeProbe } from './NodeMetrics';
+import { FilterCard, FilterField } from './FilterCard';
+import { TableCard } from './TableCard';
+import { StatusDot } from './StatusDot';
+import { ColorTag } from './ColorTag';
+import { FormSection } from './FormSection';
+import { CpuCell, MemoryCell, NetworkCell, memoryPercent, networkRate, uptime } from './NodeMetrics';
 import { byMetric, byText, useDragOrder } from './ListOrder';
+import './servers.css';
 
-type NodeRow = NodeRegionFields & NodeUpgradeFields & {
-  id: string; name: string; status: string; status_label: string; connected: boolean;
-  last_seen_at: string | null; maintenance_until: string | null;
-  desired_revision: number; applied_revision: number; config_status: string; software_version: string; apply_error: string;
-  probe: NodeProbe; confirmed_ipv4: string; managed_record: NodeRecord | null; record_status: string;
-};
-type Installation = { id: string; installation_command: string; ticket_expires_at: string };
 type Filter = 'all' | 'online' | 'offline' | 'maintenance' | 'pending';
-
 const filters: { value: Filter; label: string }[] = [
-  { value: 'all', label: '全部' }, { value: 'online', label: '在线' }, { value: 'offline', label: '离线' },
+  { value: 'all', label: '全部状态' }, { value: 'online', label: '在线' }, { value: 'offline', label: '离线' },
   { value: 'maintenance', label: '维护' }, { value: 'pending', label: '待接入' },
 ];
+const extraMetrics = [
+  { key: 'memory', label: '内存', compare: byMetric<ServerRow>(row => memoryPercent(row.probe)) },
+  { key: 'connections', label: '业务连接数', compare: byMetric<ServerRow>(row => row.probe?.business_connections) },
+  { key: 'region', label: '地区', compare: byText<ServerRow>(row => row.region.name) },
+  { key: 'last-seen', label: '最近活性', compare: byMetric<ServerRow>(row => row.last_seen_at ? Date.parse(row.last_seen_at) : null) },
+];
+const extraSorts = extraMetrics.flatMap(metric => (['descend', 'ascend'] as const).map(direction => ({
+  value: `${metric.key}:${direction}`, label: `${metric.label} · ${direction === 'descend' ? '降序' : '升序'}`, compare: metric.compare, direction,
+})));
 
-function tone(row: NodeRow) {
-  if (row.status === 'online') return row.connected ? 'ok' : 'danger';
-  if (row.status === 'offline') return 'danger';
-  if (row.status === 'maintenance') return 'warn';
-  return '';
-}
-
-// 状态列升序为在线优先、离线最后；控制连接中断的在线节点排在正常在线之后。
-function statusRank(row: NodeRow) {
+// 状态列升序为在线优先、离线最后；控制连接中断的在线服务器排在正常在线之后。
+function statusRank(row: ServerRow) {
   if (row.status === 'online') return row.connected ? 0 : 1;
   return ({ maintenance: 2, pending: 3, offline: 4 } as Record<string, number>)[row.status] ?? 5;
 }
 
-function ago(value: string) {
-  const seconds = Math.max(0, (Date.now() - new Date(value).getTime()) / 1000);
-  if (seconds < 60) return '刚刚';
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
-  return new Date(value).toLocaleDateString();
-}
-
 export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionExpired: () => void }) {
   const { message, modal } = App.useApp();
-  const [rows, setRows] = useState<NodeRow[]>([]);
+  const [rows, setRows] = useState<ServerRow[]>([]);
+  const [groups, setGroups] = useState<ServerGroup[]>([]);
+  const [ports, setPorts] = useState<ServerPort[]>([]);
   const [selectedIDs, setSelectedIDs] = useState<string[]>([]);
   const [batching, setBatching] = useState<boolean>();
   const [loaded, setLoaded] = useState(false);
@@ -59,22 +55,23 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   const [loading, setLoading] = useState(false);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
-  const [adding, setAdding] = useState(false);
+  const [groupID, setGroupID] = useState('all');
+  const [extraSort, setExtraSort] = useState<string>();
+  const [page, setPage] = useState(1);
+  const [editing, setEditing] = useState<ServerRow | null>();
   const [saving, setSaving] = useState(false);
-  const [installation, setInstallation] = useState<Installation>();
-  const [renameNode, setRenameNode] = useState<NodeRow>();
-  const [regionNode, setRegionNode] = useState<NodeRow>();
+  const [installing, setInstalling] = useState<{ node: { id: string; name: string }; ticket?: Installation }>();
+  const [regionNode, setRegionNode] = useState<ServerRow>();
   const [recordNode, setRecordNode] = useState<string>();
   const [rotationNode, setRotationNode] = useState<string>();
   const [selfCheckNode, setSelfCheckNode] = useState<string>();
   const [selfCheckSettings, setSelfCheckSettings] = useState(false);
   const [probeNode, setProbeNode] = useState<string>();
+  const [details, setDetails] = useState<{ id: string; tab: ServerDetailTab }>();
   const [validation, setValidation] = useState<{ id: string; mode: NodeValidationMode }>();
-  const [form] = Form.useForm();
-  const [renameForm] = Form.useForm();
+  const [form] = Form.useForm<{ name: string }>();
   const expired = useRef(onSessionExpired);
   expired.current = onSessionExpired;
-  const rowClassName = useFocusRow(focus, loaded);
 
   function failed(e: unknown) {
     if (e instanceof APIError && (e.status === 401 || e.status === 428)) expired.current();
@@ -84,56 +81,62 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   async function load() {
     setLoading(true);
     try {
-      const nodes = (await api<{ nodes: NodeRow[] }>('/nodes')).nodes;
-      setRows(nodes); setSelectedIDs(ids => ids.filter(id => nodes.some(row => row.id === id))); setError(''); setLoaded(true);
-    }
-    catch (e) { failed(e); }
+      const [nodes, memberships, rules] = await Promise.all([
+        api<{ nodes: ServerRow[] }>('/nodes'), api<{ entry_groups: ServerGroup[] }>('/entry-groups'), api<{ rules: ServerPort[] }>('/rules'),
+      ]);
+      setRows(nodes.nodes); setGroups(memberships.entry_groups); setPorts(rules.rules);
+      setSelectedIDs(ids => ids.filter(id => nodes.nodes.some(row => row.id === id)));
+      setError(''); setLoaded(true);
+    } catch (e) { failed(e); }
     finally { setLoading(false); }
   }
 
-  const needle = query.trim().toLowerCase();
-  const order = useDragOrder(rows, setRows, '/nodes', { filtered: filter !== 'all' || !!needle, onError: failed, reload: load });
+  const order = useDragOrder(rows, setRows, '/nodes', { filtered: filter !== 'all' || groupID !== 'all' || !!query.trim() || !!extraSort, onError: failed, reload: load });
   useEffect(() => {
     void load();
     const timer = window.setInterval(() => { if (!order.busy()) void load(); }, 10_000);
     return () => window.clearInterval(timer);
   }, []);
+  // 通知定位的服务器可能不在第一页，先切到对应页再由 useFocusRow 高亮滚动。
+  useEffect(() => {
+    if (focus && loaded) {
+      setQuery(''); setFilter('all'); setGroupID('all'); setExtraSort(undefined);
+      order.onChange(undefined, undefined, {});
+      const index = rows.findIndex(row => row.id === focus);
+      if (index >= 0) setPage(Math.floor(index / 20) + 1);
+    }
+  }, [focus, loaded]);
 
-  async function add(values: { name: string }) {
+  function edit(row: ServerRow | null) {
+    form.resetFields(); form.setFieldsValue({ name: row?.name ?? '' }); setError(''); setEditing(row);
+  }
+
+  async function save(values: { name: string }) {
     setSaving(true);
     try {
-      const result = await api<Installation>('/nodes', 'POST', values);
-      setAdding(false); form.resetFields(); setInstallation(result); await load();
+      if (editing) await api(`/nodes/${editing.id}/name`, 'PUT', values);
+      else {
+        const result = await api<Installation>('/nodes', 'POST', values);
+        setInstalling({ node: { id: result.id, name: values.name }, ticket: result });
+      }
+      setEditing(undefined); form.resetFields(); await load();
     } catch (e) { failed(e); }
     finally { setSaving(false); }
   }
 
-  async function rename(values: { name: string }) {
-    if (!renameNode) return;
-    setSaving(true);
-    try {
-      await api(`/nodes/${renameNode.id}/name`, 'PUT', values);
-      setRenameNode(undefined); await load();
-    } catch (e) { failed(e); }
-    finally { setSaving(false); }
+  async function revoke(row: ServerRow) {
+    try { await api(`/nodes/${row.id}/token/revoke`, 'POST'); await load(); }
+    catch (e) { failed(e); }
   }
 
-  async function credential(row: NodeRow, operation: 'reset' | 'revoke') {
-    try {
-      const result = await api<Installation>(`/nodes/${row.id}/token/${operation}`, 'POST');
-      if (operation === 'reset') setInstallation(result);
-      await load();
-    } catch (e) { failed(e); }
-  }
-
-  async function maintenance(row: NodeRow) {
+  async function maintenance(row: ServerRow) {
     try {
       await api(`/nodes/${row.id}/maintenance`, 'PUT', { enabled: row.status !== 'maintenance' });
       await load();
     } catch (e) { failed(e); }
   }
 
-  // 维护是逐节点状态，没有整批事务；逐个调用后汇总成功与失败。
+  // 维护是逐服务器状态，没有整批事务；逐个调用后汇总成功与失败。
   async function batchMaintenance(enabled: boolean) {
     setBatching(enabled);
     const targets = rows.filter(row => selectedIDs.includes(row.id));
@@ -143,128 +146,115 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
     const label = enabled ? '维护 10 分钟' : '结束维护';
     if (failures.some(f => f.error instanceof APIError && (f.error.status === 401 || f.error.status === 428))) expired.current();
     else if (failures.length) modal.warning({ title: `${label}：成功 ${ok}，失败 ${failures.length}`, content: failures.map(f => `${f.name}：${(f.error as Error).message}`).join('\n'), styles: { body: { whiteSpace: 'pre-line' } } });
-    else message.success(`${label}：已处理 ${ok} 个节点`);
+    else message.success(`${label}：已处理 ${ok} 台服务器`);
     setBatching(undefined);
     await load();
   }
 
-  function more(row: NodeRow, key: string) {
-    if (key === 'rename') setRenameNode(row);
+  function action(row: ServerRow, key: string) {
+    setError('');
+    if (key === 'edit') edit(row);
     else if (key === 'region') setRegionNode(row);
     else if (key === 'record') setRecordNode(row.id);
     else if (key === 'rotation') setRotationNode(row.id);
+    else if (key === 'probe') setProbeNode(row.id);
+    else if (key === 'self-check') setSelfCheckNode(row.id);
+    else if (key === 'details' || key === 'upgrade') setDetails({ id: row.id, tab: key === 'upgrade' ? 'upgrade' : 'overview' });
+    else if (key === 'install') setInstalling({ node: row });
     else if (key === 'maintenance') void maintenance(row);
     else if (key === 'ports' || key === 'delete') setValidation({ id: row.id, mode: key });
-    else if (key === 'reset') modal.confirm({ title: `重置「${row.name}」的 token？`, content: '当前控制连接将断开，需要重新执行安装命令。', okText: '重置', onOk: () => credential(row, 'reset') });
-    else if (key === 'revoke') modal.confirm({ title: `吊销「${row.name}」的 token？`, content: '当前控制连接将断开，原凭据将失效。', okText: '吊销', okButtonProps: { danger: true }, onOk: () => credential(row, 'revoke') });
+    else if (key === 'revoke') modal.confirm({ title: `吊销「${row.name}」的凭据？`, content: '当前控制连接将断开，原凭据将失效。重新接入时请在安装脚本中生成新的安装票据。', okText: '吊销', okButtonProps: { danger: true }, onOk: () => revoke(row) });
   }
 
-  const counts = Object.fromEntries(filters.map(f => [f.value, f.value === 'all' ? rows.length : rows.filter(row => row.status === f.value).length]));
-  // 默认按保存的自定义顺序；要让离线排最后，点状态列排序。
-  const visible = rows.filter(row => (filter === 'all' || row.status === filter) && (!needle || row.name.toLowerCase().includes(needle) || row.public_ipv4.includes(needle)));
+  const visible = rows.filter(row => matchesServer(row, groups, { query, status: filter, groupID }));
+  const activeExtraSort = extraSorts.find(sort => sort.value === extraSort);
+  if (activeExtraSort) visible.sort((a, b) => activeExtraSort.compare(a, b, activeExtraSort.direction) * (activeExtraSort.direction === 'descend' ? -1 : 1));
   const validationNode = rows.find(row => row.id === validation?.id);
+  const detailNode = rows.find(row => row.id === details?.id);
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(visible.length / 20)));
+  const rowClassName = useFocusRow(focus, loaded && (!focus || visible.slice((currentPage - 1) * 20, currentPage * 20).some(row => row.id === focus)));
 
-  return <>
-    <PageHeader title="服务器管理" description="控制连接、实时资源与配置版本。每 10 秒刷新。">
-      <Button icon={<SettingOutlined />} onClick={() => setSelfCheckSettings(true)}>自测设置</Button>
-      <Button type="primary" icon={<PlusOutlined />} onClick={() => setAdding(true)}>添加节点</Button>
+  return <div className="servers-page">
+    <PageHeader title="服务器管理" description="管理入口服务器、安装状态与实时资源。每 10 秒自动刷新。">
+      <Button icon={<SettingOutlined />} onClick={() => setSelfCheckSettings(true)}>自检设置</Button>
+      <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>添加服务器</Button>
     </PageHeader>
     {(error || order.error) && <Alert title={error || order.error} type="error" showIcon className="message" />}
-    <div className="toolbar">
-      <Input allowClear prefix={<SearchOutlined style={{ color: 'var(--text-3)' }} />} placeholder="搜索名称或 IP" value={query} onChange={e => setQuery(e.target.value)} style={{ width: 240 }} />
-      <Segmented<Filter> value={filter} onChange={setFilter} options={filters.map(f => ({ value: f.value, label: <>{f.label} <span className="num muted">{counts[f.value]}</span></> }))} />
-      <span className="spacer" />
-      {order.restore}
-      <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
-    </div>
-    {selectedIDs.length > 0 && <div className="toolbar batch-bar">
-      <span>已选 <span className="num">{selectedIDs.length}</span> 个节点</span>
-      <Button size="small" loading={batching === true} disabled={batching !== undefined} onClick={() => void batchMaintenance(true)}>维护 10 分钟</Button>
-      <Button size="small" loading={batching === false} disabled={batching !== undefined} onClick={() => void batchMaintenance(false)}>结束维护</Button>
-      <Button size="small" type="text" onClick={() => setSelectedIDs([])}>取消选择</Button>
-    </div>}
-    <div className="panel">
-      <Table<NodeRow> rowKey="id" dataSource={visible} loading={!loaded && !error} rowSelection={{ selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} onChange={order.onChange} onRow={order.onRow} rowClassName={row => `${rowClassName(row.id)} ${order.rowClass(row.id)}`} pagination={visible.length > 50 ? { pageSize: 50, showSizeChanger: false } : false} scroll={{ x: 1950 }}
-        locale={{ emptyText: rows.length ? '没有符合条件的节点' : '暂无节点。添加节点后，把安装命令复制到服务器执行。' }} columns={[
-          order.handle,
-          { title: '节点', fixed: 'left', width: 190, ...order.sorted('name'), sorter: byText(row => row.name), render: (_, row) => <>
-            <span className="status"><span className={`dot ${tone(row)}`} /><span className="node-name">{row.name}</span></span>
-            <span className="cell-sub">{row.probe?.uptime_seconds != null ? <>运行 <span className="num">{uptime(row.probe.uptime_seconds)}</span></> : row.software_version ? '—' : '尚未接入'}</span>
-          </> },
-          { title: '状态', width: 120, ...order.sorted('status'), sorter: (a, b) => statusRank(a) - statusRank(b), render: (_, row) => <>
-            {row.status_label}
-            {row.status === 'online' && !row.connected && <span className="cell-danger">控制连接已中断</span>}
-            {row.status === 'maintenance' && row.maintenance_until && <span className="cell-sub">至 <span className="num">{new Date(row.maintenance_until).toLocaleTimeString()}</span></span>}
-          </> },
-          { title: 'CPU', width: 130, ...order.sorted('cpu'), sortDirections: ['descend', 'ascend'], sorter: byMetric<NodeRow>(row => row.probe?.cpu_percent), render: (_, row) => <CpuCell probe={row.probe} /> },
-          { title: '内存', width: 130, ...order.sorted('memory'), sortDirections: ['descend', 'ascend'], sorter: byMetric<NodeRow>(row => memoryPercent(row.probe)), render: (_, row) => <MemoryCell probe={row.probe} /> },
-          { title: '网络', width: 130, ...order.sorted('network'), sortDirections: ['descend', 'ascend'], sorter: byMetric<NodeRow>(row => networkRate(row.probe)), render: (_, row) => <NetworkCell probe={row.probe} /> },
-          { title: '连接', width: 80, ...order.sorted('connections'), sortDirections: ['descend', 'ascend'], sorter: byMetric<NodeRow>(row => row.probe?.business_connections), render: (_, row) => <ConnectionsCell probe={row.probe} /> },
-          { title: '地区 / IP', width: 170, ...order.sorted('region'), sorter: byText(row => row.region.name), render: (_, row) => <>
-            {row.region.name}{row.region_source === 'manual' && <span className="muted">（人工）</span>}
-            <span className="cell-sub mono">{row.public_ipv4 || '尚未查询到 IP'}</span>
-          </> },
-          { title: '域名 / 地址', key: 'record', width: 260, render: (_, row) => <>
-            <Button size="small" type="link" onClick={() => setRecordNode(row.id)}>{row.managed_record?.hostname || '绑定域名 / 同步地址'}</Button>
-            {row.managed_record && <span className="cell-sub">{row.managed_record.current_enabled ? '启用' : '暂停'} · {row.record_status}</span>}
-            <span className="cell-sub mono">期望 {row.confirmed_ipv4 || '地址待确认'}</span>
-            {row.managed_record && row.confirmed_ipv4 && row.managed_record.current_value !== row.confirmed_ipv4 && <span className="cell-danger">记录地址等待同步</span>}
-            {row.public_ipv4 && row.public_ipv4 !== row.confirmed_ipv4 && <span className="cell-danger">上报与确认地址不一致 <Button size="small" type="link" onClick={() => setRecordNode(row.id)}>同步地址</Button></span>}
-          </> },
-          { title: '检测点', key: 'checker', width: 100, render: (_, row) => row.domestic_checker ? <span className="status"><span className="dot ok" />{row.checker_label}</span> : <span className="muted">{row.checker_label}</span> },
-          { title: '最近活性', dataIndex: 'last_seen_at', width: 110, ...order.sorted('last_seen_at'), sortDirections: ['descend', 'ascend'], sorter: byMetric<NodeRow>(row => row.last_seen_at ? Date.parse(row.last_seen_at) : null), render: (value: string | null) => value ? <span className="num" title={new Date(value).toLocaleString()}>{ago(value)}</span> : <span className="muted">—</span> },
-          { title: '配置', key: 'revision', width: 160, render: (_, row) => <>
-            <span className={row.config_status === '正常' ? undefined : 'muted'}>{row.config_status}</span>
-            <span className="cell-sub mono">已应用 {row.applied_revision} / 期望 {row.desired_revision}</span>
-            {row.apply_error && <span className="cell-danger">{row.apply_error}</span>}
-          </> },
-          { title: '版本', key: 'upgrade', width: 170, render: (_, row) => <>
-            {row.software_version && <div className="mono">{row.software_version}</div>}
-            <NodeUpgrade node={row} onSaved={load} onError={failed} />
-          </> },
-          { title: '', key: 'actions', fixed: 'right', width: 130, render: (_, row) => <div className="row-actions">
-            <Button size="small" type="text" onClick={() => setProbeNode(row.id)}>探针</Button>
-            <Button size="small" type="text" onClick={() => setSelfCheckNode(row.id)}>自测</Button>
-            <Dropdown trigger={['click']} placement="bottomRight" menu={{ onClick: ({ key }) => more(row, key), items: [
-              { key: 'rename', label: '重命名' },
-              { key: 'region', label: '地区与检测点' },
-              { key: 'rotation', label: '换 IP' },
-              { key: 'record', label: '域名与地址' },
-              { key: 'maintenance', label: row.status === 'maintenance' ? '结束维护' : '维护 10 分钟' },
-              { key: 'ports', label: '监听端口' },
-              { type: 'divider' },
-              { key: 'reset', label: '重置 token' },
-              { key: 'revoke', label: '吊销 token', danger: true },
-              { key: 'delete', label: '删除节点', danger: true },
-            ] }}>
-              <Button size="small" type="text" icon={<MoreOutlined />} aria-label={`${row.name} 的更多操作`} />
-            </Dropdown>
-          </div> },
-        ]} />
-    </div>
+    <FilterCard onRefresh={() => void load()} loading={loading}>
+      <FilterField label="名称 / 地址" htmlFor="servers-search"><Input id="servers-search" allowClear prefix={<SearchOutlined />} placeholder="搜索名称 / IP / 域名" value={query} onChange={e => { setQuery(e.target.value); setPage(1); }} /></FilterField>
+      <FilterField label="状态" htmlFor="servers-status"><Select id="servers-status" value={filter} onChange={value => { setFilter(value); setPage(1); }} options={filters.map(f => ({ value: f.value, label: `${f.label}（${f.value === 'all' ? rows.length : rows.filter(row => row.status === f.value).length}）` }))} /></FilterField>
+      <FilterField label="服务器组" htmlFor="servers-group"><Select id="servers-group" showSearch optionFilterProp="label" value={groupID} onChange={value => { setGroupID(value); setPage(1); }} options={[{ value: 'all', label: '全部分组' }, { value: 'ungrouped', label: '未分组' }, ...groups.map(group => ({ value: group.id, label: group.name }))]} /></FilterField>
+      <Button onClick={() => { setQuery(''); setFilter('all'); setGroupID('all'); setPage(1); }}>重置</Button>
+    </FilterCard>
+    <TableCard<ServerRow> title={`服务器列表 · ${visible.length} / ${rows.length}`} actions={<>
+      {selectedIDs.length > 0 && <><span className="servers-selection">已选 <span className="num">{selectedIDs.length}</span> 台</span>
+        <Button size="small" loading={batching === true} disabled={batching !== undefined} onClick={() => void batchMaintenance(true)}>维护 10 分钟</Button>
+        <Button size="small" loading={batching === false} disabled={batching !== undefined} onClick={() => void batchMaintenance(false)}>结束维护</Button>
+        <Button size="small" type="text" onClick={() => setSelectedIDs([])}>取消选择</Button></>}
+      <Dropdown trigger={['click']} menu={{ selectedKeys: extraSort ? [extraSort] : [], items: extraSorts.map(sort => ({ key: sort.value, label: sort.label })), onClick: ({ key }) => { order.onChange(undefined, undefined, {}); setExtraSort(key); setPage(1); } }}><Button size="small" icon={<SortAscendingOutlined />}>{activeExtraSort?.label || '更多排序'}</Button></Dropdown>
+      {activeExtraSort ? <Button size="small" onClick={() => setExtraSort(undefined)}>恢复自定义顺序</Button> : order.restore}
+    </>} rowKey="id" dataSource={visible} loading={!loaded && !error}
+      rowSelection={{ selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} onChange={(pagination, filters, sorter, extra) => { if (extra.action === 'sort') { setExtraSort(undefined); setPage(1); } order.onChange(pagination, filters, sorter); }} onRow={order.onRow}
+      rowClassName={row => `${rowClassName(row.id)} ${order.rowClass(row.id)}`}
+      pagination={{ current: currentPage, pageSize: 20, showSizeChanger: false, onChange: setPage }} scroll={{ x: 1390 }}
+      locale={{ emptyText: rows.length ? '没有符合条件的服务器' : '暂无服务器。添加服务器后，将安装命令复制到目标机器执行。' }} columns={[
+        order.handle,
+        { title: 'ID', width: 100, ...order.sorted('id'), sorter: byText(row => row.id), render: (_, row) => <Tooltip title={row.id}><Button size="small" type="text" className="servers-id mono" aria-label={`查看 ${row.name} 的完整 ID`} onClick={() => action(row, 'details')}>{row.id.slice(0, 8)}</Button></Tooltip> },
+        { title: '显示名称 / 入口地址', fixed: 'left', width: 240, ...order.sorted('name'), sorter: byText(row => row.name), render: (_, row) => <>
+          <Button type="link" className="servers-name" onClick={() => action(row, 'details')}>{row.name}</Button>
+          <span className="cell-sub mono">{row.managed_record?.hostname || row.confirmed_ipv4 || row.public_ipv4 || '尚未查询到 IP'}</span>
+          {row.public_ipv4 && row.public_ipv4 !== row.confirmed_ipv4 && <Button size="small" type="text" className="servers-address-warning" onClick={() => action(row, 'record')}>地址待确认</Button>}
+          {row.apply_error && <span className="cell-danger">配置同步失败 · 详情中查看</span>}
+        </> },
+        { title: '状态', width: 140, ...order.sorted('status'), sorter: (a, b) => statusRank(a) - statusRank(b), render: (_, row) => <>
+          <StatusDot tone={serverTone(row)}>{row.status_label}</StatusDot>
+          {row.status === 'online' && !row.connected && <span className="cell-danger">控制连接已中断</span>}
+          {row.status === 'maintenance' && row.maintenance_until ? <span className="cell-sub">至 <span className="num">{new Date(row.maintenance_until).toLocaleTimeString()}</span></span> : row.probe?.uptime_seconds != null && <span className="cell-sub">运行 {uptime(row.probe.uptime_seconds)}</span>}
+        </> },
+        { title: '服务器组', width: 170, ...order.sorted('groups'), sorter: byText(row => serverGroupsFor(row.id, groups).map(group => group.name).join('、')), render: (_, row) => {
+          const memberships = serverGroupsFor(row.id, groups);
+          return <Space wrap size={[4, 4]}>{memberships.length ? memberships.map(group => <ColorTag key={group.id}>{group.name}</ColorTag>) : <ColorTag>未分组</ColorTag>}</Space>;
+        } },
+        { title: '资源使用', width: 170, ...order.sorted('cpu'), sortDirections: ['descend', 'ascend'], sorter: byMetric<ServerRow>(row => row.probe?.cpu_percent), render: (_, row) => <div className="servers-resources"><div><span>CPU</span><CpuCell probe={row.probe} /></div><div><span>内存</span><MemoryCell probe={row.probe} /></div></div> },
+        { title: <Tooltip title="本机及所属服务器组中已启用的业务监听端口数，不含隧道与检测预留端口；实际应用状态见详情。">端口数</Tooltip>, width: 100, ...order.sorted('ports'), sorter: (a, b) => serverPortCount(a.id, groups, ports) - serverPortCount(b.id, groups, ports), render: (_, row) => <span className="mono">{serverPortCount(row.id, groups, ports)}</span> },
+        { title: <Tooltip title="实测网卡上下行速率，包含该机器上的其他网络流量。">网络速率</Tooltip>, width: 150, ...order.sorted('network'), sortDirections: ['descend', 'ascend'], sorter: byMetric<ServerRow>(row => networkRate(row.probe)), render: (_, row) => <NetworkCell probe={row.probe} /> },
+        { title: '版本', width: 160, render: (_, row) => <>
+          <span className="mono">{row.software_version || '尚未接入'}</span>
+          <Button type="link" size="small" className="servers-version" onClick={() => action(row, 'upgrade')}>{row.upgrade ? '查看升级进度' : row.version_mismatch ? '有版本差异' : '版本与升级'}</Button>
+        </> },
+        { title: '操作', key: 'actions', fixed: 'right', width: 124, align: 'right', render: (_, row) => <div className="row-actions">
+          <Button size="small" type="link" onClick={() => edit(row)}>编辑</Button>
+          <Dropdown trigger={['click']} placement="bottomRight" menu={{ onClick: ({ key }) => action(row, key), items: [
+            { key: 'details', label: '服务器详情' }, { key: 'install', label: '安装脚本' }, { key: 'upgrade', label: '升级与版本' },
+            { type: 'divider' },
+            { key: 'maintenance', label: row.status === 'maintenance' ? '结束维护' : '维护 10 分钟' },
+            { key: 'self-check', label: '自检与被墙认定' }, { key: 'probe', label: '探针指标详情' }, { key: 'region', label: '地区与检测点' },
+            { key: 'rotation', label: '换 IP / 自动轮换' }, { key: 'record', label: '受管记录与地址' }, { key: 'ports', label: '监听端口设置' },
+            { type: 'divider' }, { key: 'revoke', label: '吊销凭据', danger: true }, { key: 'delete', label: '删除服务器', danger: true },
+          ] }}><Button size="small" type="text" icon={<MoreOutlined />} aria-label={`${row.name} 的更多操作`} /></Dropdown>
+        </div> },
+      ]} />
     {selfCheckSettings && <SelfCheckSettings onClose={() => setSelfCheckSettings(false)} onError={failed} />}
     {rows.find(row => row.id === selfCheckNode) && <NodeSelfCheck key={selfCheckNode} node={rows.find(row => row.id === selfCheckNode)!} onClose={() => setSelfCheckNode(undefined)} onError={failed} />}
     {rows.find(row => row.id === recordNode) && <NodeManagedRecord key={recordNode} node={rows.find(row => row.id === recordNode)!} onClose={() => setRecordNode(undefined)} onSaved={load} onError={failed} />}
-    <NodeRotation node={rows.find(row => row.id === rotationNode)} onClose={() => setRotationNode(undefined)} onError={failed} />
-    <NodeRegion node={regionNode} onClose={() => setRegionNode(undefined)} onSaved={load} onError={failed} />
+    <NodeRotation node={rows.find(row => row.id === rotationNode)} error={error} onClose={() => setRotationNode(undefined)} onError={failed} />
+    <NodeRegion node={regionNode} error={error} onClose={() => setRegionNode(undefined)} onSaved={load} onError={failed} />
     {rows.find(row => row.id === probeNode) && <ProbeDetails node={rows.find(row => row.id === probeNode)!} onClose={() => setProbeNode(undefined)} onSessionExpired={onSessionExpired} />}
     {validationNode && <NodeValidationActions node={validationNode} mode={validation?.mode} onClose={() => setValidation(undefined)} onSaved={load} onError={failed} />}
-    <Modal title="添加节点" open={adding} onCancel={() => { setAdding(false); form.resetFields(); }} footer={null} destroyOnHidden>
-      <Form form={form} layout="vertical" onFinish={add} clearOnDestroy>
-        <Form.Item name="name" label="节点名称" rules={[{ required: true, whitespace: true, message: '请输入节点名称' }]}><Input autoFocus maxLength={200} placeholder="例如：HK-CN2-01" /></Form.Item>
-        <Button block type="primary" htmlType="submit" loading={saving}>生成安装命令</Button>
+    {detailNode && details && <NodeServerDetails key={`${detailNode.id}-${details.tab}`} node={detailNode} groups={groups} initialTab={details.tab} error={error} onClose={() => setDetails(undefined)} onAction={(key: ServerAction) => action(detailNode, key)} onSaved={load} onError={failed} />}
+    {installing && <NodeInstallation key={installing.node.id} node={installing.node} initialTicket={installing.ticket} onClose={() => setInstalling(undefined)} onSaved={load} onError={failed} />}
+    <Modal title={editing ? '编辑服务器' : '添加服务器'} open={editing !== undefined} onCancel={() => { setEditing(undefined); form.resetFields(); }} footer={null} width={680} className="servers-modal" destroyOnHidden>
+      {error && <Alert type="error" showIcon title={error} className="message" />}
+      <Form form={form} layout="vertical" onFinish={save} clearOnDestroy>
+        <FormSection title="基本信息" icon={<InfoCircleOutlined />} description={editing ? '修改显示名称；服务器地址由实际运行的程序上报。' : '创建服务器后生成一次性安装票据，在目标机器执行安装命令即可接入。'}>
+          <Form.Item name="name" label="显示名称" rules={[{ required: true, whitespace: true, message: '请输入服务器名称' }, { validator: (_, value: string) => new TextEncoder().encode(value?.trim() || '').length <= 200 ? Promise.resolve() : Promise.reject(new Error('服务器名称最多 200 字节')) }]} extra="用于区分服务器，例如 HK-CN2-01。"><Input autoFocus maxLength={200} placeholder="请输入服务器名称" /></Form.Item>
+          {editing && <Form.Item label="公网 IPv4" extra="地址确认及域名绑定在「受管记录与地址」中管理。"><Input readOnly value={editing.public_ipv4 || '尚未查询到 IP'} /></Form.Item>}
+        </FormSection>
+        {editing && <FormSection title="服务器设置" icon={<GlobalOutlined />} description="地区、国内检测点和监听端口分别保存；关闭弹窗后仍可在更多操作中管理。" collapsible>
+          <Space wrap className="servers-section-actions"><Button onClick={() => setRegionNode(editing)}>地区与检测点</Button><Button icon={<CodeOutlined />} onClick={() => setValidation({ id: editing.id, mode: 'ports' })}>监听端口设置</Button></Space>
+        </FormSection>}
+        <div className="servers-form-footer"><Button onClick={() => setEditing(undefined)}>取消</Button><Button type="primary" htmlType="submit" loading={saving}>{editing ? '保存' : '生成安装脚本'}</Button></div>
       </Form>
     </Modal>
-    <Modal title="重命名节点" open={!!renameNode} onCancel={() => setRenameNode(undefined)} footer={null} destroyOnHidden>
-      <Form form={renameForm} layout="vertical" onFinish={rename} initialValues={{ name: renameNode?.name }} clearOnDestroy>
-        <Form.Item name="name" label="节点名称" rules={[{ required: true, whitespace: true, message: '请输入节点名称' }]}><Input autoFocus maxLength={200} /></Form.Item>
-        <Button block type="primary" htmlType="submit" loading={saving}>保存</Button>
-      </Form>
-    </Modal>
-    <Modal title="安装节点" open={!!installation} onCancel={() => setInstallation(undefined)} footer={<Button type="primary" onClick={() => setInstallation(undefined)}>完成</Button>} width={760} destroyOnHidden>
-      <Typography.Paragraph>以 root 身份在 Linux amd64 服务器执行以下命令（非 root 用户先执行 <code>sudo -i</code>），安装后回到列表确认在线状态。</Typography.Paragraph>
-      <Alert type="info" showIcon title="安装票据只能使用一次，30 分钟后失效。" description={installation ? `有效至 ${new Date(installation.ticket_expires_at).toLocaleString()}` : ''} />
-      <Typography.Paragraph className="installation-command" copyable={{ text: installation?.installation_command }}><code>{installation?.installation_command}</code></Typography.Paragraph>
-    </Modal>
-  </>;
+  </div>;
 }

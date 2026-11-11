@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Card, Descriptions, Form, Input, Modal, Popconfirm, Space, Typography } from 'antd';
+import { Alert, App, Button, Descriptions, Form, Input, Modal, Popconfirm, Space, Spin, Typography } from 'antd';
+import { GlobalOutlined, LinkOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
 import { DNSRecordPicker, useRecordBinding } from './DNSRecordPicker';
+import { FormSection } from './FormSection';
+import './servers.css';
 
 type Account = { id: string; name: string };
 export type NodeRecord = { account_id: string; domain: string; record_id: string; line_id: string; line: string; hostname: string; current_value: string; current_enabled: boolean; warnings: string[] };
@@ -53,10 +56,10 @@ export function NodeManagedRecord({ node, onClose, onSaved, onError }: { node: N
   function sync() {
     if (!publication?.reported_ipv4) return;
     const ipv4 = publication.reported_ipv4;
-    modal.confirm({ title: `确认同步地址 ${ipv4}？`, content: '请确认这是该节点可直接接收业务连接的公网 IPv4。同步会覆盖节点受管记录及该节点在各全部发布组的成员记录，各自保持启用或暂停状态。', okText: '确认并同步', onOk: () => operate(() => api(`${path}/sync-address`, 'POST', { ipv4, confirm_inbound: true })) });
+    modal.confirm({ title: `确认同步地址 ${ipv4}？`, content: '请确认这是该服务器可直接接收业务连接的公网 IPv4。同步会覆盖服务器受管记录及该服务器在各全部发布组的成员记录，各自保持启用或暂停状态。', okText: '确认并同步', onOk: () => operate(() => api(`${path}/sync-address`, 'POST', { ipv4, confirm_inbound: true })) });
   }
   function publish() {
-    modal.confirm({ title: '确认首次发布节点域名？', content: `请确认 ${publication?.expected_value} 可接收入站业务连接。面板会先写地址，再明确启用这条记录。`, okText: '确认并首次发布', onOk: () => operate(() => api(`${path}/publish`, 'POST', { expected_version: publication?.desired_version, confirm_inbound: true })) });
+    modal.confirm({ title: '确认首次发布服务器域名？', content: `请确认 ${publication?.expected_value} 可接收入站业务连接。面板会先写地址，再明确启用这条记录。`, okText: '确认并首次发布', onOk: () => operate(() => api(`${path}/publish`, 'POST', { expected_version: publication?.desired_version, confirm_inbound: true })) });
   }
   const binder = useRecordBinding(async body => { const result = await api<NodeRecord>(`${path}/managed-record`, 'PUT', body); setWarnings([]); dirty.current = false; return result; }, operate);
   async function unbind() {
@@ -66,19 +69,22 @@ export function NodeManagedRecord({ node, onClose, onSaved, onError }: { node: N
     await operate(async () => { const account = await api<Account>('/dns-accounts', 'POST', values); setAddingAccount(false); accountForm.resetFields(); dirty.current = true; form.setFieldsValue({ account_id: account.id }); });
   }
   const pending = publication?.action?.stage === '期望已变更' || publication?.action?.stage === '结果未确认';
-  return <Modal title={`${node.name} · 域名与地址`} open onCancel={onClose} footer={null} width={720}>
+  return <Modal title={`${node.name} · 受管记录与地址`} open onCancel={onClose} footer={null} width={720} className="servers-modal">
     <Space orientation="vertical" style={{ width: '100%' }} size="middle">
       {error && <Alert type="error" showIcon title={error} />}
       {warnings.map((warning, i) => <Alert key={i} type="warning" showIcon title={warning} />)}
-      <Card title="节点地址" loading={!loaded}>
+      <FormSection title="服务器地址" icon={<GlobalOutlined />}>
+        <Spin spinning={!loaded && !error}>
         <Descriptions column={1} size="small" items={[
           { key: 'reported', label: '上报地址', children: publication?.reported_ipv4 || '尚未查询到' },
           { key: 'confirmed', label: '确认地址 / 记录期望', children: publication?.expected_value || '地址待确认' },
         ]} />
         {publication?.address_mismatch && <Alert type="warning" showIcon title="上报地址与确认地址不一致，面板只通知，受管记录保持原状。" style={{ marginTop: 12 }} />}
         <Button style={{ marginTop: 12 }} loading={busy} disabled={!publication?.reported_ipv4 || pending} onClick={sync}>同步地址</Button>
-      </Card>
-      <Card title="节点受管记录" loading={!loaded} extra={<Button onClick={() => setAddingAccount(true)}>添加 DNSPod 账号</Button>}>
+        </Spin>
+      </FormSection>
+      <FormSection title="受管 DNS 记录" icon={<LinkOutlined />}>
+        <Button className="servers-section-actions" onClick={() => setAddingAccount(true)}>添加 DNSPod 账号</Button>
         {record && <>
           <Descriptions column={1} size="small" items={[
             { key: 'domain', label: '绑定域名', children: record.hostname },
@@ -101,9 +107,9 @@ export function NodeManagedRecord({ node, onClose, onSaved, onError }: { node: N
           <Button htmlType="submit" loading={busy} disabled={!loaded || pending}>{record ? '更换绑定' : '绑定记录'}</Button>
         </Form>
         {binder.chooser}
-      </Card>
+      </FormSection>
     </Space>
-    <Modal title="添加 DNSPod 账号" open={addingAccount} onCancel={() => { setAddingAccount(false); accountForm.resetFields(); }} footer={null} destroyOnHidden>
+    <Modal title="添加 DNSPod 账号" open={addingAccount} onCancel={() => { setAddingAccount(false); accountForm.resetFields(); }} footer={null} className="servers-modal" destroyOnHidden>
       <Form form={accountForm} layout="vertical" onFinish={addAccount} clearOnDestroy>
         <Typography.Paragraph type="secondary">使用腾讯云 API 密钥（访问管理 → API 密钥管理），建议用只授予 DNSPod 权限的子账号。凭据加密保存在面板，保存后不回显。</Typography.Paragraph>
         <Form.Item name="name" label="账号名称" rules={[{ required: true, whitespace: true, message: '请输入账号名称' }]}><Input maxLength={200} /></Form.Item>

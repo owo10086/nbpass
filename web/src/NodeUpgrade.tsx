@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Button, Popconfirm } from 'antd';
 import { api } from './api';
+import { StatusDot } from './StatusDot';
 
 type Upgrade = { state: string; steps: string[]; error?: string; manifest: { version: string } };
 export type NodeUpgradeFields = { panel_version: string; version_mismatch: boolean; upgrade_capable: boolean; upgrade?: Upgrade };
@@ -21,14 +22,14 @@ export function NodeUpgrade({ node, onSaved, onError }: { node: NodeUpgradeField
   const offer = node.version_mismatch || (!!node.upgrade && state !== 'ready');
   return <div>
     {node.upgrade
-      ? <span className="status"><span className={`dot ${tone}`} />升级至 <span className="mono">{node.upgrade.manifest.version}</span>：{labels[state!] || state}</span>
-      : node.version_mismatch ? <span className="status"><span className="dot warn" />与面板 <span className="mono">{node.panel_version}</span> 不一致</span>
+      ? <StatusDot tone={tone}>升级至 <span className="mono">{node.upgrade.manifest.version}</span>：{labels[state!] || state}</StatusDot>
+      : node.version_mismatch ? <StatusDot tone="warn">与面板 <span className="mono">{node.panel_version}</span> 不一致</StatusDot>
       : <span className="muted">与面板一致</span>}
     {node.upgrade && node.upgrade.steps.length > 0 && <span className="cell-sub">{node.upgrade.steps.map(step => labels[step] || step).join(' → ')}</span>}
     {node.upgrade?.error && <span className="cell-danger">{node.upgrade.error}</span>}
-    {state === 'unconfirmed' && <span className="cell-sub">等待节点回连核对，当前程序保留；请勿重复升级。</span>}
+    {state === 'unconfirmed' && <span className="cell-sub">等待服务器回连核对，当前程序保留；请勿重复升级。</span>}
     {offer && <div style={{ marginTop: 4 }}>
-      <Popconfirm title={`升级节点至 ${node.panel_version}？`} description="升级会断开此节点上的现有连接；节点将进入最多 10 分钟的维护期。" onConfirm={upgrade}>
+      <Popconfirm title={`升级服务器至 ${node.panel_version}？`} description="升级会断开此服务器上的现有连接；服务器将进入最多 10 分钟的维护期。" onConfirm={upgrade}>
         <Button size="small" loading={saving} disabled={!node.connected || !node.upgrade_capable || (!!node.upgrade && !terminal.has(node.upgrade.state))}>升级至面板版本</Button>
       </Popconfirm>
       {!node.upgrade_capable && <span className="cell-sub">安装独立更新服务后可升级</span>}
