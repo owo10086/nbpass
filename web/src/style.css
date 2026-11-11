@@ -37,10 +37,13 @@ body { margin: 0; min-width: 320px; }
 .nav-group-title:hover { color: var(--text); background: var(--bg-hover); }
 .nav-group-title.active { color: var(--text); }
 .nav-arrow { margin-left: auto; color: var(--muted); font-size: var(--font-small); }
-.nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 12px 7px 40px; margin: 1px 0; border-radius: var(--radius); color: var(--text-2); font-size: var(--font-size); text-decoration: none; transition: background-color .15s ease, color .15s ease; }
-.nav-home { padding-left: 12px; margin-bottom: 4px; }
-.nav-item:hover { background: var(--bg-hover); color: var(--text); }
-.nav-item[aria-current='page'] { background: var(--accent); color: var(--white); }
+.nav .nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 12px 7px 40px; margin: 1px 0; border-radius: var(--radius); background: transparent; color: var(--text-2); font-size: var(--font-size); text-decoration: none; transition: background-color .15s ease, color .15s ease; }
+.nav .nav-home { padding-left: 12px; margin-bottom: 4px; }
+.nav .nav-item:is(:hover, :active) { background: var(--bg-hover); color: var(--text); }
+/* 抽屉自动聚焦和键盘焦点使用灰色描边；橙底只表示当前路由。 */
+.nav .nav-item:focus { outline: 2px solid var(--text-2); outline-offset: -2px; }
+.nav .nav-item:focus:not([aria-current='page']) { background: var(--bg-hover); color: var(--text); }
+.nav .nav-item[aria-current='page'] { background: var(--accent); color: var(--white); }
 .nav-count { margin-left: auto; font-size: var(--font-small); font-variant-numeric: tabular-nums; }
 .nav-count.alert { min-width: 18px; padding: 0 5px; border-radius: 9px; background: var(--danger); color: var(--white); text-align: center; }
 .main { min-width: 0; }

@@ -26,6 +26,12 @@ export function AppShell({ page, counts, busy, onLogout, children }: {
     return () => query.removeEventListener('change', update);
   }, []);
   useEffect(() => {
+    // 同页查询参数、旧链接和地址栏修改也应收起导航，不能只依赖 page 变化。
+    const close = () => setDrawerOpen(false);
+    window.addEventListener('hashchange', close);
+    return () => window.removeEventListener('hashchange', close);
+  }, []);
+  useEffect(() => {
     setClosed(items => items.filter(title => title !== group?.title));
     setDrawerOpen(false);
     document.title = `${pageTitles[page]} · nbpass`;
