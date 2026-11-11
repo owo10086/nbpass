@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { Tooltip } from 'antd';
 import { format } from './ProbeDetails';
 
-// 节点列表里的探针实时值；节点离线或采样过期时为 null，缺失的指标直接省略。
+// 服务器列表里的探针实时值；服务器离线或采样过期时为 null，缺失的指标直接省略。
 export type NodeProbe = Partial<Record<string, number>> | null;
 
 const missing = <span className="muted">—</span>;
@@ -86,7 +86,7 @@ export function ConnectionsCell({ probe }: { probe: NodeProbe }) {
   ]}><span className="num">{count(probe.business_connections)}</span></Detail>;
 }
 
-// 节点进程运行时长，列表里只保留最大的两级单位。
+// 服务器进程运行时长，列表里只保留最大的两级单位。
 export function uptime(seconds: number) {
   const days = Math.floor(seconds / 86400), hours = Math.floor(seconds % 86400 / 3600), minutes = Math.floor(seconds % 3600 / 60);
   if (days) return `${days} 天 ${hours} 小时`;

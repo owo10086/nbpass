@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
 import { Alert, Button, Form, InputNumber, Modal, Space, Table, Typography } from 'antd';
 import { api, APIError } from './api';
+import { CodeOutlined } from '@ant-design/icons';
+import { FormSection } from './FormSection';
+import './servers.css';
 
 type Reference = { kind: 'rule' | 'entry_group' | 'exit_group'; id: string; name: string };
 type ListenerPorts = { tunnel_listen_port: number; check_port: number };
 type Node = { id: string; name: string };
 
-const kindLabels = { rule: '转发规则', entry_group: '入口组', exit_group: '出口组' };
+const kindLabels = { rule: '端口', entry_group: '服务器组', exit_group: '端点组' };
 
 export type NodeValidationMode = 'ports' | 'delete';
 
@@ -52,26 +55,27 @@ export function NodeValidationActions({ node, mode, onClose, onSaved, onError }:
   }
 
   return <>
-    <Modal title={`节点「${node.name}」的监听端口`} open={view === 'ports'} onCancel={onClose} footer={null} forceRender>
+    <Modal title={`服务器「${node.name}」的监听端口`} open={view === 'ports'} onCancel={onClose} footer={null} className="servers-modal" forceRender>
       <Form form={form} layout="vertical" onFinish={save}>
         {error && <Alert title={error} type="error" showIcon className="message" />}
-        <Typography.Paragraph type="secondary">固定检测服务监听下方检测端口，用于国内检测点补判，请放行相应 TCP 入站连接。转发规则不能占用检测端口或隧道预留端口。</Typography.Paragraph>
+        <FormSection title="监听端口" icon={<CodeOutlined />} description="固定检测服务监听下方检测端口，用于国内检测点补判，请放行相应 TCP 入站连接。业务端口不能占用检测端口或隧道预留端口。">
         <Form.Item name="tunnel_listen_port" label="隧道监听端口" rules={[{ required: true, message: '请输入隧道监听端口' }]}><InputNumber min={1} max={65535} precision={0} disabled={loading} style={{ width: '100%' }} /></Form.Item>
         <Form.Item name="check_port" label="固定检测端口" rules={[{ required: true, message: '请输入检测端口' }]}><InputNumber min={1} max={65535} precision={0} disabled={loading} style={{ width: '100%' }} /></Form.Item>
+        </FormSection>
         <Button type="primary" htmlType="submit" block loading={loading}>保存端口</Button>
       </Form>
     </Modal>
-    <Modal title={`删除节点「${node.name}」`} open={view === 'delete'} onCancel={onClose} width={680} footer={<Space><Button onClick={onClose}>取消</Button><Button danger type="primary" loading={loading} disabled={!!error || references.length > 0} onClick={() => void remove()}>确认删除节点</Button></Space>}>
+    <Modal title={`删除服务器「${node.name}」`} open={view === 'delete'} onCancel={onClose} width={680} footer={<Space><Button onClick={onClose}>取消</Button><Button danger type="primary" loading={loading} disabled={!!error || references.length > 0} onClick={() => void remove()}>确认删除服务器</Button></Space>}>
       {error && <Alert title={error} type="error" showIcon className="message" />}
       {warnings.map((warning, i) => <Alert key={i} title={warning} type="warning" showIcon className="message" />)}
       {references.length > 0 ? <>
-        <Alert title="节点仍被引用，请先移除以下配置中的关联。" type="warning" showIcon className="message" />
+        <Alert title="服务器仍被引用，请先移除以下配置中的关联。" type="warning" showIcon className="message" />
         <Table<Reference> size="small" rowKey={ref => `${ref.kind}:${ref.id}`} dataSource={references} pagination={false} scroll={{ x: 440, y: 320 }} columns={[
           { title: '引用类型', render: (_, ref) => kindLabels[ref.kind] },
           { title: '名称', dataIndex: 'name' },
           { title: '标识', dataIndex: 'id', render: value => <Typography.Text copyable style={{ wordBreak: 'break-all' }}>{value}</Typography.Text> },
         ]} />
-      </> : <Typography.Paragraph>{loading ? '正在检查引用…' : '当前没有规则或分组引用。删除会使节点凭据和安装票据失效，并断开控制连接。'}</Typography.Paragraph>}
+      </> : <Typography.Paragraph>{loading ? '正在检查引用…' : '当前没有端口或分组引用。删除会使服务器凭据和安装票据失效，并断开控制连接。'}</Typography.Paragraph>}
     </Modal>
   </>;
 }
