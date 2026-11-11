@@ -91,14 +91,14 @@ func (p *Panel) listDNSAccountRecords(w http.ResponseWriter, r *http.Request) {
 	}
 	records := []browsedRecord{}
 	for _, record := range all {
-		if record.Type != "A" {
+		if record.Type != "A" && record.Type != "CNAME" {
 			continue
 		}
 		b := browsedRecord{Record: record, Hostname: domain, Owner: owners[record.ID]}
 		if record.Name != "@" && record.Name != "" {
 			b.Hostname = record.Name + "." + domain
 		}
-		// 与绑定使用同一校验，提前标出非 IPv4、代理及同名多线路记录。
+		// 与绑定使用同一校验，提前标出非 IPv4、代理、同名多线路及与其他记录共存的 CNAME。
 		related := []dnsprovider.Record{}
 		for _, other := range all {
 			if other.Name == record.Name {

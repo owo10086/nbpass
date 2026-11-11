@@ -129,6 +129,25 @@ func (p *Panel) checkEntryCandidates(ctx context.Context) (map[[2]string]entryMe
 			groups[ruleEntryKey(r)] = forwarding.RuleEntryNodes(r, groups)
 		}
 	}
+	cnameGroups := map[string]bool{}
+	cnameRows, err := p.db.QueryContext(ctx, "SELECT group_id FROM managed_records WHERE owner_kind='group' AND record_type='CNAME'")
+	if err != nil {
+		return nil, err
+	}
+	for cnameRows.Next() {
+		var group string
+		if err = cnameRows.Scan(&group); err != nil {
+			break
+		}
+		cnameGroups[group] = true
+	}
+	if err == nil {
+		err = cnameRows.Err()
+	}
+	cnameRows.Close()
+	if err != nil {
+		return nil, err
+	}
 	now := p.deps.Clock.Now().UTC()
 	states := map[[2]string]entryMemberState{}
 	// 一个节点的隧道/国内证据只读取一次，所有入口组共享同一轮物理观测。
@@ -177,6 +196,20 @@ func (p *Panel) checkEntryCandidates(ctx context.Context) (map[[2]string]entryMe
 			}
 			if inputs.blocked {
 				state.CandidateReasons = append(state.CandidateReasons, entryStateReason{Code: "blocked", Message: "节点已认定被墙"})
+			}
+			// CNAME 组只能指向已发布、启用且地址就是当前公网地址的节点记录；没有国内证据时只核对前两条。
+			if cnameGroups[group] {
+				address := ""
+				if inputs.domestic != nil {
+					address = inputs.domestic.PublicIPv4
+				}
+				if _, e := cnameTarget(ctx, p.db, id, address, true); e != nil {
+					var reason *forwardingError
+					if !errors.As(e, &reason) {
+						return nil, e
+					}
+					state.CandidateReasons = append(state.CandidateReasons, entryStateReason{Code: "node_record_unavailable", Message: reason.Error()})
+				}
 			}
 			evidenceStatus := ""
 			if inputs.domestic == nil {

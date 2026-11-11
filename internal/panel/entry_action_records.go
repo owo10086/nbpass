@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 
+	"nbpass/internal/forwarding"
 	"nbpass/internal/publicip"
 )
 
@@ -47,6 +48,8 @@ type EntryActionRecord struct {
 	preserveEnabled               bool
 	writeStarted, valueConfirmed  bool
 	explicitEnable, statusStarted bool
+	// cname 表示记录值是节点记录域名，动作旧值保留提交时的地址。
+	cname bool
 }
 
 func loadActionRecords(ctx context.Context, q interface {
@@ -72,7 +75,11 @@ func insertActionRecord(ctx context.Context, tx *sql.Tx, id string, b managedRec
 	if b.BindingGeneration != change.BindingGeneration {
 		return &forwardingError{409, "受管记录绑定已变化，请刷新后重试"}
 	}
-	if change.Value != "" {
+	if change.Value != "" && b.Type == "CNAME" {
+		if err := forwarding.ValidateTarget(change.Value, false); err != nil {
+			return &forwardingError{400, "CNAME 目标须为有效域名"}
+		}
+	} else if change.Value != "" {
 		if _, err := publicip.Parse(change.Value); err != nil {
 			return &forwardingError{400, "受管记录地址须为可入站公网 IPv4"}
 		}

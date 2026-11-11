@@ -75,7 +75,7 @@ func (p *Panel) resetEntryDomainWatch(ctx context.Context, tx *sql.Tx, a EntryAc
 // DNSPod 成功即结束队列动作；传播状态只属于当前期望版本。
 func (p *Panel) beginEntryPropagation(ctx context.Context, tx *sql.Tx, a EntryAction, now time.Time) error {
 	window := min(time.Hour, max(10*time.Minute, time.Duration(a.OldTTL)*2*time.Second))
-	_, err := tx.ExecContext(ctx, `INSERT INTO entry_dns_previous(watch_id,ip,expires_at) SELECT id,?,? FROM dns_watches WHERE entry_group_id=? ON CONFLICT(watch_id,ip) DO UPDATE SET expires_at=max(expires_at,excluded.expires_at)`, a.OldValue, now.Add(time.Duration(a.OldTTL)*time.Second).UnixNano(), a.GroupID)
+	_, err := tx.ExecContext(ctx, `INSERT INTO entry_dns_previous(watch_id,ip,expires_at) SELECT id,?,? FROM dns_watches WHERE entry_group_id=? AND ?<>'' ON CONFLICT(watch_id,ip) DO UPDATE SET expires_at=max(expires_at,excluded.expires_at)`, a.OldValue, now.Add(time.Duration(a.OldTTL)*time.Second).UnixNano(), a.GroupID, a.OldValue)
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `UPDATE dns_watches SET propagation_status='传播中',observation_deadline=?,next_sample_at=? WHERE entry_group_id=? AND expected_version=?`, now.Add(window).UnixNano(), now.UnixNano(), a.GroupID, a.Version)
 	}

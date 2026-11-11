@@ -26,6 +26,7 @@ type managedRecord struct {
 	Domain            string   `json:"domain"`
 	RecordID          string   `json:"record_id"`
 	Name              string   `json:"name"`
+	Type              string   `json:"type"`
 	Hostname          string   `json:"hostname"`
 	Line              string   `json:"line"`
 	LineID            string   `json:"line_id"`
@@ -36,19 +37,16 @@ type managedRecord struct {
 	Created bool `json:"created,omitempty"`
 }
 
-const managedColumns = `coalesce(group_id,''),account_id,provider,domain,record_id,name,line,line_id,current_value,current_ttl,warnings,id,owner_kind,coalesce(node_id,''),binding_generation,current_enabled`
+const managedColumns = `coalesce(group_id,''),account_id,provider,domain,record_id,name,line,line_id,current_value,current_ttl,warnings,id,owner_kind,coalesce(node_id,''),binding_generation,current_enabled,record_type`
 
 func scanManaged(row scanner) (managedRecord, error) {
 	var b managedRecord
 	var warnings string
-	err := row.Scan(&b.GroupID, &b.AccountID, &b.Provider, &b.Domain, &b.RecordID, &b.Name, &b.Line, &b.LineID, &b.CurrentValue, &b.CurrentTTL, &warnings, &b.ID, &b.OwnerKind, &b.NodeID, &b.BindingGeneration, &b.CurrentEnabled)
+	err := row.Scan(&b.GroupID, &b.AccountID, &b.Provider, &b.Domain, &b.RecordID, &b.Name, &b.Line, &b.LineID, &b.CurrentValue, &b.CurrentTTL, &warnings, &b.ID, &b.OwnerKind, &b.NodeID, &b.BindingGeneration, &b.CurrentEnabled, &b.Type)
 	if err == nil {
 		err = json.Unmarshal([]byte(warnings), &b.Warnings)
 	}
-	b.Hostname = b.Domain
-	if b.Name != "@" && b.Name != "" {
-		b.Hostname = b.Name + "." + b.Domain
-	}
+	b.Hostname = recordHostname(b.Name, b.Domain)
 	return b, err
 }
 func (p *Panel) loadManaged(ctx context.Context, gid string) (managedRecord, error) {
@@ -66,10 +64,23 @@ func (p *Panel) getManagedRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	respond(w, 200, b)
 }
+// recordWarnings 校验记录可受管：A 记录须是 IPv4，CNAME 须是合法域名且同名同线路没有其他记录。
+// 记录类型是否与绑定一致由调用方另行比较。
 func recordWarnings(result dnsprovider.ReadResult, expectedID, lineID string) ([]string, error) {
 	r := result.Record
-	if r.ID != expectedID || r.Type != "A" || r.Proxied || r.LineID != lineID || r.LineID == "" || r.TTL < 1 {
-		return nil, errors.New("仅支持 DNS-only A 记录和已确认的单一线路")
+	if r.ID != expectedID || (r.Type != "A" && r.Type != "CNAME") || r.Proxied || r.LineID != lineID || r.LineID == "" || r.TTL < 1 {
+		return nil, errors.New("仅支持 DNS-only A/CNAME 记录和已确认的单一线路")
+	}
+	if r.Type == "CNAME" {
+		if err := forwarding.ValidateTarget(strings.TrimSuffix(r.Value, "."), false); err != nil {
+			return nil, errors.New("CNAME 记录值不是有效域名")
+		}
+		for _, other := range result.Related {
+			if other.Name == r.Name && other.ID != r.ID && other.LineID == r.LineID {
+				return nil, errors.New("CNAME 记录与同名同线路的其他记录（" + other.Type + " " + other.ID + "）共存，请先在 DNSPod 处理")
+			}
+		}
+		return []string{}, nil
 	}
 	if ip, err := netip.ParseAddr(r.Value); err != nil || !ip.Is4() {
 		return nil, errors.New("受管记录当前值不是 IPv4")
@@ -117,7 +128,7 @@ func (p *Panel) bindManagedRecord(w http.ResponseWriter, r *http.Request) {
 		problem(w, 409, "已开始发布的入口组不能重新绑定受管记录")
 		return
 	}
-	resolved, ok := p.resolveRecordTarget(w, r, body, recordTargetRules{initial: p.preferredInitialIPv4(r.PathValue("id"))})
+	resolved, ok := p.resolveRecordTarget(w, r, body, recordTargetRules{initial: p.preferredInitialIPv4(r.PathValue("id")), cname: p.preferredCNAMETarget(r.PathValue("id"))})
 	if !ok {
 		return
 	}
@@ -151,7 +162,7 @@ func (p *Panel) bindManagedRecord(w http.ResponseWriter, r *http.Request) {
 		problem(w, 409, "已开始发布的入口组不能重新绑定受管记录")
 		return
 	}
-	_, err = p.bindRecordTx(r.Context(), tx, managedRecord{OwnerKind: "group", GroupID: r.PathValue("id"), AccountID: body.AccountID, Provider: "dnspod", Domain: domain, RecordID: result.Record.ID, Name: result.Record.Name, Line: result.Record.Line, LineID: result.Record.LineID, CurrentValue: result.Record.Value, CurrentTTL: result.Record.TTL, CurrentEnabled: result.Record.Enabled, Warnings: warnings})
+	_, err = p.bindRecordTx(r.Context(), tx, managedRecord{OwnerKind: "group", GroupID: r.PathValue("id"), AccountID: body.AccountID, Provider: "dnspod", Domain: domain, RecordID: result.Record.ID, Name: result.Record.Name, Type: result.Record.Type, Line: result.Record.Line, LineID: result.Record.LineID, CurrentValue: result.Record.Value, CurrentTTL: result.Record.TTL, CurrentEnabled: result.Record.Enabled, Warnings: warnings})
 	if err == nil {
 		err = p.bindEntryDomainWatch(r.Context(), tx, r.PathValue("id"))
 	}

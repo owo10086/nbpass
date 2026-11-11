@@ -61,6 +61,10 @@ func (p *Panel) bindNodeManagedRecord(w http.ResponseWriter, r *http.Request) {
 		problem(w, 409, "该受管记录有未完成动作，不能更换")
 		return
 	}
+	if err := protectActiveCNAMENode(r.Context(), p.db, r.PathValue("id")); err != nil {
+		p.nodeRecordError(w, err)
+		return
+	}
 	resolved, ok := p.resolveRecordTarget(w, r, body, recordTargetRules{initial: p.nodeInitialIPv4(r.PathValue("id"))})
 	if !ok {
 		return
@@ -78,6 +82,9 @@ func (p *Panel) bindNodeManagedRecord(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 	var nodeID string
 	err = tx.QueryRowContext(r.Context(), "SELECT id FROM nodes WHERE id=?", r.PathValue("id")).Scan(&nodeID)
+	if err == nil {
+		err = protectActiveCNAMENode(r.Context(), tx, nodeID)
+	}
 	var b managedRecord
 	if err == nil {
 		b, err = p.bindRecordTx(r.Context(), tx, managedRecord{OwnerKind: "node", NodeID: nodeID, AccountID: body.AccountID, Provider: "dnspod", Domain: domain, RecordID: result.Record.ID, Name: result.Record.Name, Line: result.Record.Line, LineID: result.Record.LineID, CurrentValue: result.Record.Value, CurrentTTL: result.Record.TTL, CurrentEnabled: result.Record.Enabled, Warnings: warnings})
@@ -114,6 +121,9 @@ func (p *Panel) unbindNodeManagedRecord(w http.ResponseWriter, r *http.Request) 
 	defer tx.Rollback()
 	var id, warning string
 	err = tx.QueryRowContext(r.Context(), "SELECT id FROM managed_records WHERE owner_kind='node' AND node_id=?", r.PathValue("id")).Scan(&id)
+	if err == nil {
+		err = protectActiveCNAMENode(r.Context(), tx, r.PathValue("id"))
+	}
 	if err == nil {
 		warning, err = unbindRecordTx(r.Context(), tx, id)
 	}

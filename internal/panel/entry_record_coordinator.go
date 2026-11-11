@@ -87,7 +87,8 @@ func (c *entryCoordinator) executeRecord(a EntryAction, r EntryActionRecord) err
 	if err != nil {
 		return c.recordNote(a, r, "DNSPod 读回失败，等待核对")
 	}
-	if _, err := recordWarnings(actual, r.RecordID, b.LineID); err != nil || actual.Record.Name != b.Name || b.OwnerKind == "group" && !actual.Record.Enabled && !r.explicitEnable {
+	r.cname = b.Type == "CNAME"
+	if _, err := recordWarnings(actual, r.RecordID, b.LineID); err != nil || actual.Record.Type != b.Type || actual.Record.Name != b.Name || b.OwnerKind == "group" && !actual.Record.Enabled && !r.explicitEnable {
 		return c.recordNote(a, r, "受管记录类型、名称、启用状态或线路变化，等待人工核对")
 	}
 	if r.preserveEnabled {
@@ -223,7 +224,8 @@ func (c *entryCoordinator) markRecordWriting(a EntryAction, r EntryActionRecord)
 	if !current {
 		return errors.New("期望版本已变化，等待重新核对")
 	}
-	if err := missingResult(tx.ExecContext(c.ctx, `UPDATE entry_actions SET old_value=CASE WHEN write_started=0 THEN ? ELSE old_value END,old_ttl=CASE WHEN write_started=0 THEN ? ELSE old_ttl END,write_started=1,last_error='' WHERE id=? AND version=? AND stage NOT IN `+terminalActionStages, r.OldValue, r.OldTTL, a.ID, a.Version)); err != nil {
+	// CNAME 组的动作旧值是提交时的活动入口地址，不用记录旧值（域名）覆盖。
+	if err := missingResult(tx.ExecContext(c.ctx, `UPDATE entry_actions SET old_value=CASE WHEN write_started=0 AND NOT ? THEN ? ELSE old_value END,old_ttl=CASE WHEN write_started=0 THEN ? ELSE old_ttl END,write_started=1,last_error='' WHERE id=? AND version=? AND stage NOT IN `+terminalActionStages, r.cname, r.OldValue, r.OldTTL, a.ID, a.Version)); err != nil {
 		return err
 	}
 	err = missingResult(tx.ExecContext(c.ctx, `UPDATE entry_action_records SET old_value=?,old_ttl=?,old_enabled=?,write_started=1,status_started=?,new_enabled=?,last_error='' WHERE action_id=? AND managed_record_id=? AND binding_generation=? AND stage IN `+pendingRecordStages+` AND EXISTS(SELECT 1 FROM managed_records m WHERE m.id=managed_record_id AND m.binding_generation=entry_action_records.binding_generation AND m.provider=entry_action_records.provider AND m.domain=entry_action_records.domain AND m.record_id=entry_action_records.record_id)`, r.OldValue, r.OldTTL, r.OldEnabled, r.statusStarted, r.NewEnabled, a.ID, r.ManagedRecordID, r.BindingGeneration))

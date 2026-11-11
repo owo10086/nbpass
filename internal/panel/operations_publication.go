@@ -11,7 +11,8 @@ func attachOperationPublications(ctx context.Context, tx *sql.Tx, view *operatio
 	for i := range view.Groups {
 		groups[view.Groups[i].ID] = &view.Groups[i]
 	}
-	err := operationRows(ctx, tx, `SELECT g.id,COALESCE(s.active_node_id,''),COALESCE(s.desired_version,0),COALESCE(s.expected_value,''),COALESCE(m.current_value,''),COALESCE(a.stage,'未发布'),COALESCE(w.propagation_status,''),COALESCE(w.id,''),m.group_id,COALESCE(c.node_id,''),c.written_at FROM entry_groups g LEFT JOIN entry_publications s ON s.group_id=g.id LEFT JOIN managed_records m ON m.group_id=g.id LEFT JOIN entry_actions a ON a.id=s.current_action_id LEFT JOIN dns_watches w ON w.entry_group_id=g.id LEFT JOIN entry_actions c ON c.id=(SELECT id FROM entry_actions WHERE group_id=g.id AND written_at IS NOT NULL AND new_value=m.current_value ORDER BY version DESC LIMIT 1)`, func(rows *sql.Rows) error {
+	// 按记录实际写入值找最近确认的入口，CNAME 组的记录值是节点记录域名。
+	err := operationRows(ctx, tx, `SELECT g.id,COALESCE(s.active_node_id,''),COALESCE(s.desired_version,0),COALESCE(s.expected_value,''),COALESCE(m.current_value,''),COALESCE(a.stage,'未发布'),COALESCE(w.propagation_status,''),COALESCE(w.id,''),m.group_id,COALESCE(c.node_id,''),c.written_at FROM entry_groups g LEFT JOIN entry_publications s ON s.group_id=g.id LEFT JOIN managed_records m ON m.group_id=g.id LEFT JOIN entry_actions a ON a.id=s.current_action_id LEFT JOIN dns_watches w ON w.entry_group_id=g.id LEFT JOIN entry_actions c ON c.id=(SELECT x.id FROM entry_actions x JOIN entry_action_records r ON r.action_id=x.id AND r.managed_record_id=m.id WHERE x.group_id=g.id AND x.written_at IS NOT NULL AND r.new_value=m.current_value ORDER BY x.version DESC LIMIT 1)`, func(rows *sql.Rows) error {
 		var id string
 		var g operationGroup
 		var bound sql.NullString

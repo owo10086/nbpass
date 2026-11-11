@@ -31,6 +31,9 @@ func (p *Panel) switchEntryGroup(w http.ResponseWriter, r *http.Request) {
 		problem(w, 400, "请指定期望版本并确认所选入口的公网 IPv4 可直接入站")
 		return
 	}
+	if !p.fillCNAMEAddress(w, r, body.ActiveNodeID, &body.IPv4) {
+		return
+	}
 	a, err := p.SubmitEntryAction(r.Context(), EntryActionRequest{
 		GroupID: r.PathValue("id"), NodeID: body.ActiveNodeID, IPv4: body.IPv4,
 		Kind: "manual_switch", ExpectedVersion: *body.ExpectedVersion,

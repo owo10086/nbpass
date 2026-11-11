@@ -220,3 +220,29 @@ func TestDNSPodWriteCanChangeRecordType(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDNSPodCNAMEValueIsNormalized(t *testing.T) {
+	service := tc3Server(t, func(action string, body map[string]any) map[string]any {
+		switch action {
+		case "ModifyRecord":
+			if body["RecordType"] != "CNAME" || body["Value"] != "hk1.example.com." {
+				t.Errorf("CNAME 写入须带末尾点：%v", body)
+			}
+			return map[string]any{"RecordId": 100}
+		case "DescribeRecordList":
+			return map[string]any{"RecordCountInfo": map[string]any{"TotalCount": 1}, "RecordList": []any{
+				map[string]any{"RecordId": 100, "Name": "app", "Type": "CNAME", "Line": "默认", "LineId": "0", "Value": "HK1.example.com.", "TTL": 60, "Status": "ENABLE"},
+			}}
+		}
+		return nil
+	})
+	defer service.Close()
+	d := DNSPod{URL: service.URL, Client: service.Client()}
+	if err := d.WriteRecord(context.Background(), testAuth, Key{"example.com", "100"}, Record{ID: "100", Name: "app", Type: "CNAME", Line: "默认", LineID: "0", Value: "hk1.example.com", TTL: 60, Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	records, err := d.FindRecords(context.Background(), testAuth, "example.com", "app")
+	if err != nil || len(records) != 1 || records[0].Value != "hk1.example.com" {
+		t.Fatalf("CNAME 读回未归一：%+v %v", records, err)
+	}
+}

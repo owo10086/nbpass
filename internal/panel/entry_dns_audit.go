@@ -81,13 +81,19 @@ func (p *Panel) auditEntryDNS(ctx context.Context) {
 		actual, e := p.deps.DNSProvider.ReadRecord(query, credential.provider(), dnsprovider.Key{Domain: b.Domain, RecordID: b.RecordID})
 		cancel()
 		if e == nil {
-			if _, e = recordWarnings(actual, b.RecordID, b.LineID); e != nil || actual.Record.Name != b.Name || !actual.Record.Enabled {
+			want := a.ip
+			if b.Type == "CNAME" {
+				want, e = cnameTarget(ctx, p.db, a.node, a.ip, false)
+			}
+			if e != nil {
+				message = "CNAME 组活动入口的节点记录不可用，等待人工核对"
+			} else if _, e = recordWarnings(actual, b.RecordID, b.LineID); e != nil || actual.Record.Type != b.Type || actual.Record.Name != b.Name || !actual.Record.Enabled {
 				message = "主备受管记录的类型、名称、启用状态或线路变化，等待人工核对"
 			} else {
 				message = ""
 				// 先存最新读回值；动作提交仍按当前版本核对，迟到核对不能改新期望。
 				_, e = p.db.ExecContext(ctx, `UPDATE managed_records SET current_value=?,current_ttl=?,current_enabled=? WHERE id=? AND binding_generation=? AND EXISTS(SELECT 1 FROM entry_publications WHERE group_id=? AND desired_version=? AND written_at IS NOT NULL)`, actual.Record.Value, actual.Record.TTL, actual.Record.Enabled, b.ID, b.BindingGeneration, a.group, a.version)
-				if e == nil && actual.Record.Value != a.ip {
+				if e == nil && actual.Record.Value != want {
 					_, e = p.SubmitEntryAction(ctx, EntryActionRequest{GroupID: a.group, NodeID: a.node, IPv4: a.ip, Kind: "writeback", ExpectedVersion: a.version})
 				}
 				if e != nil {

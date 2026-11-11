@@ -18,7 +18,10 @@ func (p *Panel) bindRecordTx(ctx context.Context, tx *sql.Tx, b managedRecord) (
 	if err != nil {
 		return b, err
 	}
-	if b.Provider != "dnspod" || b.RecordID == "" || b.LineID == "" {
+	if b.Type == "" {
+		b.Type = "A"
+	}
+	if b.Provider != "dnspod" || b.RecordID == "" || b.LineID == "" || (b.Type != "A" && (b.Type != "CNAME" || b.OwnerKind != "group")) {
 		return b, &forwardingError{400, "受管记录身份无效"}
 	}
 	var valid bool
@@ -70,11 +73,11 @@ func (p *Panel) bindRecordTx(ctx context.Context, tx *sql.Tx, b managedRecord) (
 		}
 	}
 	data, _ := json.Marshal(b.Warnings)
-	_, err = tx.ExecContext(ctx, `INSERT INTO managed_records(id,owner_kind,group_id,node_id,account_id,provider,domain,record_id,name,line,line_id,current_value,current_ttl,current_enabled,warnings)
- VALUES(?,?,nullif(?,''),nullif(?,''),?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
- account_id=excluded.account_id,provider=excluded.provider,domain=excluded.domain,record_id=excluded.record_id,name=excluded.name,line=excluded.line,line_id=excluded.line_id,
+	_, err = tx.ExecContext(ctx, `INSERT INTO managed_records(id,owner_kind,group_id,node_id,account_id,provider,domain,record_id,name,line,line_id,current_value,current_ttl,current_enabled,warnings,record_type)
+ VALUES(?,?,nullif(?,''),nullif(?,''),?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET
+ account_id=excluded.account_id,record_type=excluded.record_type,provider=excluded.provider,domain=excluded.domain,record_id=excluded.record_id,name=excluded.name,line=excluded.line,line_id=excluded.line_id,
  current_value=excluded.current_value,current_ttl=excluded.current_ttl,current_enabled=excluded.current_enabled,warnings=excluded.warnings,binding_generation=managed_records.binding_generation+1`,
-		b.ID, b.OwnerKind, b.GroupID, b.NodeID, b.AccountID, b.Provider, b.Domain, b.RecordID, b.Name, b.Line, b.LineID, b.CurrentValue, b.CurrentTTL, b.CurrentEnabled, string(data))
+		b.ID, b.OwnerKind, b.GroupID, b.NodeID, b.AccountID, b.Provider, b.Domain, b.RecordID, b.Name, b.Line, b.LineID, b.CurrentValue, b.CurrentTTL, b.CurrentEnabled, string(data), b.Type)
 	if err != nil {
 		return b, err
 	}

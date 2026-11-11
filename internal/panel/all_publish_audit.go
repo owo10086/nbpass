@@ -60,7 +60,7 @@ func (p *Panel) auditAllGroup(ctx context.Context, g string, v int64) {
 			message = "DNSPod 成员记录核对失败，等待下轮核对"
 			break
 		}
-		if _, e = recordWarnings(actual, b.RecordID, b.LineID); e != nil || actual.Record.Name != b.Name {
+		if _, e = recordWarnings(actual, b.RecordID, b.LineID); e != nil || actual.Record.Type != b.Type || actual.Record.Name != b.Name {
 			message = "成员受管记录的类型、名称或线路变化，等待人工核对"
 			break
 		}

@@ -8,7 +8,8 @@ export type EntrySwitchState = {
   auto_failback_status: string;
 };
 
-export function EntrySwitch({ path, members, nodes, publication, saving, setSaving, onStart, onChanged, onError }: {
+export function EntrySwitch({ cname, path, members, nodes, publication, saving, setSaving, onStart, onChanged, onError }: {
+  cname?: boolean;
   path: string;
   members: string[];
   nodes: { id: string; name: string }[];
@@ -45,7 +46,9 @@ export function EntrySwitch({ path, members, nodes, publication, saving, setSavi
       <Form.Item name="active_node_id" label="切换到" rules={[{ required: true, message: '请选择目标成员' }]}>
         <Select options={members.map(id => ({ value: id, label: `${nodes.find(n => n.id === id)?.name ?? id}${publication.preferred_node_id === id ? '（首选入口）' : ''}` }))} />
       </Form.Item>
-      <Form.Item name="ipv4" label="该成员可入站的公网 IPv4" rules={[{ required: true, message: '请输入并核对入站地址' }]}><Input maxLength={15} placeholder="例如 1.1.1.1" /></Form.Item>
+      {cname
+        ? <Form.Item name="ipv4" label="期望解析 IPv4" extra="可留空：取目标成员节点记录当前的地址。CNAME 改指向该节点记录，它须已首次发布、启用且地址一致。"><Input maxLength={15} placeholder="留空自动取节点记录地址" /></Form.Item>
+        : <Form.Item name="ipv4" label="该成员可入站的公网 IPv4" rules={[{ required: true, message: '请输入并核对入站地址' }]}><Input maxLength={15} placeholder="例如 1.1.1.1" /></Form.Item>}
       <Form.Item name="confirm_inbound" valuePropName="checked" rules={[{ validator: (_, v) => v ? Promise.resolve() : Promise.reject(new Error('请确认成员与入站地址')) }]}>
         <Checkbox>我确认该 IPv4 属于所选成员且可直接接收业务连接，同意替换受管记录。</Checkbox>
       </Form.Item>

@@ -158,6 +158,16 @@ func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryAc
 	if err := entryActionPolicy(ctx, tx, req); err != nil {
 		return a, err
 	}
+	// CNAME 组记录写节点记录域名；动作与期望仍以活动入口地址表示，解析监控沿 CNAME 落到这个地址。
+	recordValue := a.NewValue
+	if b.Type == "CNAME" {
+		if recordValue, err = cnameTarget(ctx, tx, req.NodeID, ip, strictCNAMEKind(req.Kind)); err != nil {
+			return a, err
+		}
+		if err = tx.QueryRowContext(ctx, "SELECT coalesce((SELECT expected_value FROM entry_publications WHERE group_id=?),'')", req.GroupID).Scan(&a.OldValue); err != nil {
+			return a, err
+		}
+	}
 	if observed, err := p.observePrimaryTx(ctx, tx, req); err != nil || observed {
 		a.Stage = entryObserved
 		return a, err
@@ -171,7 +181,7 @@ func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryAc
 	_, err = tx.ExecContext(ctx, `INSERT INTO entry_actions(id,group_id,version,kind,node_id,old_value,new_value,old_ttl,stage,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, a.ID, a.GroupID, a.Version, a.Kind, a.NodeID, a.OldValue, a.NewValue, a.OldTTL, a.Stage, a.CreatedAt.UnixNano())
 	if err == nil {
 		// 面板新建或改类型接管的记录是暂停的，首次发布须走明确的启用步骤。
-		err = insertActionRecord(ctx, tx, a.ID, b, ManagedRecordChange{ManagedRecordID: b.ID, BindingGeneration: b.BindingGeneration, Value: a.NewValue, Enabled: true, ExplicitEnable: req.Kind == "first_publish" && !b.CurrentEnabled})
+		err = insertActionRecord(ctx, tx, a.ID, b, ManagedRecordChange{ManagedRecordID: b.ID, BindingGeneration: b.BindingGeneration, Value: recordValue, Enabled: true, ExplicitEnable: req.Kind == "first_publish" && !b.CurrentEnabled})
 	}
 	if err == nil {
 		err = carryStrategyThreeVersion(ctx, tx, req, a.Version)

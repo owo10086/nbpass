@@ -9,7 +9,7 @@ import { EntrySwitch, type EntrySwitchState } from './EntrySwitch';
 import { EntryDomainWatch } from './EntryDomainWatch';
 
 type Account = { id: string; name: string; configured: boolean };
-type Binding = { account_id: string; domain: string; record_id: string; line_id: string; line: string; hostname: string; current_value: string; current_ttl: number; warnings: string[] };
+type Binding = { account_id: string; domain: string; record_id: string; type: 'A' | 'CNAME'; line_id: string; line: string; hostname: string; current_value: string; current_ttl: number; warnings: string[] };
 type Action = { id: string; stage: string; old_value: string; new_value: string; old_ttl: number; last_error: string };
 type Publication = EntrySwitchState & { active_node_id: string; expected_value: string; written_at: string | null; action: Action | null };
 
@@ -120,10 +120,10 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
         </Form>
         <Typography.Paragraph style={{ marginTop: 12 }}>首选入口：{nodes.find(n => n.id === publication?.preferred_node_id)?.name ?? publication?.preferred_node_id ?? '加载中'}</Typography.Paragraph>
       </Card>
-      <Alert type="info" showIcon title="绑定后先核对当前记录，再由你明确选择活动入口并首次发布。" description="只管理这一条单线路 A 记录，发布 TTL 为 60 秒。面板新建的记录先暂停，首次发布时写入地址并启用。" />
+      <Alert type="info" showIcon title="绑定后先核对当前记录，再由你明确选择活动入口并首次发布。" description="只管理这一条单线路 A 或 CNAME 记录，发布 TTL 为 60 秒。A 记录写活动入口地址；CNAME 指向活动入口的节点记录域名。面板新建的记录先暂停，首次发布时写入并启用。" />
       <Card title="DNSPod 受管记录" loading={loading} extra={!started && <Button onClick={() => setAddingAccount(true)}>添加 DNSPod 账号</Button>}>
         {!started && <Form form={bindingForm} layout="vertical" onFinish={binder.bind} onValuesChange={() => { bindingDirty.current = true; }}>
-          <DNSRecordPicker accounts={accounts} onError={failed} />
+          <DNSRecordPicker accounts={accounts} onError={failed} allowCNAME />
           <Button type="primary" htmlType="submit" loading={saving}>绑定记录</Button>
         </Form>}
         {binder.chooser}
@@ -131,7 +131,7 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
           <Descriptions column={1} size="small" style={{ marginTop: 16 }} items={[
             { key: 'hostname', label: '域名', children: binding.hostname },
             { key: 'account', label: '账号', children: accounts.find(a => a.id === binding.account_id)?.name ?? binding.account_id },
-            { key: 'record', label: '受管记录', children: `${binding.record_id} · A · ${binding.line}（${binding.line_id}）` },
+            { key: 'record', label: '受管记录', children: `${binding.record_id} · ${binding.type} · ${binding.line}（${binding.line_id}）` },
             { key: 'value', label: '服务商最近确认值', children: `${binding.current_value} · TTL ${binding.current_ttl} 秒` },
           ]} />
           {binding.warnings.map((warning, i) => <Alert key={i} type="warning" showIcon title={warning} style={{ marginTop: 8 }} />)}
@@ -140,12 +140,14 @@ export function ManagedDNS({ group, nodes, onClose, onSessionExpired }: {
       {binding && !started && <Card title="首次发布">
         <Form form={publishForm} layout="vertical" onFinish={publish}>
           <Form.Item name="active_node_id" label="活动入口" rules={[{ required: true, message: '请明确选择活动入口' }]}><Select placeholder="选择要发布的成员" options={members.map(id => ({ value: id, label: nodes.find(n => n.id === id)?.name ?? id }))} /></Form.Item>
-          <Form.Item name="ipv4" label="发布 IPv4" rules={[{ required: true, message: '请输入该入口可入站的公网 IPv4' }]}><Input placeholder="例如 8.8.8.8" maxLength={15} /></Form.Item>
+          {binding.type === 'CNAME'
+            ? <Form.Item name="ipv4" label="期望解析 IPv4" extra="可留空：取活动入口节点记录当前的地址。CNAME 会指向该节点记录，它须已首次发布、启用且地址一致。"><Input placeholder="留空自动取节点记录地址" maxLength={15} /></Form.Item>
+            : <Form.Item name="ipv4" label="发布 IPv4" rules={[{ required: true, message: '请输入该入口可入站的公网 IPv4' }]}><Input placeholder="例如 8.8.8.8" maxLength={15} /></Form.Item>}
           <Form.Item name="confirm_inbound" valuePropName="checked" rules={[{ validator: (_, value) => value ? Promise.resolve() : Promise.reject(new Error('请确认活动入口与入站地址')) }]}><Checkbox>我确认该 IPv4 属于所选活动入口，可直接接收业务连接，并确认替换受管记录当前值。</Checkbox></Form.Item>
           <Button type="primary" htmlType="submit" loading={saving}>确认并首次发布</Button>
         </Form>
       </Card>}
-      {started && publication && <EntrySwitch path={path} members={members} nodes={nodes} publication={publication} saving={saving} setSaving={setSaving} onStart={() => setError('')} onChanged={load} onError={failed} />}
+      {started && publication && <EntrySwitch cname={binding?.type === 'CNAME'} path={path} members={members} nodes={nodes} publication={publication} saving={saving} setSaving={setSaving} onStart={() => setError('')} onChanged={load} onError={failed} />}
       {started && <Card title="发布进度" extra={<Button onClick={() => void load()}>刷新</Button>}>
         <Descriptions column={1} size="small" items={[
           { key: 'version', label: '期望版本', children: publication?.desired_version },

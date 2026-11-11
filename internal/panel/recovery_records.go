@@ -129,7 +129,7 @@ func (p *Panel) reconcileRecoveryRecord(ctx context.Context, b managedRecord) er
 	if err != nil {
 		return p.noteRecoveryRecord(ctx, b, errors.New("DNSPod 读回失败，自动写继续暂停"))
 	}
-	if _, err := recordWarnings(actual, b.RecordID, b.LineID); err != nil || actual.Record.Name != b.Name || b.OwnerKind == "group" && !actual.Record.Enabled && b.CurrentEnabled {
+	if _, err := recordWarnings(actual, b.RecordID, b.LineID); err != nil || actual.Record.Type != b.Type || actual.Record.Name != b.Name || b.OwnerKind == "group" && !actual.Record.Enabled && b.CurrentEnabled {
 		return p.noteRecoveryRecord(ctx, b, errors.New("受管记录身份、线路、类型或启用状态无法核对"))
 	}
 	tx, err := p.db.BeginTx(ctx, nil)

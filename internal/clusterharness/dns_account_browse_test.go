@@ -8,7 +8,7 @@ import (
 	"nbpass/internal/dnsprovider"
 )
 
-// 挑选记录只读：列出域名与 A 记录，标出绑定会被拒绝的原因和已有归属，不写 DNS。
+// 挑选记录只读：列出域名与 A/CNAME 记录，标出绑定会被拒绝的原因和已有归属，不写 DNS。
 func TestDNSAccountBrowseListsDomainsAndBindableRecords(t *testing.T) {
 	h, c, fake, account, gid := dnsBrowser(t)
 	fake.Set("example.com", dnsprovider.Record{ID: "101", Name: "entry", Type: "AAAA", Line: "默认", LineID: "0", Value: "2001:db8::1", TTL: 300, Enabled: true})
@@ -30,8 +30,8 @@ func TestDNSAccountBrowseListsDomainsAndBindableRecords(t *testing.T) {
 		r := row.(map[string]any)
 		records[r["id"].(string)] = r
 	}
-	if len(records) != 4 || records["101"] != nil || records["400"] != nil {
-		t.Fatalf("只应列出 A 记录：%v", records)
+	if len(records) != 5 || records["101"] != nil || records["400"]["type"] != "CNAME" || records["400"]["reason"] != "" {
+		t.Fatalf("只应列出 A 与 CNAME 记录：%v", records)
 	}
 	entry := records["100"]
 	if entry["hostname"] != "entry.example.com" || entry["line_id"] != "0" || entry["value"] != "9.9.9.9" || entry["reason"] != "" || entry["owner"] != "入口组 入口组 A" {

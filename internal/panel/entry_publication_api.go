@@ -26,6 +26,9 @@ func (p *Panel) publishEntryGroup(w http.ResponseWriter, r *http.Request) {
 		p.publishAllGroup(w, r, body.MemberIPv4)
 		return
 	}
+	if !p.fillCNAMEAddress(w, r, body.ActiveNodeID, &body.IPv4) {
+		return
+	}
 	a, err := p.SubmitEntryAction(r.Context(), EntryActionRequest{GroupID: r.PathValue("id"), NodeID: body.ActiveNodeID, IPv4: body.IPv4, Kind: "first_publish", ExpectedVersion: 0})
 	if err != nil {
 		var api *forwardingError

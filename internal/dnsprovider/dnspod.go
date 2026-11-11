@@ -93,6 +93,10 @@ func podValues(id uint64, name, kind, line, lineID, value string, ttl int, enabl
 	if lineID == "" && (line == "默认" || line == "default") {
 		lineID = "0"
 	}
+	// CNAME 值统一为小写、不带末尾点的完整域名，写入时再补点。
+	if kind == "CNAME" {
+		value = strings.ToLower(strings.TrimSuffix(value, "."))
+	}
 	return Record{ID: strconv.FormatUint(id, 10), Name: name, Type: kind, Line: line, LineID: lineID, Value: value, TTL: ttl, Enabled: enabled}, nil
 }
 
@@ -330,6 +334,14 @@ func (d DNSPod) FindRecords(ctx context.Context, auth Credentials, domain, name 
 	return records, nil
 }
 
+// wireValue 是写给 DNSPod 的记录值；CNAME 以完整域名的末尾点结束。
+func wireValue(r Record) string {
+	if r.Type == "CNAME" {
+		return strings.TrimSuffix(r.Value, ".") + "."
+	}
+	return r.Value
+}
+
 // writableType 是面板允许写入的记录类型。
 func writableType(r Record) bool {
 	return (r.Type == "A" || r.Type == "CNAME") && !r.Proxied && r.Name != "" && r.Line != "" && r.LineID != "" && r.TTL > 0
@@ -342,7 +354,7 @@ func (d DNSPod) CreateRecord(ctx context.Context, auth Credentials, domain strin
 	var created struct {
 		RecordID uint64 `json:"RecordId"`
 	}
-	if err := d.call(ctx, auth, "CreateRecord", map[string]any{"Domain": domain, "SubDomain": r.Name, "RecordType": r.Type, "RecordLine": r.Line, "RecordLineId": r.LineID, "Value": r.Value, "TTL": r.TTL, "Status": recordStatus(r.Enabled)}, &created); err != nil {
+	if err := d.call(ctx, auth, "CreateRecord", map[string]any{"Domain": domain, "SubDomain": r.Name, "RecordType": r.Type, "RecordLine": r.Line, "RecordLineId": r.LineID, "Value": wireValue(r), "TTL": r.TTL, "Status": recordStatus(r.Enabled)}, &created); err != nil {
 		return "", err
 	}
 	if created.RecordID == 0 {
@@ -356,7 +368,7 @@ func (d DNSPod) WriteRecord(ctx context.Context, auth Credentials, key Key, r Re
 	if err != nil || r.ID != key.RecordID || !writableType(r) {
 		return errors.New("DNSPod 写入记录不受支持")
 	}
-	return d.call(ctx, auth, "ModifyRecord", map[string]any{"Domain": key.Domain, "RecordId": id, "SubDomain": r.Name, "RecordType": r.Type, "RecordLine": r.Line, "RecordLineId": r.LineID, "Value": r.Value, "TTL": r.TTL, "Status": recordStatus(r.Enabled)}, nil)
+	return d.call(ctx, auth, "ModifyRecord", map[string]any{"Domain": key.Domain, "RecordId": id, "SubDomain": r.Name, "RecordType": r.Type, "RecordLine": r.Line, "RecordLineId": r.LineID, "Value": wireValue(r), "TTL": r.TTL, "Status": recordStatus(r.Enabled)}, nil)
 }
 
 func recordStatus(enabled bool) string {

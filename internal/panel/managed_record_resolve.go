@@ -26,14 +26,17 @@ type recordTarget struct {
 	Create          bool   `json:"create"`
 }
 
-// recordTargetRules 由各归属给出：line 非空时只接管或新建该线路；initial 给新建与改类型时的初始地址。
+// recordTargetRules 由各归属给出：line 非空时只接管或新建该线路；initial 给新建与改类型时的初始地址；
+// cname 非空表示允许 CNAME，并给出新建与改类型时的初始目标。
 type recordTargetRules struct {
 	line    string
 	initial func(context.Context) (string, error)
+	cname   func(context.Context) (string, error)
 }
 
 type resolvedRecord struct {
 	domain    string
+	kind      string
 	result    dnsprovider.ReadResult
 	warnings  []string
 	created   bool
@@ -82,10 +85,11 @@ func (p *Panel) resolveRecordTarget(w http.ResponseWriter, r *http.Request, body
 	if body.Type == "" {
 		body.Type = "A"
 	}
-	if body.Type != "A" {
-		problem(w, 400, "该绑定只支持 A 记录")
+	if body.Type != "A" && (body.Type != "CNAME" || rules.cname == nil) {
+		problem(w, 400, "该绑定只支持 A 记录；CNAME 只用于主备入口组")
 		return out, false
 	}
+	out.kind = body.Type
 	credentials, err := p.dnsCredential(r.Context(), body.AccountID)
 	if err != nil {
 		problem(w, 400, "DNSPod 账号未配置或凭据不可用")
@@ -123,10 +127,11 @@ func (p *Panel) resolveRecordTarget(w http.ResponseWriter, r *http.Request, body
 	inLine := func(rec dnsprovider.Record) bool { return rules.line == "" || rec.LineID == rules.line }
 	var same, conflicts []dnsprovider.Record
 	for _, rec := range records {
+		// CNAME 与同名的其他记录互斥：选 A 时同名 CNAME 冲突，选 CNAME 时同名其他记录都冲突。
 		switch {
 		case rec.Type == body.Type && inLine(rec):
 			same = append(same, rec)
-		case rec.Type == "CNAME":
+		case rec.Type == "CNAME" || body.Type == "CNAME" && rec.Type != body.Type:
 			conflicts = append(conflicts, rec)
 		}
 	}
@@ -170,6 +175,10 @@ func (p *Panel) resolveRecordTarget(w http.ResponseWriter, r *http.Request, body
 
 func (p *Panel) checkResolved(w http.ResponseWriter, out resolvedRecord, rules recordTargetRules) (resolvedRecord, bool) {
 	rec := out.result.Record
+	if rec.Type != out.kind {
+		problem(w, 400, "所选记录不是 "+out.kind+" 记录")
+		return out, false
+	}
 	if rules.line != "" && rec.LineID != rules.line {
 		problem(w, 400, "成员记录须与组域名同名、同线路")
 		return out, false
@@ -183,7 +192,19 @@ func (p *Panel) checkResolved(w http.ResponseWriter, out resolvedRecord, rules r
 	return out, true
 }
 
-func (p *Panel) initialValue(w http.ResponseWriter, r *http.Request, rules recordTargetRules) (string, bool) {
+func (p *Panel) initialValue(w http.ResponseWriter, r *http.Request, rules recordTargetRules, kind string) (string, bool) {
+	if kind == "CNAME" {
+		value, err := rules.cname(r.Context())
+		if err != nil {
+			problem(w, 503, "无法读取节点记录")
+			return "", false
+		}
+		if value == "" {
+			problem(w, 409, "首选入口还没有绑定节点记录，CNAME 无处可指；请先在节点的“域名与地址”里绑定节点记录")
+			return "", false
+		}
+		return value, true
+	}
 	value, err := rules.initial(r.Context())
 	if _, parseErr := publicip.Parse(value); err == nil && value != "" && parseErr != nil {
 		value = ""
@@ -206,7 +227,7 @@ func (p *Panel) createRecord(w http.ResponseWriter, r *http.Request, out resolve
 		problem(w, 400, "组内成员记录不在默认线路，面板只能在默认线路新建；请先在 DNSPod 建好同线路记录再接管")
 		return out, false
 	}
-	value, ok := p.initialValue(w, r, rules)
+	value, ok := p.initialValue(w, r, rules, kind)
 	if !ok {
 		return out, false
 	}
@@ -253,7 +274,7 @@ func (p *Panel) convertRecord(w http.ResponseWriter, r *http.Request, out resolv
 		problem(w, 400, "成员记录须与组域名同名、同线路")
 		return out, false
 	}
-	value, ok := p.initialValue(w, r, rules)
+	value, ok := p.initialValue(w, r, rules, kind)
 	if !ok {
 		return out, false
 	}
@@ -293,6 +314,26 @@ func (p *Panel) nodeInitialIPv4(nodeID string) func(context.Context) (string, er
 		var address string
 		err := p.db.QueryRowContext(ctx, "SELECT coalesce((SELECT coalesce(nullif(confirmed_ipv4,''),public_ipv4) FROM node_regions WHERE node_id=?),'')", nodeID).Scan(&address)
 		return address, err
+	}
+}
+
+// preferredCNAMETarget 取主备组首选入口的节点记录域名；首选入口没有节点记录时返回空。
+func (p *Panel) preferredCNAMETarget(groupID string) func(context.Context) (string, error) {
+	return func(ctx context.Context) (string, error) {
+		var node string
+		err := p.db.QueryRowContext(ctx, "SELECT node_id FROM entry_group_members WHERE group_id=? ORDER BY position LIMIT 1", groupID).Scan(&node)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		target, err := cnameTarget(ctx, p.db, node, "", false)
+		var missing *forwardingError
+		if errors.As(err, &missing) {
+			return "", nil
+		}
+		return target, err
 	}
 }
 
