@@ -30,12 +30,16 @@ export function useDragOrder<T extends { id: string }>(rows: T[], setRows: (rows
   const [sort, setSort] = useState<{ key?: Key; order?: SortOrder }>({});
   const [dragging, setDragging] = useState<string>();
   const [over, setOver] = useState<string>();
+  const [saving, setSaving] = useState(false);
+  // 写入失败独立保存，成功的定时读取不能把它清除；再次调整时重新确认结果。
+  const [error, setError] = useState('');
   const source = useRef<string>(undefined);
   const busy = useRef(false);
-  const blocked = !!sort.order || !!filtered;
+  const blocked = !!sort.order || !!filtered || saving;
   const index = (id?: string) => rows.findIndex(row => row.id === id);
 
   function start(e: DragEvent<HTMLElement>, id: string) {
+    if (blocked || busy.current) { e.preventDefault(); return; }
     source.current = id; busy.current = true;
     setDragging(id);
     e.dataTransfer.effectAllowed = 'move';
@@ -55,23 +59,29 @@ export function useDragOrder<T extends { id: string }>(rows: T[], setRows: (rows
     source.current = undefined;
     setDragging(undefined); setOver(undefined);
     if (from < 0 || to < 0 || from === to) { busy.current = false; return; }
+    setSaving(true);
+    setError('');
     const next = [...rows];
     next.splice(to, 0, ...next.splice(from, 1));
     setRows(next);
     try { await api(`${path}/order`, 'PUT', { ids: next.map(row => row.id) }); }
-    catch (e) { onError(e); }
-    finally { busy.current = false; }
-    await reload();
+    catch (e) { setError((e as Error).message); onError(e); }
+    finally {
+      try { await reload(); }
+      catch (e) { onError(e); }
+      finally { busy.current = false; setSaving(false); }
+    }
   }
 
   const handle: ColumnType<T> = {
     key: 'drag-handle', width: 36, align: 'center', fixed: 'left',
     render: (_, row) => blocked
-      ? <Tooltip title="清除排序/筛选后可拖动"><HolderOutlined className="drag-handle disabled" /></Tooltip>
+      ? <Tooltip title={saving ? '正在保存顺序，请稍候' : '清除排序/筛选后可拖动'}><HolderOutlined className="drag-handle disabled" /></Tooltip>
       : <span className="drag-handle" draggable aria-label="拖动调整顺序" onDragStart={e => start(e, row.id)} onDragEnd={end}><HolderOutlined /></span>,
   };
 
   return {
+    error,
     handle,
     busy: () => busy.current,
     // 受控列排序：把它展开到可排序列上，key 用来对应当前排序列。

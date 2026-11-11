@@ -95,7 +95,7 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
       <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建转发规则</Button>
     </PageHeader>
-    {error && <Alert title={error} type="error" showIcon className="message" />}
+    {(error || order.error) && <Alert title={error || order.error} type="error" showIcon className="message" />}
     {focus && <Alert title={rows.some(r => r.id === focus) ? '已定位关联规则' : '关联规则已删除或尚未读取'} action={<Button onClick={() => go('rules')}>查看全部规则</Button>} type="info" showIcon className="message" />}
     {(selectedIDs.length > 0 || order.restore) && <div className="toolbar">
       {selectedIDs.length > 0 && <div className="toolbar batch-bar" style={{ marginBottom: 0 }}>

@@ -85,7 +85,7 @@ export function ExitGroups({ onSessionExpired }: { onSessionExpired: () => void 
       <Button onClick={() => configure()}>配置出口</Button>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建出口组</Button>
     </PageHeader>
-    {error && <Alert title={error} type="error" showIcon className="message" />}
+    {(error || order.error) && <Alert title={error || order.error} type="error" showIcon className="message" />}
     {order.restore && <div className="toolbar"><span className="spacer" />{order.restore}</div>}
     <div className="panel"><Table<Group> rowKey="id" dataSource={rows} loading={loading && !rows.length} pagination={false} onChange={order.onChange} onRow={order.onRow} rowClassName={row => order.rowClass(row.id)} scroll={{ x: 716 }} locale={{ emptyText: '暂无出口组，请先配置一个出口节点。' }} columns={[
       order.handle,

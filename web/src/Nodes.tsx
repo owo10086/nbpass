@@ -156,7 +156,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
       <Button icon={<SettingOutlined />} onClick={() => setSelfCheckSettings(true)}>自测设置</Button>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => setAdding(true)}>添加节点</Button>
     </PageHeader>
-    {error && <Alert title={error} type="error" showIcon className="message" />}
+    {(error || order.error) && <Alert title={error || order.error} type="error" showIcon className="message" />}
     <div className="toolbar">
       <Input allowClear prefix={<SearchOutlined style={{ color: 'var(--text-3)' }} />} placeholder="搜索名称或 IP" value={query} onChange={e => setQuery(e.target.value)} style={{ width: 240 }} />
       <Segmented<Filter> value={filter} onChange={setFilter} options={filters.map(f => ({ value: f.value, label: <>{f.label} <span className="num muted">{counts[f.value]}</span></> }))} />

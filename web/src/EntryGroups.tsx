@@ -60,7 +60,7 @@ export function EntryGroups({ focus, onSessionExpired }: { focus?: string; onSes
       <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建入口组</Button>
     </PageHeader>
-    {error && <Alert title={error} type="error" showIcon className="message" />}
+    {(error || order.error) && <Alert title={error || order.error} type="error" showIcon className="message" />}
     {order.restore && <div className="toolbar"><span className="spacer" />{order.restore}</div>}
     <div className="panel"><Table<EntryGroup> rowKey="id" dataSource={rows} loading={!loaded && !error} pagination={false} onChange={order.onChange} onRow={order.onRow} rowClassName={row => `${rowClassName(row.id)} ${order.rowClass(row.id)}`} scroll={{ x: 836 }} locale={{ emptyText: '暂无入口组，请先添加节点，再创建入口组。' }} expandable={{ defaultExpandedRowKeys: focus ? [focus] : [], expandedRowRender: row => <Space orientation="vertical" size="middle" style={{ width: '100%' }}><EntryReadiness members={row.member_states} />{row.publication_mode === 'all' && <MemberRecords members={row.member_records ?? []} nodes={nodes} />}<ObservationDetails group={row.id} onFailure={failed} /><GroupSyncDetails members={row.sync_members} /></Space> }} columns={[
       order.handle,
