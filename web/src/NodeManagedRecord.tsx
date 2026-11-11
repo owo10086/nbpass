@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, App, Button, Card, Descriptions, Form, Input, Modal, Popconfirm, Select, Space, Typography } from 'antd';
+import { Alert, App, Button, Card, Descriptions, Form, Input, Modal, Popconfirm, Space, Typography } from 'antd';
 import { api, APIError } from './api';
+import { DNSRecordPicker } from './DNSRecordPicker';
 
 type Account = { id: string; name: string };
 export type NodeRecord = { account_id: string; domain: string; record_id: string; line_id: string; line: string; hostname: string; current_value: string; current_enabled: boolean; warnings: string[] };
@@ -96,12 +97,9 @@ export function NodeManagedRecord({ node, onClose, onSaved, onError }: { node: N
             <Popconfirm title="解绑后旧 DNSPod 记录保持原状，请自行核对和处理。" onConfirm={unbind}><Button danger disabled={pending} loading={busy}>解绑记录</Button></Popconfirm>
           </Space>
         </>}
-        <Typography.Paragraph type="secondary">可绑定暂停的单线路 A 记录；更换或解绑后，旧记录保持原状。受管域名自动加入解析监控，以确认地址为期望。</Typography.Paragraph>
-        <Form form={form} layout="vertical" initialValues={{ line_id: '0' }} onValuesChange={() => { dirty.current = true; }} onFinish={bind} disabled={busy || pending}>
-          <Form.Item name="account_id" label="DNSPod 账号" rules={[{ required: true, message: '请选择账号' }]}><Select options={accounts.map(a => ({ value: a.id, label: a.name }))} /></Form.Item>
-          <Form.Item name="domain" label="DNSPod 主域名" rules={[{ required: true, whitespace: true, message: '请输入主域名' }]}><Input placeholder="example.com" maxLength={253} /></Form.Item>
-          <Form.Item name="record_id" label="记录 ID" rules={[{ required: true, whitespace: true, message: '请输入记录 ID' }]}><Input maxLength={100} /></Form.Item>
-          <Form.Item name="line_id" label="线路 ID" rules={[{ required: true, message: '请输入单一线路 ID' }]}><Input maxLength={100} /></Form.Item>
+        <Typography.Paragraph type="secondary">更换或解绑后，旧记录保持原状。受管域名自动加入解析监控，以确认地址为期望。</Typography.Paragraph>
+        <Form form={form} layout="vertical" onValuesChange={() => { dirty.current = true; }} onFinish={bind} disabled={busy || pending}>
+          <DNSRecordPicker accounts={accounts} onError={failed} />
           <Button htmlType="submit" loading={busy} disabled={!loaded || pending}>{record ? '更换绑定并读取记录' : '绑定并读取记录'}</Button>
         </Form>
       </Card>

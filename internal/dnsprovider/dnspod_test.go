@@ -59,3 +59,49 @@ func TestDNSPodStatusRejectionIsDefinitiveAndTimeoutIsUnknown(t *testing.T) {
 		t.Fatalf("结果未知被当成明确拒绝：%v", err)
 	}
 }
+
+func TestDNSPodListsPageThroughDomainsAndRecords(t *testing.T) {
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.ParseForm()
+		ok := map[string]string{"code": "1"}
+		switch {
+		case r.URL.Path == "/Domain.List" && r.Form.Get("offset") == "0":
+			json.NewEncoder(w).Encode(map[string]any{"status": ok, "info": map[string]any{"domain_total": "2"}, "domains": []any{map[string]any{"name": "例子.com", "punycode": "xn--fsqu00a.com", "status": "enable"}}})
+		case r.URL.Path == "/Domain.List" && r.Form.Get("offset") == "1":
+			json.NewEncoder(w).Encode(map[string]any{"status": ok, "info": map[string]any{"domain_total": 2}, "domains": []any{map[string]any{"name": "example.com", "status": "pause"}}})
+		case r.URL.Path == "/Record.List" && r.Form.Get("domain") == "example.com" && r.Form.Get("sub_domain") == "":
+			records := []any{
+				map[string]any{"id": 100, "name": "entry", "type": "A", "line": "默认", "line_id": "0", "value": "8.8.8.8", "ttl": "600", "enabled": "1"},
+				map[string]any{"id": 101, "name": "bad", "type": "A", "line": "默认", "line_id": "0", "value": "8.8.4.4", "ttl": "x"},
+			}
+			if r.Form.Get("offset") != "0" {
+				records = []any{map[string]any{"id": 102, "name": "@", "type": "NS", "line": "默认", "line_id": "0", "value": "f1g1ns1.dnspod.net.", "ttl": "86400", "enabled": "0"}}
+			}
+			json.NewEncoder(w).Encode(map[string]any{"status": ok, "info": map[string]any{"record_total": "3"}, "records": records})
+		default:
+			t.Errorf("意外请求 %s %v", r.URL.Path, r.Form)
+			http.Error(w, "unexpected", 400)
+		}
+	}))
+	defer service.Close()
+	d := DNSPod{URL: service.URL, Client: service.Client()}
+	domains, err := d.ListDomains(context.Background(), Credentials{})
+	if err != nil || len(domains) != 2 || domains[0] != (Domain{"xn--fsqu00a.com", "enable"}) || domains[1] != (Domain{"example.com", "pause"}) {
+		t.Fatalf("域名列表 %v %v", domains, err)
+	}
+	records, err := d.ListRecords(context.Background(), Credentials{}, "example.com")
+	if err != nil || len(records) != 2 || records[0].ID != "100" || !records[0].Enabled || records[1].Type != "NS" {
+		t.Fatalf("记录列表 %+v %v", records, err)
+	}
+}
+
+func TestDNSPodListDomainsTreatsNoDomainsAsEmpty(t *testing.T) {
+	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"status": map[string]string{"code": "9"}})
+	}))
+	defer service.Close()
+	domains, err := DNSPod{URL: service.URL, Client: service.Client()}.ListDomains(context.Background(), Credentials{})
+	if err != nil || len(domains) != 0 {
+		t.Fatalf("空账号 %v %v", domains, err)
+	}
+}
