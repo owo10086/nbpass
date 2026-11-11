@@ -1,0 +1,36 @@
+.ports-page .filter-field:first-child > .ant-input-affix-wrapper { width: 220px; }
+.ports-page .filter-field:nth-child(3) > .ant-select,
+.ports-page .filter-field:nth-child(4) > .ant-select { width: 130px; }
+.ports-page .table-card-actions { align-items: center; width: 100%; }
+.ports-selection { margin-right: auto; color: var(--text-2); font-size: var(--font-description); }
+.ports-selection b { color: var(--accent); font-weight: 600; }
+.ports-page .ports-id { font-size: var(--font-small); white-space: nowrap; }
+.ports-name, .ports-target { overflow-wrap: anywhere; }
+.ports-traffic { white-space: nowrap; }
+.ports-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0; white-space: nowrap; }
+.ports-row-actions .ant-btn { padding-inline: 5px; }
+.ports-row-actions .ant-btn-text { color: var(--text-2); }
+.ports-row-actions .ant-btn-text:hover { color: var(--text); }
+.ports-notes { color: var(--text-3); font-size: var(--font-small); line-height: 1.7; }
+.ports-notes p { margin: 4px 0 0; }
+.ports-member-details > p { margin: 0 0 12px; color: var(--text-2); font-size: var(--font-description); }
+.ports-apply-error { white-space: pre-wrap; overflow-wrap: anywhere; }
+.ports-editor .ant-input-number { width: 100%; }
+.ports-editor .ant-form-item-label { padding-right: 12px; }
+.ports-editor .ant-form-item-extra { margin-top: 4px; line-height: 1.6; }
+.ports-editor .ant-form-item-row { flex-wrap: nowrap; }
+.ports-transfer-modal .ports-import-source { width: 100%; }
+.ports-transfer-modal .ports-import-source > * + * { margin-top: 12px; }
+.ports-transfer-modal .table-card { margin-top: 16px; margin-bottom: 0; }
+.ports-transfer-modal .ports-import-error { margin-top: 16px; }
+
+@media (max-width: 640px) {
+  .ports-page .filter-field { flex: 1 1 100%; flex-wrap: nowrap; }
+  .ports-page .filter-field > label { min-width: 32px; }
+  .ports-page .filter-field > :is(.ant-input-affix-wrapper, .ant-select) { width: auto; flex: 1; min-width: 0; }
+  .ports-page .page-actions { justify-content: flex-start; }
+  .ports-editor .ant-form-item-row { flex-direction: column; }
+  .ports-editor .ant-form-item-label { flex: none !important; text-align: left; padding-bottom: 6px; }
+  .ports-editor .ant-form-item-control { flex: auto !important; }
+  .ports-member-details { max-width: calc(100vw - 110px); }
+}
