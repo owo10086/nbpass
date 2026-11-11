@@ -3,6 +3,8 @@ package fakedns
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 	"sync"
 
 	"nbpass/internal/dnsprovider"
@@ -84,6 +86,52 @@ func (f *DNSPod) ReadRecord(ctx context.Context, _ dnsprovider.Credentials, key 
 		}
 	}
 	return result, nil
+}
+
+// ListDomains 由已有记录推导账号下的域名；与读取共用 Read 钩子以模拟服务商故障。
+func (f *DNSPod) ListDomains(ctx context.Context, _ dnsprovider.Credentials) ([]dnsprovider.Domain, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, "list")
+	f.mu.Unlock()
+	if f.Read != nil {
+		if err := f.Read(ctx); err != nil {
+			return nil, err
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	names := []string{}
+	for k := range f.records {
+		if !slices.Contains(names, k.Domain) {
+			names = append(names, k.Domain)
+		}
+	}
+	slices.Sort(names)
+	domains := []dnsprovider.Domain{}
+	for _, name := range names {
+		domains = append(domains, dnsprovider.Domain{Name: name, Status: "enable"})
+	}
+	return domains, nil
+}
+func (f *DNSPod) ListRecords(ctx context.Context, _ dnsprovider.Credentials, domain string) ([]dnsprovider.Record, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, "list")
+	f.mu.Unlock()
+	if f.Read != nil {
+		if err := f.Read(ctx); err != nil {
+			return nil, err
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	records := []dnsprovider.Record{}
+	for k, r := range f.records {
+		if k.Domain == domain {
+			records = append(records, r)
+		}
+	}
+	slices.SortFunc(records, func(a, b dnsprovider.Record) int { return strings.Compare(a.ID, b.ID) })
+	return records, nil
 }
 func (f *DNSPod) WriteRecord(ctx context.Context, _ dnsprovider.Credentials, key dnsprovider.Key, r dnsprovider.Record) error {
 	f.mu.Lock()

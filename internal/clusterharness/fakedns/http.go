@@ -28,13 +28,22 @@ func (f *DNSPod) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		records := []any{}
 		for k, v := range f.records {
-			if k.Domain == key.Domain && v.Name == r.Form.Get("sub_domain") {
+			if k.Domain == key.Domain && (r.Form.Get("sub_domain") == "" || v.Name == r.Form.Get("sub_domain")) {
 				records = append(records, wireRecord(v))
 			}
 		}
 		f.mu.Unlock()
 		response["records"] = records
 		response["info"] = map[string]int{"record_total": len(records)}
+	case "/Domain.List":
+		var domains []dnsprovider.Domain
+		domains, err = f.ListDomains(r.Context(), dnsprovider.Credentials{})
+		wire := []any{}
+		for _, d := range domains {
+			wire = append(wire, map[string]any{"name": d.Name, "punycode": d.Name, "status": d.Status})
+		}
+		response["domains"] = wire
+		response["info"] = map[string]int{"domain_total": len(domains)}
 	case "/Record.Modify":
 		value := f.Record(key.Domain, key.RecordID)
 		value.Name = r.Form.Get("sub_domain")
