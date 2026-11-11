@@ -3,6 +3,9 @@ package dnsprovider
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,9 +13,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
-// DNSPod 使用 DNSPod API Token，经 HTTPS 调用记录接口。
+// DNSPod 使用腾讯云 API 3.0（SecretId/SecretKey，TC3-HMAC-SHA256 签名）调用记录接口。
 // URL 与 Client 仅由核心依赖注入，不能从管理员请求指定任意端点。
 type DNSPod struct {
 	Client *http.Client
@@ -24,95 +28,95 @@ var dnsPodClient = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
-type scalar string
+const (
+	tc3Service     = "dnspod"
+	tc3Version     = "2021-03-23"
+	tc3ContentType = "application/json; charset=utf-8"
+)
 
-func (s *scalar) UnmarshalJSON(data []byte) error {
-	var value string
-	if json.Unmarshal(data, &value) == nil {
-		*s = scalar(value)
-		return nil
+// tc3CanonicalRequest 按签名 v3 拼接规范请求；签名头固定为 content-type、host 与 x-tc-action。
+func tc3CanonicalRequest(host, contentType, action string, body []byte) string {
+	hashed := sha256.Sum256(body)
+	return "POST\n/\n\ncontent-type:" + contentType + "\nhost:" + host + "\nx-tc-action:" + strings.ToLower(action) + "\n\ncontent-type;host;x-tc-action\n" + hex.EncodeToString(hashed[:])
+}
+
+func tc3Authorization(auth Credentials, service, host, contentType, action string, body []byte, timestamp int64) string {
+	date := time.Unix(timestamp, 0).UTC().Format("2006-01-02")
+	scope := date + "/" + service + "/tc3_request"
+	canonical := sha256.Sum256([]byte(tc3CanonicalRequest(host, contentType, action, body)))
+	stringToSign := "TC3-HMAC-SHA256\n" + strconv.FormatInt(timestamp, 10) + "\n" + scope + "\n" + hex.EncodeToString(canonical[:])
+	key := []byte("TC3" + auth.SecretKey)
+	for _, part := range []string{date, service, "tc3_request"} {
+		key = hmacSHA256(key, part)
 	}
-	var number json.Number
-	if err := json.Unmarshal(data, &number); err != nil {
-		return err
-	}
-	*s = scalar(number.String())
-	return nil
+	return "TC3-HMAC-SHA256 Credential=" + auth.SecretID + "/" + scope + ", SignedHeaders=content-type;host;x-tc-action, Signature=" + hex.EncodeToString(hmacSHA256(key, stringToSign))
+}
+
+func hmacSHA256(key []byte, data string) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte(data))
+	return mac.Sum(nil)
 }
 
 type podRecord struct {
-	UseAQB       string `json:"use_aqb"`
-	ID           scalar `json:"id"`
-	Name         string `json:"name"`
-	Subdomain    string `json:"sub_domain"`
-	Type         string `json:"type"`
-	RecordType   string `json:"record_type"`
-	Line         string `json:"line"`
-	RecordLine   string `json:"record_line"`
-	LineID       scalar `json:"line_id"`
-	RecordLineID scalar `json:"record_line_id"`
-	Value        string `json:"value"`
-	TTL          scalar `json:"ttl"`
-	Status       string `json:"status"`
-	Enabled      scalar `json:"enabled"`
+	RecordID uint64 `json:"RecordId"`
+	Name     string `json:"Name"`
+	Type     string `json:"Type"`
+	Line     string `json:"Line"`
+	LineID   string `json:"LineId"`
+	Value    string `json:"Value"`
+	TTL      int    `json:"TTL"`
+	Status   string `json:"Status"`
 }
 
 func (r podRecord) record() (Record, error) {
-	ttl, err := strconv.Atoi(string(r.TTL))
-	if err != nil || ttl < 1 {
+	return podValues(r.RecordID, r.Name, r.Type, r.Line, r.LineID, r.Value, r.TTL, r.Status == "ENABLE")
+}
+
+// podRecordInfo 是 DescribeRecord 的单条结构，字段名与列表项不同。
+type podRecordInfo struct {
+	ID           uint64 `json:"Id"`
+	SubDomain    string `json:"SubDomain"`
+	RecordType   string `json:"RecordType"`
+	RecordLine   string `json:"RecordLine"`
+	RecordLineID string `json:"RecordLineId"`
+	Value        string `json:"Value"`
+	TTL          int    `json:"TTL"`
+	Enabled      int    `json:"Enabled"`
+}
+
+func podValues(id uint64, name, kind, line, lineID, value string, ttl int, enabled bool) (Record, error) {
+	if ttl < 1 {
 		return Record{}, errors.New("DNSPod TTL 无效")
 	}
-	if r.Name == "" {
-		r.Name = r.Subdomain
+	// 默认线路的 ID 固定为 0，个别响应省略时补齐。
+	if lineID == "" && (line == "默认" || line == "default") {
+		lineID = "0"
 	}
-	if r.Type == "" {
-		r.Type = r.RecordType
-	}
-	if r.Line == "" {
-		r.Line = r.RecordLine
-	}
-	if r.LineID == "" {
-		r.LineID = r.RecordLineID
-	}
-	// 旧版 Record.Info 仅返回 record_line，默认线路的 ID 固定为 0。
-	if r.LineID == "" && (r.Line == "默认" || r.Line == "default") {
-		r.LineID = "0"
-	}
-	return Record{ID: string(r.ID), Name: r.Name, Type: r.Type, Line: r.Line, LineID: string(r.LineID), Value: r.Value, TTL: ttl, Enabled: r.Status == "enable" || r.Status == "enabled" || r.Enabled == "1", Proxied: r.UseAQB != "" && r.UseAQB != "no"}, nil
+	return Record{ID: strconv.FormatUint(id, 10), Name: name, Type: kind, Line: line, LineID: lineID, Value: value, TTL: ttl, Enabled: enabled}, nil
 }
 
-type podResponse struct {
-	Status struct {
-		Code scalar `json:"code"`
-	} `json:"status"`
-	Record  podRecord   `json:"record"`
-	Records []podRecord `json:"records"`
-	Domains []struct {
-		Name     string `json:"name"`
-		Punycode string `json:"punycode"`
-		Status   string `json:"status"`
-	} `json:"domains"`
-	Info struct {
-		Total       scalar `json:"record_total"`
-		DomainTotal scalar `json:"domain_total"`
-	} `json:"info"`
-}
-
-func (d DNSPod) call(ctx context.Context, auth Credentials, action string, form url.Values) (podResponse, error) {
-	var result podResponse
+func (d DNSPod) call(ctx context.Context, auth Credentials, action string, payload map[string]any, out any) error {
 	endpoint := d.URL
 	if endpoint == "" {
-		endpoint = "https://dnsapi.cn"
+		endpoint = "https://dnspod.tencentcloudapi.com"
 	}
-	form.Set("login_token", auth.TokenID+","+auth.Token)
-	form.Set("format", "json")
-	form.Set("lang", "cn")
-	form.Set("error_on_empty", "no")
-	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(endpoint, "/")+"/"+action, strings.NewReader(form.Encode()))
+	target, err := url.Parse(strings.TrimRight(endpoint, "/") + "/")
+	if err != nil || target.Host == "" {
+		return errors.New("DNSPod 请求配置无效")
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, "POST", target.String(), bytes.NewReader(body))
 	if err != nil {
-		return result, errors.New("DNSPod 请求配置无效")
+		return errors.New("DNSPod 请求配置无效")
 	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	timestamp := time.Now().Unix()
+	req.Header.Set("Authorization", tc3Authorization(auth, tc3Service, strings.ToLower(target.Host), tc3ContentType, action, body, timestamp))
+	req.Header.Set("Content-Type", tc3ContentType)
+	req.Header.Set("X-TC-Action", action)
+	req.Header.Set("X-TC-Timestamp", strconv.FormatInt(timestamp, 10))
+	req.Header.Set("X-TC-Version", tc3Version)
+	req.Header.Set("X-TC-Language", "zh-CN")
 	req.Header.Set("User-Agent", "nbpass/0.1.0")
 	client := d.Client
 	if client == nil {
@@ -123,75 +127,134 @@ func (d DNSPod) call(ctx context.Context, auth Credentials, action string, form 
 	safeClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	resp, err := safeClient.Do(req)
 	if err != nil {
-		return result, errors.New("DNSPod 请求未确认")
+		return errors.New("DNSPod 请求未确认")
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, (2<<20)+1))
 	if err != nil || len(data) > 2<<20 || resp.StatusCode != 200 {
-		return result, errors.New("DNSPod 响应不可用")
+		return errors.New("DNSPod 响应不可用")
+	}
+	var envelope struct {
+		Response json.RawMessage `json:"Response"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	if decoder.Decode(&result) != nil || decoder.Decode(new(any)) != io.EOF || result.Status.Code == "" {
-		return result, errors.New("DNSPod 响应无效")
+	if decoder.Decode(&envelope) != nil || decoder.Decode(new(any)) != io.EOF || len(envelope.Response) == 0 || string(envelope.Response) == "null" {
+		return errors.New("DNSPod 响应无效")
 	}
-	if result.Status.Code != "1" {
-		if _, err := strconv.Atoi(string(result.Status.Code)); err != nil {
-			return result, errors.New("DNSPod 响应无效")
+	var failure struct {
+		Error *struct {
+			Code string `json:"Code"`
+		} `json:"Error"`
+	}
+	if json.Unmarshal(envelope.Response, &failure) != nil {
+		return errors.New("DNSPod 响应无效")
+	}
+	if failure.Error != nil {
+		// 内部错误时服务商可能已执行，不能当成明确拒绝。
+		if failure.Error.Code == "" || strings.HasPrefix(failure.Error.Code, "InternalError") {
+			return errors.New("DNSPod 服务内部错误，结果未确认")
 		}
-		return result, &RejectionError{Code: string(result.Status.Code)}
+		return &RejectionError{Code: failure.Error.Code}
 	}
-	return result, nil
+	if out != nil && json.Unmarshal(envelope.Response, out) != nil {
+		return errors.New("DNSPod 响应无效")
+	}
+	return nil
 }
+
+func recordID(key Key) (uint64, error) {
+	id, err := strconv.ParseUint(key.RecordID, 10, 64)
+	if err != nil || id == 0 {
+		return 0, errors.New("DNSPod 记录 ID 无效")
+	}
+	return id, nil
+}
+
+// emptyList 表示服务商以“无数据”拒绝列表查询，等同于空列表。
+func emptyList(err error) bool {
+	var rejection *RejectionError
+	return errors.As(err, &rejection) && strings.HasPrefix(rejection.Code, "ResourceNotFound.NoDataOf")
+}
+
+type podRecordPage struct {
+	RecordCountInfo struct {
+		TotalCount int `json:"TotalCount"`
+	} `json:"RecordCountInfo"`
+	RecordList []podRecord `json:"RecordList"`
+}
+
+// listRecordPages 逐页读取记录；读满总数或遇到空页即结束，超过 listPages 页时报错而不是返回残缺列表。
+// 文档未说明按主机头过滤时 TotalCount 是否随之缩小，空页兜底两种口径。
+func (d DNSPod) listRecordPages(ctx context.Context, auth Credentials, domain, subDomain string, each func(podRecord) error) error {
+	offset := 0
+	for range listPages {
+		payload := map[string]any{"Domain": domain, "Offset": offset, "Limit": listPageLength, "ErrorOnEmpty": "no"}
+		if subDomain != "" {
+			payload["SubDomain"] = subDomain
+		}
+		var page podRecordPage
+		err := d.call(ctx, auth, "DescribeRecordList", payload, &page)
+		if emptyList(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		for _, wire := range page.RecordList {
+			if err := each(wire); err != nil {
+				return err
+			}
+		}
+		offset += len(page.RecordList)
+		if len(page.RecordList) == 0 || offset >= page.RecordCountInfo.TotalCount {
+			return nil
+		}
+	}
+	return errors.New("DNSPod 记录过多，无法完整列出")
+}
+
 func (d DNSPod) ReadRecord(ctx context.Context, auth Credentials, key Key) (ReadResult, error) {
-	info, err := d.call(ctx, auth, "Record.Info", url.Values{"domain": {key.Domain}, "record_id": {key.RecordID}})
+	id, err := recordID(key)
 	if err != nil {
 		return ReadResult{}, err
 	}
-	record, err := info.Record.record()
+	var info struct {
+		RecordInfo podRecordInfo `json:"RecordInfo"`
+	}
+	if err := d.call(ctx, auth, "DescribeRecord", map[string]any{"Domain": key.Domain, "RecordId": id}, &info); err != nil {
+		return ReadResult{}, err
+	}
+	wire := info.RecordInfo
+	record, err := podValues(wire.ID, wire.SubDomain, wire.RecordType, wire.RecordLine, wire.RecordLineID, wire.Value, wire.TTL, wire.Enabled == 1)
 	if err != nil || record.ID != key.RecordID || record.Name == "" {
 		return ReadResult{}, errors.New("DNSPod 记录身份无效")
 	}
 	result := ReadResult{Record: record, Related: []Record{}}
-	// 必须读全同名列表；达到上限时拒绝绑定，不能悄悄漏掉多线路或 AAAA。
-	offset := 0
+	// 必须读全同名列表；不能悄悄漏掉多线路或 AAAA。
 	selectedSeen := false
-	for range 100 {
-		page, err := d.call(ctx, auth, "Record.List", url.Values{"domain": {key.Domain}, "sub_domain": {record.Name}, "offset": {strconv.Itoa(offset)}, "length": {"100"}})
+	err = d.listRecordPages(ctx, auth, key.Domain, record.Name, func(wire podRecord) error {
+		r, err := wire.record()
 		if err != nil {
-			return ReadResult{}, err
+			return err
 		}
-		for _, wire := range page.Records {
-			r, err := wire.record()
-			if err != nil {
-				return ReadResult{}, err
+		if r.ID == record.ID {
+			if r.Name != record.Name || r.Type != record.Type || r.LineID != record.LineID || r.Value != record.Value || r.TTL != record.TTL || r.Enabled != record.Enabled {
+				return errors.New("DNSPod 记录在读取期间发生变化，请重新核对")
 			}
-			if r.ID == record.ID {
-				if r.Name != record.Name || r.Type != record.Type || r.LineID != record.LineID || r.Value != record.Value || r.TTL != record.TTL || r.Enabled != record.Enabled {
-					return ReadResult{}, errors.New("DNSPod 记录在读取期间发生变化，请重新核对")
-				}
-				selectedSeen = true
-				result.Record.Proxied = result.Record.Proxied || r.Proxied
-			}
-			if r.Name == record.Name {
-				result.Related = append(result.Related, r)
-			}
+			selectedSeen = true
 		}
-		offset += len(page.Records)
-		total, err := strconv.Atoi(string(page.Info.Total))
-		if err != nil || total < 0 {
-			return ReadResult{}, errors.New("DNSPod 记录列表总量无效")
+		if r.Name == record.Name {
+			result.Related = append(result.Related, r)
 		}
-		if offset >= total {
-			if !selectedSeen {
-				return ReadResult{}, errors.New("DNSPod 列表未包含受管记录，等待索引收敛后重试")
-			}
-			return result, nil
-		}
-		if len(page.Records) == 0 {
-			return ReadResult{}, errors.New("DNSPod 记录列表不完整")
-		}
+		return nil
+	})
+	if err != nil {
+		return ReadResult{}, err
 	}
-	return ReadResult{}, errors.New("DNSPod 同名记录过多，无法完整核对")
+	if !selectedSeen {
+		return ReadResult{}, errors.New("DNSPod 列表未包含受管记录，等待索引收敛后重试")
+	}
+	return result, nil
 }
 
 // listPageLength 是 DNSPod 单页上限；列表最多读 listPages 页，超出时报错而不是返回残缺列表。
@@ -203,33 +266,32 @@ const (
 func (d DNSPod) ListDomains(ctx context.Context, auth Credentials) ([]Domain, error) {
 	domains := []Domain{}
 	for range listPages {
-		page, err := d.call(ctx, auth, "Domain.List", url.Values{"type": {"all"}, "offset": {strconv.Itoa(len(domains))}, "length": {strconv.Itoa(listPageLength)}})
-		var rejection *RejectionError
-		if errors.As(err, &rejection) && rejection.Code == "9" { // 账号下没有域名
+		var page struct {
+			DomainCountInfo struct {
+				DomainTotal int `json:"DomainTotal"`
+			} `json:"DomainCountInfo"`
+			DomainList []struct {
+				Name     string `json:"Name"`
+				Punycode string `json:"Punycode"`
+				Status   string `json:"Status"`
+			} `json:"DomainList"`
+		}
+		err := d.call(ctx, auth, "DescribeDomainList", map[string]any{"Type": "ALL", "Offset": len(domains), "Limit": listPageLength}, &page)
+		if emptyList(err) {
 			return domains, nil
 		}
 		if err != nil {
 			return nil, err
 		}
-		for _, wire := range page.Domains {
+		for _, wire := range page.DomainList {
 			name := wire.Punycode
 			if name == "" {
 				name = wire.Name
 			}
-			domains = append(domains, Domain{Name: name, Status: wire.Status})
+			domains = append(domains, Domain{Name: name, Status: strings.ToLower(wire.Status)})
 		}
-		if len(page.Domains) == 0 && page.Info.DomainTotal == "" {
+		if len(page.DomainList) == 0 || len(domains) >= page.DomainCountInfo.DomainTotal {
 			return domains, nil
-		}
-		total, err := strconv.Atoi(string(page.Info.DomainTotal))
-		if err != nil || total < 0 {
-			return nil, errors.New("DNSPod 域名列表总量无效")
-		}
-		if len(domains) >= total {
-			return domains, nil
-		}
-		if len(page.Domains) == 0 {
-			return nil, errors.New("DNSPod 域名列表不完整")
 		}
 	}
 	return nil, errors.New("DNSPod 域名过多，无法完整列出")
@@ -237,49 +299,38 @@ func (d DNSPod) ListDomains(ctx context.Context, auth Credentials) ([]Domain, er
 
 func (d DNSPod) ListRecords(ctx context.Context, auth Credentials, domain string) ([]Record, error) {
 	records := []Record{}
-	offset := 0
-	for range listPages {
-		page, err := d.call(ctx, auth, "Record.List", url.Values{"domain": {domain}, "offset": {strconv.Itoa(offset)}, "length": {strconv.Itoa(listPageLength)}})
-		if err != nil {
-			return nil, err
+	err := d.listRecordPages(ctx, auth, domain, "", func(wire podRecord) error {
+		// 个别字段异常的记录本就无法绑定，跳过即可；绑定时仍会完整读回同名记录。
+		if r, err := wire.record(); err == nil {
+			records = append(records, r)
 		}
-		for _, wire := range page.Records {
-			// 个别字段异常的记录本就无法绑定，跳过即可；绑定时仍会完整读回同名记录。
-			if r, err := wire.record(); err == nil {
-				records = append(records, r)
-			}
-		}
-		offset += len(page.Records)
-		total, err := strconv.Atoi(string(page.Info.Total))
-		if err != nil || total < 0 {
-			return nil, errors.New("DNSPod 记录列表总量无效")
-		}
-		if offset >= total {
-			return records, nil
-		}
-		if len(page.Records) == 0 {
-			return nil, errors.New("DNSPod 记录列表不完整")
-		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return nil, errors.New("DNSPod 记录过多，无法完整列出")
+	return records, nil
 }
 
 func (d DNSPod) WriteRecord(ctx context.Context, auth Credentials, key Key, r Record) error {
-	if r.ID != key.RecordID || r.Type != "A" || r.Proxied || r.LineID == "" {
+	id, err := recordID(key)
+	if err != nil || r.ID != key.RecordID || r.Type != "A" || r.Proxied || r.Line == "" || r.LineID == "" {
 		return errors.New("DNSPod 写入记录不受支持")
 	}
-	_, err := d.call(ctx, auth, "Record.Modify", url.Values{"domain": {key.Domain}, "record_id": {key.RecordID}, "sub_domain": {r.Name}, "record_type": {"A"}, "record_line_id": {r.LineID}, "value": {r.Value}, "ttl": {strconv.Itoa(r.TTL)}, "status": {recordStatus(r.Enabled)}})
-	return err
+	return d.call(ctx, auth, "ModifyRecord", map[string]any{"Domain": key.Domain, "RecordId": id, "SubDomain": r.Name, "RecordType": "A", "RecordLine": r.Line, "RecordLineId": r.LineID, "Value": r.Value, "TTL": r.TTL, "Status": recordStatus(r.Enabled)}, nil)
 }
 
 func recordStatus(enabled bool) string {
 	if enabled {
-		return "enable"
+		return "ENABLE"
 	}
-	return "disable"
+	return "DISABLE"
 }
 
 func (d DNSPod) SetRecordEnabled(ctx context.Context, auth Credentials, key Key, enabled bool) error {
-	_, err := d.call(ctx, auth, "Record.Status", url.Values{"domain": {key.Domain}, "record_id": {key.RecordID}, "status": {recordStatus(enabled)}})
-	return err
+	id, err := recordID(key)
+	if err != nil {
+		return err
+	}
+	return d.call(ctx, auth, "ModifyRecordStatus", map[string]any{"Domain": key.Domain, "RecordId": id, "Status": recordStatus(enabled)}, nil)
 }

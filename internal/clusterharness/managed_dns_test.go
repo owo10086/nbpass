@@ -17,14 +17,14 @@ import (
 func TestDNSAccountCredentialsAreNeverReturned(t *testing.T) {
 	h, c := nodeBrowser(t)
 	h.Client().Do("GET", "/api/dns-accounts", nil, 401)
-	body := map[string]string{"name": "DNSPod 主账号", "token_id": "12345", "token": "private-dnspod-credential-marker"}
+	body := map[string]string{"name": "DNSPod 主账号", "secret_id": "AKIDtest12345", "secret_key": "privateDnspodCredentialMarker"}
 	account := c.Do("POST", "/api/dns-accounts", body, 201)
 	if account["id"] == "" || account["configured"] != true {
 		t.Fatalf("账号未保存: %v", account)
 	}
 	for range 2 {
 		data, _ := json.Marshal(c.Do("GET", "/api/dns-accounts", nil, 200))
-		if strings.Contains(string(data), body["token"]) || strings.Contains(string(data), body["token_id"]) {
+		if strings.Contains(string(data), body["secret_key"]) || strings.Contains(string(data), body["secret_id"]) {
 			t.Fatalf("账号凭据回显: %s", data)
 		}
 		if err := h.Restart(); err != nil {
@@ -32,6 +32,8 @@ func TestDNSAccountCredentialsAreNeverReturned(t *testing.T) {
 		}
 	}
 	c.Do("POST", "/api/dns-accounts", map[string]string{"name": "缺少凭据"}, 400)
+	c.Do("POST", "/api/dns-accounts", map[string]string{"name": "旧版 Token", "token_id": "12345", "token": "testSecretKey"}, 400)
+	c.Do("POST", "/api/dns-accounts", map[string]string{"name": "含分隔符", "secret_id": "AKIDtest12345", "secret_key": "test,SecretKey"}, 400)
 }
 
 func dnsBrowser(t *testing.T) (*clusterharness.Harness, *clusterharness.Client, *clusterharness.DNSPod, string, string) {
@@ -42,7 +44,7 @@ func dnsBrowser(t *testing.T) (*clusterharness.Harness, *clusterharness.Client, 
 	c := h.Client()
 	setup(c)
 	login(c)
-	a := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "12345", "token": "private-dnspod-credential-marker"}, 201)
+	a := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest12345", "secret_key": "privateDnspodCredentialMarker"}, 201)
 	n := addNode(c, "活动入口")
 	h.StartNode(n["installation_ticket"].(string))
 	awaitNode(t, c, n["id"].(string), connected)
@@ -66,7 +68,7 @@ func TestManagedDNSBindingReadsValueWarnsAndOwnsOnlyOneRecord(t *testing.T) {
 	gid2 := entryGroup(c, addNode(c, "另一个入口")["id"].(string))["id"].(string)
 	c.Do("PUT", "/api/entry-groups/"+gid2+"/managed-record", binding(account), 409)
 	// 换一个本地账号别名也不能抢同一条服务商记录。
-	alias := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "相同凭据的别名", "token_id": "12345", "token": "private-dnspod-credential-marker"}, 201)
+	alias := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "相同凭据的别名", "secret_id": "AKIDtest12345", "secret_key": "privateDnspodCredentialMarker"}, 201)
 	aliasBinding := binding(alias["id"].(string))
 	aliasBinding["domain"] = "EXAMPLE.COM."
 	c.Do("PUT", "/api/entry-groups/"+gid2+"/managed-record", aliasBinding, 409)
@@ -212,7 +214,7 @@ func TestManagedDNSPersistenceFailureNeverStartsExternalWrite(t *testing.T) {
 			c := h.Client()
 			setup(c)
 			login(c)
-			account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "12345", "token": "secret"}, 201)["id"].(string)
+			account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest12345", "secret_key": "testSecretKey"}, 201)["id"].(string)
 			id := addNode(c, "入口")["id"].(string)
 			gid := entryGroup(c, id)["id"].(string)
 			c.Do("PUT", "/api/entry-groups/"+gid+"/managed-record", binding(account), 200)
@@ -259,7 +261,7 @@ func TestManagedDNSRestartAfterCompletionPersistenceFailure(t *testing.T) {
 	c := h.Client()
 	setup(c)
 	login(c)
-	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "12345", "token": "secret"}, 201)["id"].(string)
+	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest12345", "secret_key": "testSecretKey"}, 201)["id"].(string)
 	id := addNode(c, "入口")["id"].(string)
 	gid := entryGroup(c, id)["id"].(string)
 	c.Do("PUT", "/api/entry-groups/"+gid+"/managed-record", binding(account), 200)

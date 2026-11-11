@@ -3,6 +3,7 @@ package panel
 import (
 	"errors"
 	"net/http"
+	"strings"
 
 	"nbpass/internal/dnsprovider"
 )
@@ -31,20 +32,23 @@ func (p *Panel) browseCredentials(w http.ResponseWriter, r *http.Request) (dnspr
 		problem(w, 503, "DNS 服务商不可用")
 		return dnsprovider.Credentials{}, false
 	}
-	return dnsprovider.Credentials{TokenID: credentials.TokenID, Token: credentials.Token}, true
+	return credentials.provider(), true
 }
 
 // browseProblem 只透出服务商拒绝码，不回显第三方原始消息。
 func browseProblem(w http.ResponseWriter, err error) {
 	var rejection *dnsprovider.RejectionError
 	switch {
-	// -1 登录失败；10003 Token 不存在；10004 Token 验证失败。
-	case errors.As(err, &rejection) && (rejection.Code == "-1" || rejection.Code == "10003" || rejection.Code == "10004"):
-		problem(w, 502, "DNSPod 登录失败，请核对 API Token ID 与 Token")
-	case errors.As(err, &rejection):
-		problem(w, 502, rejection.Error())
-	default:
+	case !errors.As(err, &rejection):
 		problem(w, 502, "DNSPod 读取失败，请稍后重试")
+	case rejection.Code == "AuthFailure.SignatureExpire":
+		problem(w, 502, "腾讯云签名已过期，请校准面板服务器时间")
+	case strings.HasPrefix(rejection.Code, "AuthFailure"):
+		problem(w, 502, "腾讯云 API 密钥验证失败，请核对 SecretId 与 SecretKey")
+	case strings.HasPrefix(rejection.Code, "UnauthorizedOperation"):
+		problem(w, 502, "腾讯云 API 密钥没有 DNSPod 权限，请为该账号授予 DNSPod 访问策略")
+	default:
+		problem(w, 502, rejection.Error())
 	}
 }
 

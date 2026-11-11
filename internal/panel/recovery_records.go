@@ -124,7 +124,7 @@ func (p *Panel) reconcileRecoveryRecord(ctx context.Context, b managedRecord) er
 		return p.noteRecoveryRecord(ctx, b, errors.New("DNSPod 凭据或服务不可用，自动写继续暂停"))
 	}
 	readCtx, cancel := p.dnsContext(ctx)
-	actual, err := p.deps.DNSProvider.ReadRecord(readCtx, dnsprovider.Credentials{TokenID: cred.TokenID, Token: cred.Token}, dnsprovider.Key{Domain: b.Domain, RecordID: b.RecordID})
+	actual, err := p.deps.DNSProvider.ReadRecord(readCtx, cred.provider(), dnsprovider.Key{Domain: b.Domain, RecordID: b.RecordID})
 	cancel()
 	if err != nil {
 		return p.noteRecoveryRecord(ctx, b, errors.New("DNSPod 读回失败，自动写继续暂停"))

@@ -36,7 +36,7 @@ func newEntryNodeRig(t *testing.T) *entryNodeRig {
 	c.Do("PUT", "/api/settings/self-check", s, 204)
 	r.f = rotationFixtureAt(t, h, c, false, r.sites.dependencies)
 	r.base = "/api/nodes/" + r.f.id
-	r.account = c.Do("POST", "/api/dns-accounts", map[string]string{"name": "节点 DNSPod", "token_id": "123", "token": "secret"}, 201)["id"].(string)
+	r.account = c.Do("POST", "/api/dns-accounts", map[string]string{"name": "节点 DNSPod", "secret_id": "AKIDtest123", "secret_key": "testSecretKey"}, 201)["id"].(string)
 	return r
 }
 

@@ -53,7 +53,7 @@ func newFailbackRig(t *testing.T, options ...func(*panel.Dependencies)) *failbac
 	}
 	rule := f.c.Do("POST", "/api/rules", directBody(f.group, 29001, "127.0.0.1", 12345), 201)
 	awaitRule(t, f.c, rule["id"].(string), "正常")
-	account := f.c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "12345", "token": "secret"}, 201)["id"].(string)
+	account := f.c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest12345", "secret_key": "testSecretKey"}, 201)["id"].(string)
 	f.c.Do("PUT", "/api/entry-groups/"+f.group+"/managed-record", binding(account), 200)
 	firstPublish(f.c, f.group, f.preferred, 202)
 	awaitDNSStage(t, f.c, f.group, "服务商已写入")

@@ -51,7 +51,7 @@ func entryWatchSetup(t *testing.T, domestic bool, lookup func(context.Context, s
 		awaitNode(t, f.c, f.a, connected)
 	}
 	f.group = f.c.Do("POST", "/api/entry-groups", map[string]any{"name": "传播观察", "members": []string{f.a, f.b}}, 201)["id"].(string)
-	f.account = f.c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "12345", "token": "secret"}, 201)["id"].(string)
+	f.account = f.c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest12345", "secret_key": "testSecretKey"}, 201)["id"].(string)
 	f.c.Do("PUT", "/api/settings/dns-watch", map[string]any{"resolvers": []map[string]string{{"kind": "dns", "address": "223.5.5.5:53"}, {"kind": "doh", "address": entryDoH}}}, 200)
 	f.c.Do("PUT", "/api/entry-groups/"+f.group+"/managed-record", binding(f.account), 200)
 	return f

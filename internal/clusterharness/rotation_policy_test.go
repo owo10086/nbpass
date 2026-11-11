@@ -78,7 +78,7 @@ func TestRotationPolicyOneUpdatesManagedDNSAndRechecks(t *testing.T) {
 	sites := &domesticSites{}
 	f := rotationFixtureAt(t, h, c, false, sites.dependencies)
 	gid := entryGroup(c, f.id)["id"].(string)
-	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "123", "token": "private"}, 201)
+	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest123", "secret_key": "privateSecretKey"}, 201)
 	c.Do("PUT", "/api/entry-groups/"+gid+"/managed-record", binding(account["id"].(string)), 200)
 	c.Do("POST", "/api/entry-groups/"+gid+"/publish", map[string]any{"active_node_id": f.id, "ipv4": "223.5.5.5", "confirm_inbound": true}, 202)
 	awaitDNSStage(t, c, gid, panel.EntryWritten)

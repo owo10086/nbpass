@@ -4,61 +4,82 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
+	"slices"
+	"strings"
 
 	"nbpass/internal/dnsprovider"
 )
 
-// ServeHTTP 模拟真实 DNSPod 表单边界；Record.Modify 省略 status 会默认启用。
+// ServeHTTP 模拟腾讯云 API 3.0 的 DNSPod 边界；ModifyRecord 省略 Status 会默认启用。
 // 与直接注入的替身共用记录、调用钩子、拒绝码及写入计数。
 func (f *DNSPod) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" || r.ParseForm() != nil {
+	var body struct {
+		Domain     string
+		RecordId   json.Number
+		SubDomain  string
+		RecordType string
+		RecordLine string
+		LineID     string `json:"RecordLineId"`
+		Value      string
+		TTL        int
+		Status     string
+		Offset     int
+		Limit      int
+	}
+	if r.Method != "POST" || !strings.HasPrefix(r.Header.Get("Authorization"), "TC3-HMAC-SHA256 Credential=") || json.NewDecoder(r.Body).Decode(&body) != nil {
 		http.Error(w, "请求无效", 400)
 		return
 	}
-	key := dnsprovider.Key{Domain: r.Form.Get("domain"), RecordID: r.Form.Get("record_id")}
-	response := map[string]any{"status": map[string]string{"code": "1"}}
+	key := dnsprovider.Key{Domain: body.Domain, RecordID: body.RecordId.String()}
+	response := map[string]any{"RequestId": "fake"}
 	var err error
-	switch r.URL.Path {
-	case "/Record.Info":
+	switch r.Header.Get("X-TC-Action") {
+	case "DescribeRecord":
 		var result dnsprovider.ReadResult
 		result, err = f.ReadRecord(r.Context(), dnsprovider.Credentials{}, key)
-		response["record"] = wireRecord(result.Record)
-	case "/Record.List":
+		v := result.Record
+		response["RecordInfo"] = map[string]any{"Id": json.Number(v.ID), "SubDomain": v.Name, "RecordType": v.Type, "RecordLine": v.Line, "RecordLineId": v.LineID, "Value": v.Value, "TTL": v.TTL, "Enabled": map[bool]int{false: 0, true: 1}[v.Enabled]}
+	case "DescribeRecordList":
 		f.mu.Lock()
-		records := []any{}
+		all := []dnsprovider.Record{}
 		for k, v := range f.records {
-			if k.Domain == key.Domain && (r.Form.Get("sub_domain") == "" || v.Name == r.Form.Get("sub_domain")) {
-				records = append(records, wireRecord(v))
+			if k.Domain == key.Domain && (body.SubDomain == "" || v.Name == body.SubDomain) {
+				all = append(all, v)
 			}
 		}
 		f.mu.Unlock()
-		response["records"] = records
-		response["info"] = map[string]int{"record_total": len(records)}
-	case "/Domain.List":
+		slices.SortFunc(all, func(a, b dnsprovider.Record) int { return strings.Compare(a.ID, b.ID) })
+		records := []any{}
+		for _, v := range page(all, body.Offset, body.Limit) {
+			records = append(records, wireRecord(v))
+		}
+		response["RecordList"] = records
+		response["RecordCountInfo"] = map[string]int{"TotalCount": len(all), "ListCount": len(records)}
+	case "DescribeDomainList":
 		var domains []dnsprovider.Domain
 		domains, err = f.ListDomains(r.Context(), dnsprovider.Credentials{})
 		wire := []any{}
-		for _, d := range domains {
-			wire = append(wire, map[string]any{"name": d.Name, "punycode": d.Name, "status": d.Status})
+		for _, d := range page(domains, body.Offset, body.Limit) {
+			wire = append(wire, map[string]any{"Name": d.Name, "Punycode": d.Name, "Status": strings.ToUpper(d.Status)})
 		}
-		response["domains"] = wire
-		response["info"] = map[string]int{"domain_total": len(domains)}
-	case "/Record.Modify":
+		response["DomainList"] = wire
+		response["DomainCountInfo"] = map[string]int{"DomainTotal": len(domains)}
+	case "ModifyRecord":
 		value := f.Record(key.Domain, key.RecordID)
-		value.Name = r.Form.Get("sub_domain")
-		value.Type = r.Form.Get("record_type")
-		value.LineID = r.Form.Get("record_line_id")
-		value.Value = r.Form.Get("value")
-		value.TTL, _ = strconv.Atoi(r.Form.Get("ttl"))
-		value.Enabled = r.Form.Get("status") != "disable"
+		value.Name = body.SubDomain
+		value.Type = body.RecordType
+		value.Line = body.RecordLine
+		value.LineID = body.LineID
+		value.Value = body.Value
+		value.TTL = body.TTL
+		value.Enabled = body.Status != "DISABLE"
 		if value.Enabled && f.EnableError != "" {
 			err = &dnsprovider.RejectionError{Code: f.EnableError}
 		} else {
 			err = f.WriteRecord(r.Context(), dnsprovider.Credentials{}, key, value)
 		}
-	case "/Record.Status":
-		err = f.SetRecordEnabled(r.Context(), dnsprovider.Credentials{}, key, r.Form.Get("status") == "enable")
+	case "ModifyRecordStatus":
+		err = f.SetRecordEnabled(r.Context(), dnsprovider.Credentials{}, key, body.Status == "ENABLE")
 	default:
 		http.Error(w, "不支持的 DNSPod 动作", 400)
 		return
@@ -66,24 +87,30 @@ func (f *DNSPod) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var rejection *dnsprovider.RejectionError
 		if errors.As(err, &rejection) {
-			response = map[string]any{"status": map[string]string{"code": rejection.Code}}
+			response = map[string]any{"RequestId": "fake", "Error": map[string]string{"Code": rejection.Code, "Message": "服务商原文"}}
 		} else {
 			http.Error(w, "结果未确认", 504)
 			return
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	json.NewEncoder(w).Encode(map[string]any{"Response": response})
+}
+
+func page[T any](items []T, offset, limit int) []T {
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset >= len(items) {
+		return nil
+	}
+	return items[offset:min(len(items), offset+limit)]
 }
 
 func wireRecord(r dnsprovider.Record) map[string]any {
-	status := "disable"
+	status := "DISABLE"
 	if r.Enabled {
-		status = "enable"
+		status = "ENABLE"
 	}
-	proxy := "no"
-	if r.Proxied {
-		proxy = "yes"
-	}
-	return map[string]any{"id": r.ID, "name": r.Name, "type": r.Type, "line": r.Line, "line_id": r.LineID, "value": r.Value, "ttl": r.TTL, "status": status, "use_aqb": proxy}
+	return map[string]any{"RecordId": json.Number(r.ID), "Name": r.Name, "Type": r.Type, "Line": r.Line, "LineId": r.LineID, "Value": r.Value, "TTL": r.TTL, "Status": status}
 }

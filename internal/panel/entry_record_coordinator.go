@@ -80,7 +80,7 @@ func (c *entryCoordinator) executeRecord(a EntryAction, r EntryActionRecord) err
 		return c.recordNote(a, r, "DNS 服务商不可用，等待核对")
 	}
 	key := dnsprovider.Key{Domain: r.Domain, RecordID: r.RecordID}
-	auth := dnsprovider.Credentials{TokenID: credentials.TokenID, Token: credentials.Token}
+	auth := credentials.provider()
 	ctx, cancel := p.dnsContext(c.ctx)
 	actual, err := p.deps.DNSProvider.ReadRecord(ctx, auth, key)
 	cancel()

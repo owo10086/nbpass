@@ -49,9 +49,15 @@ func TestDNSAccountBrowseListsDomainsAndBindableRecords(t *testing.T) {
 
 	c.Do("GET", "/api/dns-accounts/"+account+"/records", nil, 400)
 	c.Do("GET", "/api/dns-accounts/missing/domains", nil, 404)
-	fake.Read = func(context.Context) error { return &dnsprovider.RejectionError{Code: "10004"} }
-	if e := c.Do("GET", "/api/dns-accounts/"+account+"/domains", nil, 502); e["error"] != "DNSPod 登录失败，请核对 API Token ID 与 Token" {
-		t.Fatalf("登录失败提示 %v", e)
+	for code, want := range map[string]string{
+		"AuthFailure.SignatureFailure":            "腾讯云 API 密钥验证失败，请核对 SecretId 与 SecretKey",
+		"AuthFailure.SignatureExpire":             "腾讯云签名已过期，请校准面板服务器时间",
+		"UnauthorizedOperation.DomainsNotAllowed": "腾讯云 API 密钥没有 DNSPod 权限，请为该账号授予 DNSPod 访问策略",
+	} {
+		fake.Read = func(context.Context) error { return &dnsprovider.RejectionError{Code: code} }
+		if e := c.Do("GET", "/api/dns-accounts/"+account+"/domains", nil, 502); e["error"] != want {
+			t.Fatalf("%s 提示 %v", code, e)
+		}
 	}
 	fake.Read = func(context.Context) error { return errors.New("timeout") }
 	c.Do("GET", "/api/dns-accounts/"+account+"/records?domain=example.com", nil, 502)

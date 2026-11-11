@@ -14,7 +14,8 @@ func (e *RejectionError) Error() string {
 	return fmt.Sprintf("DNSPod 明确拒绝请求（代码 %s）", e.Code)
 }
 
-type Credentials struct{ TokenID, Token string }
+// Credentials 是腾讯云 API 密钥。
+type Credentials struct{ SecretID, SecretKey string }
 type Key struct{ Domain, RecordID string }
 type Record struct {
 	ID      string `json:"id"`

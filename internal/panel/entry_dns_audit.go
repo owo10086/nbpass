@@ -78,7 +78,7 @@ func (p *Panel) auditEntryDNS(ctx context.Context) {
 			continue
 		}
 		query, cancel := p.dnsContext(ctx)
-		actual, e := p.deps.DNSProvider.ReadRecord(query, dnsprovider.Credentials{TokenID: credential.TokenID, Token: credential.Token}, dnsprovider.Key{Domain: b.Domain, RecordID: b.RecordID})
+		actual, e := p.deps.DNSProvider.ReadRecord(query, credential.provider(), dnsprovider.Key{Domain: b.Domain, RecordID: b.RecordID})
 		cancel()
 		if e == nil {
 			if _, e = recordWarnings(actual, b.RecordID, b.LineID); e != nil || actual.Record.Name != b.Name || !actual.Record.Enabled {

@@ -2,34 +2,69 @@ package dnsprovider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"strings"
 	"testing"
 )
+
+// 腾讯云签名 v3 文档示例：规范请求的哈希与密钥无关，可逐字核对拼接。
+func TestTC3CanonicalRequestMatchesDocumentedExample(t *testing.T) {
+	payload := `{"Limit": 1, "Filters": [{"Values": ["\u672a\u547d\u540d"], "Name": "instance-name"}]}`
+	canonical := sha256.Sum256([]byte(tc3CanonicalRequest("cvm.tencentcloudapi.com", "application/json; charset=utf-8", "DescribeInstances", []byte(payload))))
+	if got := hex.EncodeToString(canonical[:]); got != "7019a55be8395899b900fb5564e4200d984910f34794a27cb3fb7d10ff6a1e84" {
+		t.Fatalf("规范请求哈希 %s", got)
+	}
+}
+
+// tc3Server 校验签名后按动作应答；Response 为 nil 时返回 400 让测试失败。
+func tc3Server(t *testing.T, handle func(action string, body map[string]any) map[string]any) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, _ := io.ReadAll(r.Body)
+		timestamp, _ := strconv.ParseInt(r.Header.Get("X-TC-Timestamp"), 10, 64)
+		host, _ := url.Parse("http://" + r.Host)
+		want := tc3Authorization(Credentials{"AKIDexample", "exampleKey"}, "dnspod", host.Host, r.Header.Get("Content-Type"), r.Header.Get("X-TC-Action"), data, timestamp)
+		var body map[string]any
+		if r.Header.Get("Authorization") != want || r.Header.Get("X-TC-Version") != "2021-03-23" || json.Unmarshal(data, &body) != nil {
+			t.Errorf("签名或公共参数错误：%s", r.Header.Get("Authorization"))
+			http.Error(w, "bad", 400)
+			return
+		}
+		response := handle(r.Header.Get("X-TC-Action"), body)
+		if response == nil {
+			t.Errorf("意外请求 %s %v", r.Header.Get("X-TC-Action"), body)
+			http.Error(w, "unexpected", 400)
+			return
+		}
+		response["RequestId"] = "test"
+		json.NewEncoder(w).Encode(map[string]any{"Response": response})
+	}))
+}
+
+var testAuth = Credentials{"AKIDexample", "exampleKey"}
 
 func TestDNSPodModifyExplicitlyPreservesRecordStatus(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(map[bool]string{false: "暂停", true: "启用"}[enabled], func(t *testing.T) {
 			calls := 0
-			service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			service := tc3Server(t, func(action string, body map[string]any) map[string]any {
 				calls++
-				if err := r.ParseForm(); err != nil {
-					t.Error(err)
+				want := map[bool]string{false: "DISABLE", true: "ENABLE"}[enabled]
+				if action != "ModifyRecord" || body["Status"] != want || body["RecordId"] != float64(100) || body["RecordLine"] != "默认" || body["RecordLineId"] != "0" {
+					t.Errorf("改值必须显式保留状态，收到 %s %v", action, body)
 				}
-				want := "disable"
-				if enabled {
-					want = "enable"
-				}
-				if r.URL.Path != "/Record.Modify" || r.Form.Get("status") != want {
-					t.Errorf("改值必须显式保留状态，收到 %s %v", r.URL.Path, r.Form)
-				}
-				json.NewEncoder(w).Encode(map[string]any{"status": map[string]string{"code": "1"}})
-			}))
+				return map[string]any{"RecordId": 100}
+			})
 			defer service.Close()
 			d := DNSPod{URL: service.URL, Client: service.Client()}
-			err := d.WriteRecord(context.Background(), Credentials{}, Key{"example.com", "100"}, Record{ID: "100", Name: "entry", Type: "A", LineID: "0", Value: "8.8.8.8", TTL: 60, Enabled: enabled})
+			err := d.WriteRecord(context.Background(), testAuth, Key{"example.com", "100"}, Record{ID: "100", Name: "entry", Type: "A", Line: "默认", LineID: "0", Value: "8.8.8.8", TTL: 60, Enabled: enabled})
 			if err != nil || calls != 1 {
 				t.Fatalf("改值未完成：调用 %d，错误 %v", calls, err)
 			}
@@ -37,70 +72,102 @@ func TestDNSPodModifyExplicitlyPreservesRecordStatus(t *testing.T) {
 	}
 }
 
-func TestDNSPodStatusRejectionIsDefinitiveAndTimeoutIsUnknown(t *testing.T) {
-	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
-		if r.URL.Path != "/Record.Status" || r.Form.Get("status") != "enable" {
-			t.Errorf("启用必须是明确的状态步骤：%s %v", r.URL.Path, r.Form)
+func TestDNSPodStatusRejectionIsDefinitiveAndInternalErrorIsUnknown(t *testing.T) {
+	code := "FailedOperation.DomainIsLocked"
+	service := tc3Server(t, func(action string, body map[string]any) map[string]any {
+		if action != "ModifyRecordStatus" || body["Status"] != "ENABLE" {
+			t.Errorf("启用必须是明确的状态步骤：%s %v", action, body)
 		}
-		json.NewEncoder(w).Encode(map[string]any{"status": map[string]string{"code": "500025", "message": "不能泄露服务商原文"}})
-	}))
+		return map[string]any{"Error": map[string]string{"Code": code, "Message": "不能泄露服务商原文"}}
+	})
 	defer service.Close()
 	d := DNSPod{URL: service.URL, Client: service.Client()}
-	err := d.SetRecordEnabled(context.Background(), Credentials{}, Key{"example.com", "100"}, true)
+	err := d.SetRecordEnabled(context.Background(), testAuth, Key{"example.com", "100"}, true)
 	var rejected *RejectionError
-	if !errors.As(err, &rejected) || rejected.Code != "500025" {
+	if !errors.As(err, &rejected) || rejected.Code != code || strings.Contains(err.Error(), "原文") {
 		t.Fatalf("明确拒绝未分类：%v", err)
+	}
+	code = "InternalError.UndefinedError"
+	if err = d.SetRecordEnabled(context.Background(), testAuth, Key{"example.com", "100"}, true); err == nil || errors.As(err, &rejected) {
+		t.Fatalf("内部错误被当成明确拒绝：%v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	err = d.SetRecordEnabled(ctx, Credentials{}, Key{"example.com", "100"}, true)
+	err = d.SetRecordEnabled(ctx, testAuth, Key{"example.com", "100"}, true)
 	if err == nil || errors.As(err, &rejected) {
 		t.Fatalf("结果未知被当成明确拒绝：%v", err)
+	}
+	if err = d.SetRecordEnabled(context.Background(), testAuth, Key{"example.com", "abc"}, true); err == nil {
+		t.Fatal("非数字记录 ID 未拒绝")
 	}
 }
 
 func TestDNSPodListsPageThroughDomainsAndRecords(t *testing.T) {
-	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.ParseForm()
-		ok := map[string]string{"code": "1"}
+	service := tc3Server(t, func(action string, body map[string]any) map[string]any {
 		switch {
-		case r.URL.Path == "/Domain.List" && r.Form.Get("offset") == "0":
-			json.NewEncoder(w).Encode(map[string]any{"status": ok, "info": map[string]any{"domain_total": "2"}, "domains": []any{map[string]any{"name": "例子.com", "punycode": "xn--fsqu00a.com", "status": "enable"}}})
-		case r.URL.Path == "/Domain.List" && r.Form.Get("offset") == "1":
-			json.NewEncoder(w).Encode(map[string]any{"status": ok, "info": map[string]any{"domain_total": 2}, "domains": []any{map[string]any{"name": "example.com", "status": "pause"}}})
-		case r.URL.Path == "/Record.List" && r.Form.Get("domain") == "example.com" && r.Form.Get("sub_domain") == "":
+		case action == "DescribeDomainList" && body["Offset"] == float64(0):
+			return map[string]any{"DomainCountInfo": map[string]any{"DomainTotal": 2}, "DomainList": []any{map[string]any{"Name": "例子.com", "Punycode": "xn--fsqu00a.com", "Status": "ENABLE"}}}
+		case action == "DescribeDomainList" && body["Offset"] == float64(1):
+			return map[string]any{"DomainCountInfo": map[string]any{"DomainTotal": 2}, "DomainList": []any{map[string]any{"Name": "example.com", "Status": "PAUSE"}}}
+		case action == "DescribeRecordList" && body["Domain"] == "example.com" && body["SubDomain"] == nil && body["ErrorOnEmpty"] == "no":
 			records := []any{
-				map[string]any{"id": 100, "name": "entry", "type": "A", "line": "默认", "line_id": "0", "value": "8.8.8.8", "ttl": "600", "enabled": "1"},
-				map[string]any{"id": 101, "name": "bad", "type": "A", "line": "默认", "line_id": "0", "value": "8.8.4.4", "ttl": "x"},
+				map[string]any{"RecordId": 100, "Name": "entry", "Type": "A", "Line": "默认", "LineId": "0", "Value": "8.8.8.8", "TTL": 600, "Status": "ENABLE"},
+				map[string]any{"RecordId": 101, "Name": "bad", "Type": "A", "Line": "默认", "LineId": "0", "Value": "8.8.4.4", "TTL": 0},
 			}
-			if r.Form.Get("offset") != "0" {
-				records = []any{map[string]any{"id": 102, "name": "@", "type": "NS", "line": "默认", "line_id": "0", "value": "f1g1ns1.dnspod.net.", "ttl": "86400", "enabled": "0"}}
+			if body["Offset"] != float64(0) {
+				records = []any{map[string]any{"RecordId": 102, "Name": "@", "Type": "NS", "Line": "默认", "Value": "f1g1ns1.dnspod.net.", "TTL": 86400, "Status": "DISABLE"}}
 			}
-			json.NewEncoder(w).Encode(map[string]any{"status": ok, "info": map[string]any{"record_total": "3"}, "records": records})
-		default:
-			t.Errorf("意外请求 %s %v", r.URL.Path, r.Form)
-			http.Error(w, "unexpected", 400)
+			return map[string]any{"RecordCountInfo": map[string]any{"TotalCount": 3}, "RecordList": records}
 		}
-	}))
+		return nil
+	})
 	defer service.Close()
 	d := DNSPod{URL: service.URL, Client: service.Client()}
-	domains, err := d.ListDomains(context.Background(), Credentials{})
+	domains, err := d.ListDomains(context.Background(), testAuth)
 	if err != nil || len(domains) != 2 || domains[0] != (Domain{"xn--fsqu00a.com", "enable"}) || domains[1] != (Domain{"example.com", "pause"}) {
 		t.Fatalf("域名列表 %v %v", domains, err)
 	}
-	records, err := d.ListRecords(context.Background(), Credentials{}, "example.com")
-	if err != nil || len(records) != 2 || records[0].ID != "100" || !records[0].Enabled || records[1].Type != "NS" {
+	records, err := d.ListRecords(context.Background(), testAuth, "example.com")
+	if err != nil || len(records) != 2 || records[0].ID != "100" || !records[0].Enabled || records[1].Type != "NS" || records[1].LineID != "0" || records[1].Enabled {
 		t.Fatalf("记录列表 %+v %v", records, err)
 	}
 }
 
-func TestDNSPodListDomainsTreatsNoDomainsAsEmpty(t *testing.T) {
-	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{"status": map[string]string{"code": "9"}})
-	}))
+func TestDNSPodReadRecordChecksSameNameList(t *testing.T) {
+	value := "9.9.9.9"
+	service := tc3Server(t, func(action string, body map[string]any) map[string]any {
+		switch action {
+		case "DescribeRecord":
+			return map[string]any{"RecordInfo": map[string]any{"Id": 100, "SubDomain": "entry", "RecordType": "A", "RecordLine": "默认", "RecordLineId": "0", "Value": "9.9.9.9", "TTL": 600, "Enabled": 1}}
+		case "DescribeRecordList":
+			if body["SubDomain"] != "entry" {
+				return nil
+			}
+			return map[string]any{"RecordCountInfo": map[string]any{"TotalCount": 2}, "RecordList": []any{
+				map[string]any{"RecordId": 100, "Name": "entry", "Type": "A", "Line": "默认", "LineId": "0", "Value": value, "TTL": 600, "Status": "ENABLE"},
+				map[string]any{"RecordId": 101, "Name": "entry", "Type": "AAAA", "Line": "默认", "LineId": "0", "Value": "2001:db8::1", "TTL": 600, "Status": "ENABLE"},
+			}}
+		}
+		return nil
+	})
 	defer service.Close()
-	domains, err := DNSPod{URL: service.URL, Client: service.Client()}.ListDomains(context.Background(), Credentials{})
+	d := DNSPod{URL: service.URL, Client: service.Client()}
+	result, err := d.ReadRecord(context.Background(), testAuth, Key{"example.com", "100"})
+	if err != nil || result.Record != (Record{ID: "100", Name: "entry", Type: "A", Line: "默认", LineID: "0", Value: "9.9.9.9", TTL: 600, Enabled: true}) || len(result.Related) != 2 {
+		t.Fatalf("读取记录 %+v %v", result, err)
+	}
+	value = "1.1.1.1"
+	if _, err = d.ReadRecord(context.Background(), testAuth, Key{"example.com", "100"}); err == nil {
+		t.Fatal("详情与列表不一致时未拒绝")
+	}
+}
+
+func TestDNSPodListDomainsTreatsNoDataAsEmpty(t *testing.T) {
+	service := tc3Server(t, func(string, map[string]any) map[string]any {
+		return map[string]any{"Error": map[string]string{"Code": "ResourceNotFound.NoDataOfDomain"}}
+	})
+	defer service.Close()
+	domains, err := DNSPod{URL: service.URL, Client: service.Client()}.ListDomains(context.Background(), testAuth)
 	if err != nil || len(domains) != 0 {
 		t.Fatalf("空账号 %v %v", domains, err)
 	}

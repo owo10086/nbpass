@@ -206,7 +206,7 @@ func TestEntryManualSwitchPersistenceFailureIsAtomicAndVersionIsExclusive(t *tes
 	c := h.Client()
 	setup(c)
 	login(c)
-	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "12345", "token": "secret"}, 201)["id"].(string)
+	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest12345", "secret_key": "testSecretKey"}, 201)["id"].(string)
 	a, b := addNode(c, "入口 A")["id"].(string), addNode(c, "入口 B")["id"].(string)
 	gid := entryGroup(c, a)["id"].(string)
 	saveMembers(c, gid, 200, a, b)

@@ -84,7 +84,7 @@ func (p *Panel) bindNodeManagedRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := p.dnsContext(r.Context())
 	defer cancel()
-	result, err := p.deps.DNSProvider.ReadRecord(ctx, dnsprovider.Credentials{TokenID: credentials.TokenID, Token: credentials.Token}, dnsprovider.Key{Domain: domain, RecordID: body.RecordID})
+	result, err := p.deps.DNSProvider.ReadRecord(ctx, credentials.provider(), dnsprovider.Key{Domain: domain, RecordID: body.RecordID})
 	if err != nil {
 		problem(w, 502, "DNSPod 读取失败，请核对账号和记录")
 		return

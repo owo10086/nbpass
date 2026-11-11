@@ -68,7 +68,7 @@ func newAllPolicyRigWithNodes(t *testing.T, count int, nodeOptions func(*node.Co
 		f.dns.Set("example.com", dnsprovider.Record{ID: fmt.Sprint(100 + i), Name: "entry", Type: "A", Line: "默认", LineID: "0", Value: "9.9.9.9", TTL: 60, Enabled: false})
 	}
 	f.g = allGroup(f.c, f.ids...)
-	f.account = f.c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "123", "token": "secret"}, 201)["id"].(string)
+	f.account = f.c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest123", "secret_key": "testSecretKey"}, 201)["id"].(string)
 	for i, id := range f.ids {
 		bindMember(f.c, f.g, id, f.account, fmt.Sprint(100+i), 200)
 	}

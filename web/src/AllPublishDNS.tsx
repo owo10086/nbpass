@@ -109,9 +109,10 @@ export function AllPublishDNS({ group, nodes, onClose, onSessionExpired }: { gro
     </Modal>
     <Modal open={addingAccount} title="添加 DNSPod 账号" footer={null} onCancel={() => { setAddingAccount(false); accountForm.resetFields(); }}>
       <Form form={accountForm} layout="vertical" onFinish={values => run(async () => { await api('/dns-accounts', 'POST', values); setAddingAccount(false); accountForm.resetFields(); })}>
+        <Typography.Paragraph type="secondary">使用腾讯云 API 密钥（访问管理 → API 密钥管理），建议用只授予 DNSPod 权限的子账号。凭据加密保存在面板，保存后不回显。</Typography.Paragraph>
         <Form.Item name="name" label="账号名称" rules={[{ required: true }]}><Input maxLength={200} /></Form.Item>
-        <Form.Item name="token_id" label="API Token ID" rules={[{ required: true }]}><Input.Password autoComplete="off" /></Form.Item>
-        <Form.Item name="token" label="API Token" rules={[{ required: true }]}><Input.Password autoComplete="new-password" /></Form.Item>
+        <Form.Item name="secret_id" label="SecretId" rules={[{ required: true, whitespace: true, message: '请输入 SecretId' }]}><Input autoComplete="off" maxLength={128} placeholder="AKID…" /></Form.Item>
+        <Form.Item name="secret_key" label="SecretKey" rules={[{ required: true, whitespace: true, message: '请输入 SecretKey' }]}><Input.Password autoComplete="new-password" maxLength={128} /></Form.Item>
         <Button htmlType="submit" type="primary" loading={saving}>加密保存账号</Button>
       </Form>
     </Modal>

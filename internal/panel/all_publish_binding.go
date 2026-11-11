@@ -73,7 +73,7 @@ func (p *Panel) bindMemberRecord(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := p.dnsContext(r.Context())
 	defer cancel()
-	actual, err := p.deps.DNSProvider.ReadRecord(ctx, dnsprovider.Credentials{TokenID: credential.TokenID, Token: credential.Token}, dnsprovider.Key{Domain: domain, RecordID: body.RecordID})
+	actual, err := p.deps.DNSProvider.ReadRecord(ctx, credential.provider(), dnsprovider.Key{Domain: domain, RecordID: body.RecordID})
 	if err != nil {
 		problem(w, 502, "DNSPod 读取失败")
 		return

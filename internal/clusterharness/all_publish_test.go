@@ -1,8 +1,11 @@
 package clusterharness_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"nbpass/internal/clusterharness"
 	"nbpass/internal/dnsprovider"
 	"nbpass/internal/dnswatch"
@@ -10,6 +13,7 @@ import (
 	"nbpass/internal/panel"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -227,7 +231,15 @@ func allHTTPRigWith(t *testing.T, intercept func(http.ResponseWriter, *http.Requ
 	r.ID = "101"
 	fake.Set("example.com", r)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = r.ParseForm()
+		// 把 API 3.0 的 JSON 请求摊平到 Form 供拦截判断，再原样交给替身。
+		data, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(data))
+		var fields map[string]any
+		_ = json.Unmarshal(data, &fields)
+		r.Form = url.Values{"Action": {r.Header.Get("X-TC-Action")}}
+		for k, v := range fields {
+			r.Form.Set(k, fmt.Sprint(v))
+		}
 		if intercept != nil && intercept(w, r, fake) {
 			return
 		}
@@ -244,7 +256,7 @@ func allHTTPRigWith(t *testing.T, intercept func(http.ResponseWriter, *http.Requ
 	c := h.Client()
 	setup(c)
 	login(c)
-	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "测试 DNSPod", "token_id": "123", "token": "secret"}, 201)["id"].(string)
+	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "测试 DNSPod", "secret_id": "AKIDtest123", "secret_key": "testSecretKey"}, 201)["id"].(string)
 	n := addNode(c, "健康成员")
 	a := n["id"].(string)
 	h.StartNode(n["installation_ticket"].(string))
@@ -266,8 +278,8 @@ func publishAll(c *clusterharness.Client, g string, ips map[string]string, statu
 
 func TestAllPublishEnableRejectionKeepsLastOriginalAndNotifies(t *testing.T) {
 	h, c, fake, g, a, b := allHTTPRig(t, func(w http.ResponseWriter, r *http.Request, _ *clusterharness.DNSPod) bool {
-		if r.URL.Path == "/Record.Status" && r.Form.Get("record_id") == "100" && r.Form.Get("status") == "enable" {
-			w.Write([]byte(`{"status":{"code":"500025"}}`))
+		if r.Form.Get("Action") == "ModifyRecordStatus" && r.Form.Get("RecordId") == "100" && r.Form.Get("Status") == "ENABLE" {
+			w.Write([]byte(`{"Response":{"Error":{"Code":"FailedOperation.DomainIsLocked"}}}`))
 			return true
 		}
 		return false
@@ -289,7 +301,7 @@ func TestAllPublishEnableRejectionKeepsLastOriginalAndNotifies(t *testing.T) {
 	found := false
 	for _, v := range actions {
 		r := v.(map[string]any)
-		found = found || strings.Contains(r["last_error"].(string), "500025")
+		found = found || strings.Contains(r["last_error"].(string), "FailedOperation.DomainIsLocked")
 	}
 	if !found {
 		t.Fatalf("没有逐条拒绝码：%v", pub)
@@ -303,7 +315,7 @@ func TestAllPublishUnknownEnableRestartReadsBackBeforePausingOriginal(t *testing
 	var blocked atomic.Bool
 	blocked.Store(true)
 	h, c, fake, g, a, b := allHTTPRig(t, func(w http.ResponseWriter, r *http.Request, f *clusterharness.DNSPod) bool {
-		if r.URL.Path == "/Record.Status" && r.Form.Get("record_id") == "100" && blocked.CompareAndSwap(true, false) {
+		if r.Form.Get("Action") == "ModifyRecordStatus" && r.Form.Get("RecordId") == "100" && blocked.CompareAndSwap(true, false) {
 			// 服务商已启用但响应丢失，面板不能拿未知结果作为暂停的保底。
 			f.ServeHTTP(httptest.NewRecorder(), r)
 			close(entered)
@@ -337,8 +349,8 @@ func TestAllPublishUnknownEnableRestartReadsBackBeforePausingOriginal(t *testing
 
 func TestAllPublishPartialSuccessPersistsAndRejectsOnlyFailedEnable(t *testing.T) {
 	h, c, fake, g, a, b := allHTTPRig(t, func(w http.ResponseWriter, r *http.Request, _ *clusterharness.DNSPod) bool {
-		if r.URL.Path == "/Record.Status" && r.Form.Get("record_id") == "101" {
-			w.Write([]byte(`{"status":{"code":"500025"}}`))
+		if r.Form.Get("Action") == "ModifyRecordStatus" && r.Form.Get("RecordId") == "101" {
+			w.Write([]byte(`{"Response":{"Error":{"Code":"FailedOperation.DomainIsLocked"}}}`))
 			return true
 		}
 		return false
@@ -442,11 +454,11 @@ func TestAllPublishPrimaryOnlyOperationsAreRejected(t *testing.T) {
 func TestAllPublishUnknownPauseCannotCountAsLastEnabledGuard(t *testing.T) {
 	var pauseCount atomic.Int32
 	_, c, fake, g, a, b := allHTTPRig(t, func(w http.ResponseWriter, r *http.Request, f *clusterharness.DNSPod) bool {
-		if r.URL.Path != "/Record.Status" {
+		if r.Form.Get("Action") != "ModifyRecordStatus" {
 			return false
 		}
-		if r.Form.Get("status") == "enable" {
-			w.Write([]byte(`{"status":{"code":"500025"}}`))
+		if r.Form.Get("Status") == "ENABLE" {
+			w.Write([]byte(`{"Response":{"Error":{"Code":"FailedOperation.DomainIsLocked"}}}`))
 			return true
 		}
 		if pauseCount.Add(1) == 1 {
@@ -477,10 +489,10 @@ func TestAllPublishTwoRecordRestartOnlyReadsUnconfirmedRecord(t *testing.T) {
 	var lose atomic.Bool
 	lose.Store(true)
 	h, c, fake, g, a, b := allHTTPRig(t, func(w http.ResponseWriter, r *http.Request, f *clusterharness.DNSPod) bool {
-		if r.URL.Path == "/Record.Info" {
+		if r.Form.Get("Action") == "DescribeRecord" {
 			reads.Add(1)
 		}
-		if r.URL.Path == "/Record.Status" && statuses.Add(1) == 2 && lose.CompareAndSwap(true, false) {
+		if r.Form.Get("Action") == "ModifyRecordStatus" && statuses.Add(1) == 2 && lose.CompareAndSwap(true, false) {
 			f.ServeHTTP(httptest.NewRecorder(), r)
 			w.Write([]byte("响应丢失"))
 			return true
@@ -646,7 +658,7 @@ func TestAllPublishRestoreAdoptsRecordStatesAndAllowsUnknownPausedAddress(t *tes
 	})
 	awaitNode(t, c, a, connected)
 	g := allGroup(c, a, b)
-	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "123", "token": "secret"}, 201)["id"].(string)
+	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest123", "secret_key": "testSecretKey"}, 201)["id"].(string)
 	bindMember(c, g, a, account, "100", 200)
 	bindMember(c, g, b, account, "101", 200)
 	publishAll(c, g, map[string]string{a: "8.8.8.8"}, 202)
@@ -708,8 +720,8 @@ func TestAllPublishRestoreAdoptsRecordStatesAndAllowsUnknownPausedAddress(t *tes
 
 func TestAllPublishRejectedRecordStillReadsBackManualRepair(t *testing.T) {
 	h, c, fake, g, a, b := allHTTPRigWith(t, func(w http.ResponseWriter, r *http.Request, _ *clusterharness.DNSPod) bool {
-		if r.URL.Path == "/Record.Status" && r.Form.Get("record_id") == "101" {
-			w.Write([]byte(`{"status":{"code":"500025"}}`))
+		if r.Form.Get("Action") == "ModifyRecordStatus" && r.Form.Get("RecordId") == "101" {
+			w.Write([]byte(`{"Response":{"Error":{"Code":"FailedOperation.DomainIsLocked"}}}`))
 			return true
 		}
 		return false

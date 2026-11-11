@@ -169,7 +169,7 @@ func TestRestoreDNSQueueWaitsForEveryMemberAndAdoptsActualRecord(t *testing.T) {
 		awaitNode(t, c, ids[i], connected)
 	}
 	gid := c.Do("POST", "/api/entry-groups", map[string]any{"name": "恢复入口组", "members": ids}, 201)["id"].(string)
-	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "123", "token": "private"}, 201)
+	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest123", "secret_key": "privateSecretKey"}, 201)
 	c.Do("PUT", "/api/entry-groups/"+gid+"/managed-record", binding(account["id"].(string)), 200)
 	c.Do("POST", "/api/entry-groups/"+gid+"/publish", map[string]any{"active_node_id": ids[0], "ipv4": "223.5.5.5", "confirm_inbound": true}, 202)
 	awaitDNSStage(t, c, gid, panel.EntryWritten)
@@ -410,7 +410,7 @@ func TestRestoreAllowsNewNodesAndGroupsWithoutInheritedPause(t *testing.T) {
 	})
 	awaitNode(t, c, id, connected)
 	gid := entryGroup(c, id)["id"].(string)
-	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "123", "token": "private"}, 201)
+	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest123", "secret_key": "privateSecretKey"}, 201)
 	c.Do("PUT", "/api/entry-groups/"+gid+"/managed-record", binding(account["id"].(string)), 200)
 	c.Do("POST", "/api/entry-groups/"+gid+"/publish", map[string]any{"active_node_id": id, "ipv4": "223.5.5.5", "confirm_inbound": true}, 202)
 	awaitDNSStage(t, c, gid, panel.EntryWritten)

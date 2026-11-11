@@ -3,9 +3,16 @@ package panel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"regexp"
 	"strings"
+
+	"nbpass/internal/dnsprovider"
 )
+
+// secretPattern 限定腾讯云 API 密钥为可打印的字母数字，避免把空白或分隔符写进签名。
+var secretPattern = regexp.MustCompile(`^[A-Za-z0-9]{8,128}$`)
 
 const managedDNSMigration = `CREATE TABLE dns_accounts (
  id TEXT PRIMARY KEY,
@@ -58,9 +65,14 @@ type dnsAccount struct {
 	Configured bool   `json:"configured"`
 }
 
+// dnsCredentials 是腾讯云 API 密钥；旧版 DNSPod Token 格式解出为空，视为凭据不可用。
 type dnsCredentials struct {
-	TokenID string `json:"token_id"`
-	Token   string `json:"token"`
+	SecretID  string `json:"secret_id"`
+	SecretKey string `json:"secret_key"`
+}
+
+func (c dnsCredentials) provider() dnsprovider.Credentials {
+	return dnsprovider.Credentials{SecretID: c.SecretID, SecretKey: c.SecretKey}
 }
 
 func (p *Panel) managedDNSRoutes(mux *http.ServeMux) {
@@ -104,16 +116,16 @@ func (p *Panel) listDNSAccounts(w http.ResponseWriter, r *http.Request) {
 
 func (p *Panel) addDNSAccount(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name    string `json:"name"`
-		TokenID string `json:"token_id"`
-		Token   string `json:"token"`
+		Name      string `json:"name"`
+		SecretID  string `json:"secret_id"`
+		SecretKey string `json:"secret_key"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	body.Name = strings.TrimSpace(body.Name)
-	if body.Name == "" || len(body.Name) > 200 || body.TokenID == "" || len(body.TokenID) > 100 || body.Token == "" || len(body.Token) > 4096 || strings.ContainsAny(body.TokenID+body.Token, ",\r\n") {
-		problem(w, 400, "请填写账号名称和有效的 DNSPod API Token ID、Token")
+	body.Name, body.SecretID, body.SecretKey = strings.TrimSpace(body.Name), strings.TrimSpace(body.SecretID), strings.TrimSpace(body.SecretKey)
+	if body.Name == "" || len(body.Name) > 200 || !secretPattern.MatchString(body.SecretID) || !secretPattern.MatchString(body.SecretKey) {
+		problem(w, 400, "请填写账号名称和有效的腾讯云 SecretId、SecretKey")
 		return
 	}
 	id, _, err := p.randomCredential()
@@ -121,7 +133,7 @@ func (p *Panel) addDNSAccount(w http.ResponseWriter, r *http.Request) {
 		problem(w, 503, "无法创建 DNS 账号")
 		return
 	}
-	data, _ := json.Marshal(dnsCredentials{body.TokenID, body.Token})
+	data, _ := json.Marshal(dnsCredentials{body.SecretID, body.SecretKey})
 	if err = p.secrets.Put(r.Context(), "dnspod."+id, data); err == nil {
 		_, err = p.db.ExecContext(r.Context(), "INSERT INTO dns_accounts(id,name,provider) VALUES(?,?,'dnspod')", id, body.Name)
 	}
@@ -137,6 +149,9 @@ func (p *Panel) dnsCredential(ctx context.Context, id string) (dnsCredentials, e
 	data, err := p.secrets.Get(ctx, "dnspod."+id)
 	if err == nil {
 		err = json.Unmarshal(data, &credentials)
+	}
+	if err == nil && (credentials.SecretID == "" || credentials.SecretKey == "") {
+		err = errors.New("DNSPod 账号凭据为旧版格式，请重新添加")
 	}
 	return credentials, err
 }

@@ -119,7 +119,7 @@ func offlineEntry(t *testing.T, candidate bool, options ...func(*panel.Dependenc
 			t.Fatalf("测试候选没有就绪或缺少当前配置国内证据: %v", row)
 		}
 	}
-	account := f.c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "12345", "token": "secret"}, 201)["id"].(string)
+	account := f.c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest12345", "secret_key": "testSecretKey"}, 201)["id"].(string)
 	f.c.Do("PUT", "/api/entry-groups/"+f.group+"/managed-record", binding(account), 200)
 	firstPublish(f.c, f.group, f.a, 202)
 	awaitDNSStage(t, f.c, f.group, "服务商已写入")

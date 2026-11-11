@@ -31,7 +31,7 @@ func crossGroup(t *testing.T, f *blockedEntryRig, policy string, members []strin
 	r := f.c.Do("POST", "/api/rules", directBody(g, 29002, "127.0.0.1", 12345), 201)
 	awaitRule(t, f.c, r["id"].(string), "正常")
 	f.dns.Set("example.com", dnsprovider.Record{ID: "101", Name: "other", Type: "A", Line: "默认", LineID: "0", Value: "9.9.9.9", TTL: 600, Enabled: true})
-	a := f.c.Do("POST", "/api/dns-accounts", map[string]string{"name": "B DNSPod", "token_id": "12345", "token": "secret"}, 201)["id"].(string)
+	a := f.c.Do("POST", "/api/dns-accounts", map[string]string{"name": "B DNSPod", "secret_id": "AKIDtest12345", "secret_key": "testSecretKey"}, 201)["id"].(string)
 	b := binding(a)
 	b["record_id"] = "101"
 	f.c.Do("PUT", "/api/entry-groups/"+g+"/managed-record", b, 200)

@@ -26,7 +26,7 @@ func TestManagedDNSRebindAfterRestoreCanBeReconciledAndPublished(t *testing.T) {
 	})
 	awaitNode(t, c, id, connected)
 	group := entryGroup(c, id)["id"].(string)
-	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "token_id": "123", "token": "secret"}, 201)["id"].(string)
+	account := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "DNSPod", "secret_id": "AKIDtest123", "secret_key": "testSecretKey"}, 201)["id"].(string)
 	c.Do("PUT", "/api/entry-groups/"+group+"/managed-record", binding(account), 200)
 	backup := filepath.Join(h.Dir, "before-publication.db")
 	if err := h.Snapshot(backup); err != nil {

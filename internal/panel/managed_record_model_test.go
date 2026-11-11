@@ -577,7 +577,7 @@ func seedRecordModel(t *testing.T, p *Panel, dns *fakedns.DNSPod) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, _ := json.Marshal(dnsCredentials{TokenID: "12345", Token: "secret"})
+	data, _ := json.Marshal(dnsCredentials{SecretID: "AKIDtest12345", SecretKey: "testSecretKey"})
 	if err := p.secrets.Put(context.Background(), "dnspod.dns", data); err != nil {
 		t.Fatal(err)
 	}
