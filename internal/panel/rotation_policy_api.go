@@ -84,6 +84,9 @@ func (p *Panel) resumeRotation(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]bool{"paused": false})
 }
 func (p *Panel) getBlockedPolicy(w http.ResponseWriter, r *http.Request) {
+	if !p.requireGroupMode(w, r, "primary_backup") {
+		return
+	}
 	var policy string
 	err := p.db.QueryRowContext(r.Context(), "SELECT blocked_policy FROM entry_groups WHERE id=?", r.PathValue("id")).Scan(&policy)
 	if err != nil {
@@ -97,6 +100,9 @@ func (p *Panel) getBlockedPolicy(w http.ResponseWriter, r *http.Request) {
 	respond(w, 200, map[string]string{"policy": policy})
 }
 func (p *Panel) putBlockedPolicy(w http.ResponseWriter, r *http.Request) {
+	if !p.requireGroupMode(w, r, "primary_backup") {
+		return
+	}
 	var b struct {
 		Policy string `json:"policy"`
 	}
@@ -143,7 +149,7 @@ func (p *Panel) startRotationPolicy(ctx context.Context) {
 		defer p.background.Done()
 		for ctx.Err() == nil {
 			p.controlMu.Lock()
-			rows, err := p.db.QueryContext(ctx, `SELECT s.node_id FROM rotation_settings s JOIN node_self_check c ON c.node_id=s.node_id WHERE s.automatic_enabled=1 AND c.enabled=1 AND c.state='blocked' AND `+automaticRotationPurpose)
+			rows, err := p.db.QueryContext(ctx, `SELECT s.node_id FROM rotation_settings s JOIN node_self_check c ON c.node_id=s.node_id WHERE s.automatic_enabled=1 AND c.enabled=1 AND c.state='blocked' AND `+automaticRotationRequestedPurpose)
 			var ids []string
 			if err == nil {
 				for rows.Next() {
@@ -154,12 +160,16 @@ func (p *Panel) startRotationPolicy(ctx context.Context) {
 				}
 				rows.Close()
 			}
+			restrictions := map[string]error{}
 			for _, id := range ids {
 				if _, err := p.authorizeRotation(ctx, id, false); err != nil {
+					restrictions[id] = err
 					_ = p.notifyStrategyThreeRestriction(ctx, id, err)
 				}
 			}
 			_ = p.observeStrategyThreeRotations(ctx)
+			_ = p.observeAllMemberRotations(ctx, restrictions)
+			_ = p.reconcileNodeAddressSyncs(ctx)
 			p.controlMu.Unlock()
 			timer := p.deps.Clock.NewTimer(time.Second)
 			select {

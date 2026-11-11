@@ -15,8 +15,20 @@ import (
 // 自动监控与绑定共用事务。已有手工监控转为入口组管理，保留变化历史。
 func (p *Panel) bindEntryDomainWatch(ctx context.Context, tx *sql.Tx, group string) error {
 	var domain, name string
-	if err := tx.QueryRowContext(ctx, "SELECT domain,name FROM managed_records WHERE group_id=?", group).Scan(&domain, &name); err != nil {
+	if err := tx.QueryRowContext(ctx, "SELECT domain,name FROM managed_records WHERE group_id=? ORDER BY id LIMIT 1", group).Scan(&domain, &name); err != nil {
 		return err
+	}
+	var existing string
+	e := tx.QueryRowContext(ctx, "SELECT domain FROM dns_watches WHERE entry_group_id=?", group).Scan(&existing)
+	hostname := domain
+	if name != "@" {
+		hostname = name + "." + domain
+	}
+	if e == nil && existing == hostname {
+		return nil
+	}
+	if e != nil && !errors.Is(e, sql.ErrNoRows) {
+		return e
 	}
 	if name != "@" {
 		domain = name + "." + domain
@@ -30,7 +42,7 @@ func (p *Panel) bindEntryDomainWatch(ctx context.Context, tx *sql.Tx, group stri
 	}
 	now := p.deps.Clock.Now().UnixNano()
 	// 优先接管同名手工监控；其他入口组的同名监控有各自独立的期望。
-	_, err = tx.ExecContext(ctx, `UPDATE dns_watches SET entry_group_id=?,expected_ips='[]',expected_version=0,next_sample_at=?,last_status='' WHERE domain=? AND entry_group_id IS NULL AND NOT EXISTS(SELECT 1 FROM dns_watches WHERE entry_group_id=?)`, group, now, domain, group)
+	_, err = tx.ExecContext(ctx, `UPDATE dns_watches SET entry_group_id=?,expected_ips='[]',expected_version=0,next_sample_at=?,last_status='' WHERE domain=? AND entry_group_id IS NULL AND owner_node_id IS NULL AND NOT EXISTS(SELECT 1 FROM dns_watches WHERE entry_group_id=?)`, group, now, domain, group)
 	if err == nil {
 		_, err = tx.ExecContext(ctx, `INSERT INTO dns_watches(id,domain,expected_ips,expected_version,next_sample_at,created_at,entry_group_id) SELECT ?,?,'[]',0,?,?,? WHERE NOT EXISTS(SELECT 1 FROM dns_watches WHERE entry_group_id=?)`, "entry:"+group, domain, now, now, group, group)
 	}
@@ -122,7 +134,10 @@ func (p *Panel) reconcileEntryPropagation(ctx context.Context, checkers map[stri
 		return err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, "SELECT id,domain,expected_version,round,observation_deadline FROM dns_watches WHERE propagation_status='传播中'")
+	if err = p.reconcileAllPropagationTx(ctx, tx, checkers); err != nil {
+		return err
+	}
+	rows, err := tx.QueryContext(ctx, "SELECT id,domain,expected_version,round,observation_deadline FROM dns_watches WHERE propagation_status='传播中' AND NOT EXISTS(SELECT 1 FROM entry_groups g WHERE g.id=entry_group_id AND g.publication_mode='all')")
 	if err != nil {
 		return err
 	}

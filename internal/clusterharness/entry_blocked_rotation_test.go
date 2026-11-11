@@ -419,6 +419,19 @@ func TestEntryBlockedRotationManualSwitchBeforePermitInvalidatesWorkflow(t *test
 		return nil
 	}
 	f.block(t, 0)
+	// 被墙上报完成不代表异步策略已经提交版本 2；在 DNS 不可用期间
+	// 先经公共 API 确认待核对切换，再用固定版本验证手动操作使工作流失效。
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		pub := publication(f.c, f.group)
+		if pub["desired_version"] == float64(2) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("被墙切换未提交版本 2：%v", pub)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	manualSwitch(f.c, f.group, f.ids[1], "1.1.1.1", 2, 202)
 	unavailable.Store(false)
 	strategySamples(t, f, 2)

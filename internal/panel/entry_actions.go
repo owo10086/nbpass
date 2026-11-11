@@ -15,6 +15,10 @@ const (
 	EntryDesired     = "期望已变更"
 	EntryWritten     = "服务商已写入"
 	EntryUnconfirmed = "结果未确认"
+	EntryFailed      = "明确失败"
+	EntryPartial     = "部分完成"
+	EntrySuperseded  = "已失效"
+	EntryArchived    = "恢复已封存"
 )
 
 // EntryActionRequest 是后续手动切换、回切和偏差写回的唯一提交接缝。
@@ -28,28 +32,31 @@ type EntryActionRequest struct {
 }
 
 type EntryAction struct {
-	ID           string     `json:"id"`
-	GroupID      string     `json:"group_id"`
-	Version      int64      `json:"version"`
-	Kind         string     `json:"kind"`
-	NodeID       string     `json:"node_id"`
-	OldValue     string     `json:"old_value"`
-	NewValue     string     `json:"new_value"`
-	OldTTL       int        `json:"old_ttl"`
-	Stage        string     `json:"stage"`
-	LastError    string     `json:"last_error"`
-	CreatedAt    time.Time  `json:"created_at"`
-	WrittenAt    *time.Time `json:"written_at"`
-	writeStarted bool
+	ID             string              `json:"id"`
+	GroupID        string              `json:"group_id"`
+	OwnerNodeID    string              `json:"owner_node_id,omitempty"`
+	MinimumEnabled int                 `json:"-"`
+	Records        []EntryActionRecord `json:"records,omitempty"`
+	Version        int64               `json:"version"`
+	Kind           string              `json:"kind"`
+	NodeID         string              `json:"node_id"`
+	OldValue       string              `json:"old_value"`
+	NewValue       string              `json:"new_value"`
+	OldTTL         int                 `json:"old_ttl"`
+	Stage          string              `json:"stage"`
+	LastError      string              `json:"last_error"`
+	CreatedAt      time.Time           `json:"created_at"`
+	WrittenAt      *time.Time          `json:"written_at"`
+	writeStarted   bool
 }
 
-const actionColumns = `id,group_id,version,kind,node_id,old_value,new_value,old_ttl,stage,last_error,created_at,written_at,write_started`
+const actionColumns = `id,coalesce(group_id,''),version,kind,node_id,old_value,new_value,old_ttl,stage,last_error,created_at,written_at,write_started,coalesce(owner_node_id,''),minimum_enabled`
 
 func scanAction(row scanner) (EntryAction, error) {
 	var a EntryAction
 	var created int64
 	var written sql.NullInt64
-	err := row.Scan(&a.ID, &a.GroupID, &a.Version, &a.Kind, &a.NodeID, &a.OldValue, &a.NewValue, &a.OldTTL, &a.Stage, &a.LastError, &created, &written, &a.writeStarted)
+	err := row.Scan(&a.ID, &a.GroupID, &a.Version, &a.Kind, &a.NodeID, &a.OldValue, &a.NewValue, &a.OldTTL, &a.Stage, &a.LastError, &created, &written, &a.writeStarted, &a.OwnerNodeID, &a.MinimumEnabled)
 	a.CreatedAt = time.Unix(0, created).UTC()
 	if written.Valid {
 		t := time.Unix(0, written.Int64).UTC()
@@ -59,7 +66,11 @@ func scanAction(row scanner) (EntryAction, error) {
 }
 func (p *Panel) actionEvent(ctx context.Context, tx *sql.Tx, a EntryAction, stage string) error {
 	now := p.deps.Clock.Now()
-	return insertEvent(ctx, tx, a.NodeID, "panel", eventlog.Event{ID: a.ID + ":" + stage, Type: "entry_action", OccurredAt: now, Message: fmt.Sprintf("入口组 %s 动作 %s 期望版本 %d：%s", a.GroupID, a.ID, a.Version, stage)}, now)
+	owner := "入口组 " + a.GroupID
+	if a.OwnerNodeID != "" {
+		owner = "入口节点 " + a.OwnerNodeID
+	}
+	return insertEvent(ctx, tx, a.NodeID, "panel", eventlog.Event{ID: a.ID + ":" + stage, Type: "entry_action", OccurredAt: now, Message: fmt.Sprintf("%s 动作 %s 期望版本 %d：%s", owner, a.ID, a.Version, stage)}, now)
 }
 
 func (p *Panel) SubmitEntryAction(ctx context.Context, req EntryActionRequest) (EntryAction, error) {
@@ -89,13 +100,22 @@ func (p *Panel) SubmitEntryAction(ctx context.Context, req EntryActionRequest) (
 	if err != nil {
 		return EntryAction{}, err
 	}
-	p.coordinator.wake(a.GroupID)
+	if a.ID != "" {
+		p.coordinator.wake(a.GroupID)
+	}
 	return a, nil
 }
 
 // 同一数据库事务串行维护期望版本；普通提交持 entryMu，地址确认持 controlMu。
 // 地址确认不再获取 entryMu，避免与入口组配置的 entryMu → controlMu 次序反转。
 func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryActionRequest) (EntryAction, error) {
+	var mode string
+	if err := tx.QueryRowContext(ctx, "SELECT publication_mode FROM entry_groups WHERE id=?", req.GroupID).Scan(&mode); err != nil {
+		return EntryAction{}, err
+	}
+	if mode != "primary_backup" {
+		return EntryAction{}, &forwardingError{409, "全部发布组不使用活动入口或首选入口回切"}
+	}
 	allowed, e := recoveryGroupAllowed(ctx, tx, req.GroupID)
 	if e != nil {
 		return EntryAction{}, e
@@ -109,7 +129,8 @@ func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryAc
 	}
 	var a EntryAction
 	a.GroupID, a.NodeID, a.Kind, a.NewValue, a.Stage = req.GroupID, req.NodeID, req.Kind, ip, EntryDesired
-	err = tx.QueryRowContext(ctx, "SELECT current_value,current_ttl FROM managed_records WHERE group_id=?", req.GroupID).Scan(&a.OldValue, &a.OldTTL)
+	b, err := scanManaged(tx.QueryRowContext(ctx, "SELECT "+managedColumns+" FROM managed_records WHERE group_id=? AND owner_kind='group'", req.GroupID))
+	a.OldValue, a.OldTTL = b.CurrentValue, b.CurrentTTL
 	if errors.Is(err, sql.ErrNoRows) {
 		return a, &forwardingError{409, "请先绑定受管记录"}
 	}
@@ -137,6 +158,10 @@ func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryAc
 	if err := entryActionPolicy(ctx, tx, req); err != nil {
 		return a, err
 	}
+	if observed, err := p.observePrimaryTx(ctx, tx, req); err != nil || observed {
+		a.Stage = entryObserved
+		return a, err
+	}
 	a.Version = version + 1
 	a.ID, _, err = p.randomCredential()
 	if err != nil {
@@ -144,6 +169,9 @@ func (p *Panel) submitEntryActionTx(ctx context.Context, tx *sql.Tx, req EntryAc
 	}
 	a.CreatedAt = p.deps.Clock.Now()
 	_, err = tx.ExecContext(ctx, `INSERT INTO entry_actions(id,group_id,version,kind,node_id,old_value,new_value,old_ttl,stage,created_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, a.ID, a.GroupID, a.Version, a.Kind, a.NodeID, a.OldValue, a.NewValue, a.OldTTL, a.Stage, a.CreatedAt.UnixNano())
+	if err == nil {
+		err = insertActionRecord(ctx, tx, a.ID, b, ManagedRecordChange{ManagedRecordID: b.ID, BindingGeneration: b.BindingGeneration, Value: a.NewValue, Enabled: true})
+	}
 	if err == nil {
 		err = carryStrategyThreeVersion(ctx, tx, req, a.Version)
 	}

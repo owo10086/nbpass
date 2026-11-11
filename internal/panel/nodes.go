@@ -75,6 +75,8 @@ func (p *Panel) addNode(w http.ResponseWriter, r *http.Request) {
 }
 
 type nodeView struct {
+	ManagedRecord *managedRecord `json:"managed_record"`
+	RecordStatus  string         `json:"record_status"`
 	nodeUpgradeView
 	nodeRegionView
 	ID               string       `json:"id"`
@@ -112,7 +114,7 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 	defer p.controlMu.Unlock()
 	rows, err := p.db.QueryContext(r.Context(), `SELECT id, name, last_seen_at, disconnected_at, maintenance_until,
 		desired_revision, applied_revision, software_version, process_instance, apply_error, applied_digest, COALESCE((SELECT digest FROM node_snapshots WHERE node_id=nodes.id),''),
-		COALESCE(public_ipv4, ''), COALESCE(auto_name, '未知'), COALESCE(auto_mainland, 0),
+		COALESCE(public_ipv4, ''), COALESCE(confirmed_ipv4, ''), COALESCE(auto_name, '未知'), COALESCE(auto_mainland, 0),
 		override_name, COALESCE(override_mainland, 0), COALESCE(checker_disabled, 0)
 		FROM nodes LEFT JOIN node_regions ON node_id = id ORDER BY `+listOrders["nodes"].orderBy)
 	if err != nil {
@@ -128,7 +130,7 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 		var override sql.NullString
 		var mainland bool
 		if err := rows.Scan(&n.ID, &n.Name, &last, &disconnected, &maintenance, &n.DesiredRevision, &n.AppliedRevision, &n.SoftwareVersion, &n.ProcessInstance, &n.ApplyError, &n.AppliedDigest, &n.DesiredDigest,
-			&n.PublicIPv4, &n.AutomaticRegion.Name, &n.AutomaticRegion.MainlandChina, &override, &mainland, &n.CheckerDisabled); err != nil {
+			&n.PublicIPv4, &n.ConfirmedIPv4, &n.AutomaticRegion.Name, &n.AutomaticRegion.MainlandChina, &override, &mainland, &n.CheckerDisabled); err != nil {
 			problem(w, 503, "存储暂不可用")
 			return
 		}
@@ -171,6 +173,10 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		nodes[i].nodeUpgradeView = view
+	}
+	if err := p.nodeRecordViews(r.Context(), nodes); err != nil {
+		problem(w, 503, "无法读取节点受管记录")
+		return
 	}
 	respond(w, 200, map[string]any{"nodes": nodes})
 }

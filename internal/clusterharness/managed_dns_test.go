@@ -66,8 +66,10 @@ func TestManagedDNSBindingReadsValueWarnsAndOwnsOnlyOneRecord(t *testing.T) {
 	gid2 := entryGroup(c, addNode(c, "另一个入口")["id"].(string))["id"].(string)
 	c.Do("PUT", "/api/entry-groups/"+gid2+"/managed-record", binding(account), 409)
 	// 换一个本地账号别名也不能抢同一条服务商记录。
-	alias := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "别名", "token_id": "98765", "token": "other-token"}, 201)
-	c.Do("PUT", "/api/entry-groups/"+gid2+"/managed-record", binding(alias["id"].(string)), 409)
+	alias := c.Do("POST", "/api/dns-accounts", map[string]string{"name": "相同凭据的别名", "token_id": "12345", "token": "private-dnspod-credential-marker"}, 201)
+	aliasBinding := binding(alias["id"].(string))
+	aliasBinding["domain"] = "EXAMPLE.COM."
+	c.Do("PUT", "/api/entry-groups/"+gid2+"/managed-record", aliasBinding, 409)
 	if err := h.Restart(); err != nil {
 		t.Fatal(err)
 	}
@@ -293,6 +295,16 @@ func TestManagedDNSPendingActionProtectsBindingAndMembership(t *testing.T) {
 		t.Fatal("写入未开始")
 	}
 	c.Do("DELETE", "/api/entry-groups/"+gid, nil, 409)
+	replacement := fake.Record("example.com", "100")
+	replacement.ID = "200"
+	replacement.Name = "replacement"
+	fake.Set("example.com", replacement)
+	change := binding(account)
+	change["record_id"] = "200"
+	c.Do("PUT", "/api/entry-groups/"+gid+"/managed-record", change, 409)
+	if b := c.Do("GET", "/api/entry-groups/"+gid+"/managed-record", nil, 200); b["record_id"] != "100" || fake.Writes() != 1 {
+		t.Fatal("动作在途时换绑或重发了记录", b, fake.Calls())
+	}
 	other := addNode(c, "其他成员")["id"].(string)
 	c.Do("PUT", "/api/entry-groups/"+gid, map[string]any{"name": "入口组", "members": []string{other}}, 409)
 }

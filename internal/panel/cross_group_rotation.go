@@ -21,7 +21,7 @@ type rotationEntry struct {
 	written                             sql.NullInt64
 }
 
-const rotationEntriesFrom = ` FROM entry_publications s JOIN entry_groups g ON g.id=s.group_id
+const rotationEntriesFrom = ` FROM entry_publications s JOIN entry_groups g ON g.id=s.group_id AND g.publication_mode='primary_backup'
  JOIN entry_group_members m ON m.group_id=g.id WHERE m.node_id=?`
 
 func (p *Panel) rotationEntries(ctx context.Context, node string) ([]rotationEntry, error) {
@@ -114,16 +114,35 @@ func rotationEntriesCurrent(ctx context.Context, tx *sql.Tx, node string, entrie
 // 屏障与许可同事务保存。即使授权后重启，首次投递仍核对原组/版本；
 // 可能已经投递的许可只续观察，不根据新期望假定商家未执行。
 func (p *Panel) markRotationPermit(ctx context.Context, node, action, origin string) (bool, error) {
+	return p.rotationPermit(ctx, node, action, origin, true)
+}
+
+// 准备命令可先拒绝失效屏障；只有真正发送边界才记 permit_sent。
+func (p *Panel) rotationPermit(ctx context.Context, node, action, origin string, dispatch bool) (bool, error) {
 	tx, err := p.db.BeginTx(ctx, nil)
 	if err != nil {
 		return false, err
 	}
 	defer tx.Rollback()
 	var sent bool
-	if err = tx.QueryRowContext(ctx, "SELECT permit_sent FROM rotation_actions WHERE id=?", action).Scan(&sent); err != nil {
+	var state string
+	if err = tx.QueryRowContext(ctx, "SELECT permit_sent,state FROM rotation_actions WHERE id=?", action).Scan(&sent, &state); err != nil {
 		return false, err
 	}
+	if state != "authorized" {
+		return false, nil
+	}
 	if origin == "automatic" && !sent {
+		observed, err := p.observeRotationTx(ctx, tx, node, "cancel:"+action)
+		if err != nil {
+			return false, err
+		}
+		if observed {
+			if err = p.cancelObservedPermitTx(ctx, tx, node, action); err != nil {
+				return false, err
+			}
+			return false, tx.Commit()
+		}
 		var current bool
 		err = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM rotation_settings WHERE node_id=? AND automatic_enabled=1)
  AND (SELECT COUNT(*) FROM rotation_entry_barriers WHERE action_id=?)=(SELECT COUNT(*)`+rotationEntriesFrom+`)
@@ -133,6 +152,12 @@ func (p *Panel) markRotationPermit(ctx context.Context, node, action, origin str
  OR NOT EXISTS(SELECT 1 FROM entry_group_members m WHERE m.group_id=b.group_id AND m.node_id=?)))`, node, action, node, action, node).Scan(&current)
 		if err != nil {
 			return false, err
+		}
+		if current {
+			current, err = rotationMemberPermitCurrent(ctx, tx, node, action)
+			if err != nil {
+				return false, err
+			}
 		}
 		if !current {
 			_, err = tx.ExecContext(ctx, `UPDATE rotation_actions SET state='cancelled',reason='跨组切离期望或节点自动授权已变化，未投递许可已取消',updated_at=? WHERE id=?`, p.deps.Clock.Now().UnixNano(), action)
@@ -147,6 +172,9 @@ func (p *Panel) markRotationPermit(ctx context.Context, node, action, origin str
 			}
 			return false, err
 		}
+	}
+	if !dispatch {
+		return true, nil
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE rotation_actions SET permit_sent=1 WHERE id=?", action); err != nil {
 		return false, err

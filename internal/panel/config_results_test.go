@@ -63,7 +63,9 @@ func testPartialRuleReportIsolation(t *testing.T, encrypted bool) {
 		t.Fatal(err)
 	}
 	session := &controlSession{done: make(chan struct{}), instance: "current"}
+	p.controlMu.Lock()
 	p.controls["n"] = session
+	p.controlMu.Unlock()
 	send := func(r *controlpb.NodeReport) {
 		t.Helper()
 		if _, err := p.acceptReport(context.Background(), "n", digest, session, r); err != nil {

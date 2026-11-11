@@ -89,7 +89,9 @@ func TestRotationRecheckCapabilityCannotDisappearDuringDelivery(t *testing.T) {
 	if err = p.secrets.Put(ctx, "template", []byte(`{"url":"https://vendor.example/change","method":"POST"}`)); err != nil {
 		t.Fatal(err)
 	}
+	p.controlMu.Lock()
 	p.controls["n"] = &controlSession{done: make(chan struct{}), changed: make(chan struct{}, 1)}
+	p.controlMu.Unlock()
 	command, err := p.rotationCommand(ctx, "n")
 	if err != nil {
 		t.Fatal(err)
@@ -101,11 +103,19 @@ func TestRotationRecheckCapabilityCannotDisappearDuringDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	p.controlMu.Lock()
 	p.controls["n"].rotationRecheckCapable = true
+	p.controlMu.Unlock()
 	if command, err = p.rotationCommand(ctx, "n"); err != nil || command == nil {
 		t.Fatal("新版节点缺少许可", err)
 	}
+	// 构建命令不代表已经投递；模拟发送前的最终复核和持久化边界。
+	if ready, err := p.markRotationPermit(ctx, "n", command.ActionId, "automatic"); err != nil || !ready {
+		t.Fatal("新版节点许可未进入投递边界", err)
+	}
+	p.controlMu.Lock()
 	p.controls["n"].rotationRecheckCapable = false
+	p.controlMu.Unlock()
 	if command, err = p.rotationCommand(ctx, "n"); err != nil || command != nil {
 		t.Fatal("回滚节点仍收到许可", err)
 	}

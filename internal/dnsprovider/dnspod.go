@@ -125,8 +125,14 @@ func (d DNSPod) call(ctx context.Context, auth Credentials, action string, form 
 		return result, errors.New("DNSPod 响应不可用")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	if decoder.Decode(&result) != nil || decoder.Decode(new(any)) != io.EOF || result.Status.Code != "1" {
-		return result, errors.New("DNSPod 拒绝请求或响应无效")
+	if decoder.Decode(&result) != nil || decoder.Decode(new(any)) != io.EOF || result.Status.Code == "" {
+		return result, errors.New("DNSPod 响应无效")
+	}
+	if result.Status.Code != "1" {
+		if _, err := strconv.Atoi(string(result.Status.Code)); err != nil {
+			return result, errors.New("DNSPod 响应无效")
+		}
+		return result, &RejectionError{Code: string(result.Status.Code)}
 	}
 	return result, nil
 }
@@ -182,9 +188,21 @@ func (d DNSPod) ReadRecord(ctx context.Context, auth Credentials, key Key) (Read
 	return ReadResult{}, errors.New("DNSPod 同名记录过多，无法完整核对")
 }
 func (d DNSPod) WriteRecord(ctx context.Context, auth Credentials, key Key, r Record) error {
-	if r.ID != key.RecordID || r.Type != "A" || r.Proxied || !r.Enabled || r.LineID == "" {
+	if r.ID != key.RecordID || r.Type != "A" || r.Proxied || r.LineID == "" {
 		return errors.New("DNSPod 写入记录不受支持")
 	}
-	_, err := d.call(ctx, auth, "Record.Modify", url.Values{"domain": {key.Domain}, "record_id": {key.RecordID}, "sub_domain": {r.Name}, "record_type": {"A"}, "record_line_id": {r.LineID}, "value": {r.Value}, "ttl": {strconv.Itoa(r.TTL)}})
+	_, err := d.call(ctx, auth, "Record.Modify", url.Values{"domain": {key.Domain}, "record_id": {key.RecordID}, "sub_domain": {r.Name}, "record_type": {"A"}, "record_line_id": {r.LineID}, "value": {r.Value}, "ttl": {strconv.Itoa(r.TTL)}, "status": {recordStatus(r.Enabled)}})
+	return err
+}
+
+func recordStatus(enabled bool) string {
+	if enabled {
+		return "enable"
+	}
+	return "disable"
+}
+
+func (d DNSPod) SetRecordEnabled(ctx context.Context, auth Credentials, key Key, enabled bool) error {
+	_, err := d.call(ctx, auth, "Record.Status", url.Values{"domain": {key.Domain}, "record_id": {key.RecordID}, "status": {recordStatus(enabled)}})
 	return err
 }

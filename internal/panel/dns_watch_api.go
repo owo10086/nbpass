@@ -109,6 +109,10 @@ func (p *Panel) addDNSWatch(w http.ResponseWriter, r *http.Request) {
 		problem(w, 400, "请填写纯域名，不包含协议、端口或路径")
 		return
 	}
+	if len(body.ExpectedIPs) > 32 {
+		problem(w, 400, "手工监控的期望 IPv4 最多 32 个")
+		return
+	}
 	ips, err := dnswatch.Addresses(body.ExpectedIPs)
 	if err != nil {
 		problem(w, 400, err.Error())
@@ -150,6 +154,10 @@ func (p *Panel) putDNSWatch(w http.ResponseWriter, r *http.Request) {
 		problem(w, 400, "请指定期望 IP，空数组表示仅观察")
 		return
 	}
+	if len(*body.ExpectedIPs) > 32 {
+		problem(w, 400, "手工监控的期望 IPv4 最多 32 个")
+		return
+	}
 	ips, err := dnswatch.Addresses(*body.ExpectedIPs)
 	if err != nil {
 		problem(w, 400, err.Error())
@@ -165,16 +173,16 @@ func (p *Panel) putDNSWatch(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback()
 	id := r.PathValue("id")
 	var old string
-	var group sql.NullString
-	err = tx.QueryRowContext(r.Context(), "SELECT expected_ips,entry_group_id FROM dns_watches WHERE id=?", id).Scan(&old, &group)
+	var group, ownerNode sql.NullString
+	err = tx.QueryRowContext(r.Context(), "SELECT expected_ips,entry_group_id,owner_node_id FROM dns_watches WHERE id=?", id).Scan(&old, &group, &ownerNode)
 	if errors.Is(err, sql.ErrNoRows) {
 		p.dnsWatchMu.Unlock()
 		problem(w, 404, "解析监控不存在")
 		return
 	}
-	if err == nil && group.Valid {
+	if err == nil && (group.Valid || ownerNode.Valid) {
 		p.dnsWatchMu.Unlock()
-		problem(w, 409, "入口组域名的期望由活动入口自动维护")
+		problem(w, 409, "受管域名的期望由面板自动维护")
 		return
 	}
 	if err == nil && old != watchJSON(ips) {
@@ -200,7 +208,7 @@ func (p *Panel) putDNSWatch(w http.ResponseWriter, r *http.Request) {
 func (p *Panel) deleteDNSWatch(w http.ResponseWriter, r *http.Request) {
 	p.dnsWatchMu.Lock()
 	defer p.dnsWatchMu.Unlock()
-	result, err := p.db.ExecContext(r.Context(), "DELETE FROM dns_watches WHERE id=? AND entry_group_id IS NULL", r.PathValue("id"))
+	result, err := p.db.ExecContext(r.Context(), "DELETE FROM dns_watches WHERE id=? AND entry_group_id IS NULL AND owner_node_id IS NULL", r.PathValue("id"))
 	if err != nil {
 		problem(w, 503, "存储暂不可用")
 		return
@@ -208,12 +216,12 @@ func (p *Panel) deleteDNSWatch(w http.ResponseWriter, r *http.Request) {
 	n, _ := result.RowsAffected()
 	if n == 0 {
 		var managed int
-		if e := p.db.QueryRowContext(r.Context(), "SELECT count(*) FROM dns_watches WHERE id=? AND entry_group_id IS NOT NULL", r.PathValue("id")).Scan(&managed); e != nil {
+		if e := p.db.QueryRowContext(r.Context(), "SELECT count(*) FROM dns_watches WHERE id=? AND (entry_group_id IS NOT NULL OR owner_node_id IS NOT NULL)", r.PathValue("id")).Scan(&managed); e != nil {
 			problem(w, 503, "存储暂不可用")
 			return
 		}
 		if managed > 0 {
-			problem(w, 409, "入口组域名自动加入解析监控，不能单独删除")
+			problem(w, 409, "受管域名自动加入解析监控，不能单独删除")
 			return
 		}
 		problem(w, 404, "解析监控不存在")
@@ -243,6 +251,7 @@ type dnsWatchHistory struct {
 	Changed   bool      `json:"changed"`
 }
 type dnsWatchView struct {
+	OwnerNodeID         string            `json:"owner_node_id"`
 	EntryGroupID        string            `json:"entry_group_id"`
 	PropagationStatus   string            `json:"propagation_status"`
 	ObservationDeadline *time.Time        `json:"observation_deadline"`
@@ -287,7 +296,7 @@ func (p *Panel) readDNSWatches(w http.ResponseWriter, r *http.Request, detail bo
 	}
 	p.dnsWatchMu.Lock()
 
-	query := "SELECT id,domain,expected_ips,expected_version,round,next_sample_at,coalesce(entry_group_id,''),propagation_status,observation_deadline,coalesce((SELECT last_error FROM entry_dns_audits WHERE group_id=entry_group_id),'') FROM dns_watches"
+	query := "SELECT id,domain,expected_ips,expected_version,round,next_sample_at,coalesce(entry_group_id,''),coalesce(owner_node_id,''),propagation_status,observation_deadline,coalesce((SELECT last_error FROM entry_dns_audits WHERE group_id=entry_group_id),'') FROM dns_watches"
 	args := []any{}
 	if detail {
 		query += " WHERE id=?"
@@ -306,7 +315,7 @@ func (p *Panel) readDNSWatches(w http.ResponseWriter, r *http.Request, detail bo
 		var encoded string
 		var next int64
 		var deadline sql.NullInt64
-		if err = rows.Scan(&v.ID, &v.Domain, &encoded, &v.ExpectedVersion, &v.Round, &next, &v.EntryGroupID, &v.PropagationStatus, &deadline, &v.ProviderError); err != nil {
+		if err = rows.Scan(&v.ID, &v.Domain, &encoded, &v.ExpectedVersion, &v.Round, &next, &v.EntryGroupID, &v.OwnerNodeID, &v.PropagationStatus, &deadline, &v.ProviderError); err != nil {
 			break
 		}
 		err = json.Unmarshal([]byte(encoded), &v.ExpectedIPs)

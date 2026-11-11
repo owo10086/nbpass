@@ -45,7 +45,9 @@ func TestConfigReportCannotReplaceConfirmedDigestOrRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	session := &controlSession{done: make(chan struct{}), instance: "current"}
+	p.controlMu.Lock()
 	p.controls[result.ID] = session
+	p.controlMu.Unlock()
 	report := &controlpb.NodeReport{ProtocolVersion: 1, ProcessInstance: "current", AttemptedRevision: 2, AppliedRevision: 2, AppliedDigest: snapshot.Digest}
 	if _, err := p.acceptReport(context.Background(), result.ID, digest, session, report); err != nil {
 		t.Fatal(err)

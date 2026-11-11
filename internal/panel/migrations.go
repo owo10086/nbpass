@@ -114,6 +114,13 @@ var migrations = []string{
 	crossGroupRotationMigration,
 	singleEntryRuleMigration,
 	incidentsMigration,
+	managedRecordModelMigration,
+	entryNodeRecordMigration,
+	allPublishMigration,
+	allPublishPolicyMigration,
+	allPublishOfflineMigration,
+	allPublishRotationMigration,
+	entryObservationMigration,
 	listOrderMigration,
 }
 

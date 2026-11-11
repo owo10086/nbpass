@@ -87,6 +87,7 @@ func (p *Panel) startEntryCandidates(ctx context.Context) {
 		defer p.background.Done()
 		defer func() { timer.Stop() }()
 		var windows map[string]entryFailbackWindow
+		var restoreWindows map[[2]string]entryFailbackWindow
 		for {
 			select {
 			case <-ctx.Done():
@@ -100,9 +101,11 @@ func (p *Panel) startEntryCandidates(ctx context.Context) {
 			if err != nil {
 				p.entryChecks = nil
 				windows = nil
+				restoreWindows = nil
 			} else {
 				p.entryChecks = states
 				windows, _ = p.checkEntryFailbacks(ctx, states, windows)
+				restoreWindows, _ = p.checkAllRestores(ctx, states, restoreWindows)
 			}
 			p.controlMu.Unlock()
 			p.entryMu.Unlock()

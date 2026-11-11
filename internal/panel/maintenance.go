@@ -80,10 +80,14 @@ func PrepareRestore(ctx context.Context, persistence Persistence, now time.Time)
 	statements := []string{
 		`DELETE FROM sessions`, `DELETE FROM installation_tickets`,
 		`DELETE FROM recovery_nodes`, `DELETE FROM recovery_groups`,
+		`DELETE FROM recovery_records`,
+		// 恢复不重放旧地址收尾；逐记录读回核对后由管理员处理偏差。
+		`DELETE FROM node_address_sync_jobs`,
 		`DELETE FROM recovery_state`,
 		`INSERT INTO recovery_state(id,restored_at) VALUES(1,?)`,
 		`INSERT INTO recovery_nodes(node_id) SELECT id FROM nodes`,
 		`INSERT INTO recovery_groups(group_id) SELECT id FROM entry_groups`,
+		`INSERT INTO recovery_records(managed_record_id,binding_generation) SELECT id,binding_generation FROM managed_records`,
 		`DELETE FROM node_rule_reports`,
 		`UPDATE node_self_check SET state='unknown',consecutive=0,last_config_key=''`,
 		`UPDATE self_check_rounds SET decision_eligible=0`,

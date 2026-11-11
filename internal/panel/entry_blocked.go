@@ -18,7 +18,7 @@ const blockedEntryFrom = ` FROM entry_publications s JOIN entry_groups g ON g.id
  JOIN node_self_check c ON c.node_id=s.active_node_id
  JOIN nodes n ON n.id=c.node_id JOIN node_regions r ON r.node_id=n.id
  JOIN entry_blocked_incidents i ON i.node_id=n.id
- WHERE g.blocked_policy IN ('switch_entry','switch_then_rotate') AND c.enabled=1 AND c.state='blocked'
+ WHERE g.publication_mode='primary_backup' AND g.blocked_policy IN ('switch_entry','switch_then_rotate') AND c.enabled=1 AND c.state='blocked'
  AND (n.maintenance_until IS NULL OR n.maintenance_until<=?)
  AND s.expected_value=r.public_ipv4 AND i.target_ip=r.public_ipv4
  AND i.occurred_at>=COALESCE((SELECT MAX(restored_at) FROM recovery_state),0)
@@ -130,6 +130,24 @@ func (p *Panel) submitBlockedSwitch(ctx context.Context, e blockedEntry, states 
 	if err != nil || !current {
 		return err
 	}
+	observing, err := groupObserving(ctx, tx, e.group)
+	if err != nil {
+		return err
+	}
+	if observing {
+		if candidate.NodeID == "" {
+			return nil
+		}
+		fresh, err := p.offlineCandidateCurrent(ctx, tx, candidate)
+		if err != nil || !fresh {
+			return err
+		}
+		_, err = p.observePrimaryTx(ctx, tx, EntryActionRequest{GroupID: e.group, NodeID: candidate.NodeID, IPv4: candidate.DomesticEvidence.PublicIPv4, Kind: "switch", ExpectedVersion: e.version})
+		if err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
 	identity := fmt.Sprintf("%s:%s:%d", e.group, e.incident, e.version)
 	// 策略②等待期间改选③须形成自己的决策，不复用“不换 IP”的通知；保留②原去重键。
 	if e.policy == "switch_then_rotate" {
@@ -157,6 +175,9 @@ func (p *Panel) submitBlockedSwitch(ctx context.Context, e blockedEntry, states 
 	a, err := p.submitEntryActionTx(ctx, tx, EntryActionRequest{GroupID: e.group, NodeID: candidate.NodeID, IPv4: candidate.DomesticEvidence.PublicIPv4, Kind: "switch", ExpectedVersion: e.version})
 	if err != nil {
 		return err
+	}
+	if a.Stage == entryObserved {
+		return tx.Commit()
 	}
 	// 动作 ID 分配或磁盘停顿可能跨过候选期限/维护起点；失效则回滚全部状态。
 	fresh, err = p.offlineCandidateCurrent(ctx, tx, candidate)

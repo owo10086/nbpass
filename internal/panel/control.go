@@ -218,7 +218,24 @@ func (s *controlService) Connect(stream grpc.BidiStreamingServer[controlpb.NodeR
 				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: response.ProtocolVersion, UpgradeOnly: true, UpgradeManifest: upgrade})
 			}
 			if err == nil && command != nil {
-				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: response.ProtocolVersion, DesiredRevision: response.DesiredRevision, RotationCommand: command})
+				// 串行化真正发送与观测开关，但不持控制锁等待网络。
+				// 发送超时后 Connect 可正常退出，取消阻塞的 stream.Send。
+				p.rotationDispatchMu.Lock()
+				p.controlMu.Lock()
+				err = p.validControl(stream.Context(), id, digest, session)
+				ready := true
+				if err == nil && command.Operation == "" {
+					origin := "manual"
+					if command.Automatic {
+						origin = "automatic"
+					}
+					ready, err = p.markRotationPermit(stream.Context(), id, command.ActionId, origin)
+				}
+				p.controlMu.Unlock()
+				if err == nil && ready {
+					err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: response.ProtocolVersion, DesiredRevision: response.DesiredRevision, RotationCommand: command})
+				}
+				p.rotationDispatchMu.Unlock()
 			}
 			if err == nil && len(dnsTasks) > 0 {
 				err = stream.Send(&controlpb.PanelMessage{ProtocolVersion: response.ProtocolVersion, DnsWatchTasks: dnsTasks})

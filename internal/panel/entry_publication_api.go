@@ -9,15 +9,21 @@ import (
 
 func (p *Panel) publishEntryGroup(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		ActiveNodeID   string `json:"active_node_id"`
-		IPv4           string `json:"ipv4"`
-		ConfirmInbound bool   `json:"confirm_inbound"`
+		MemberIPv4     map[string]string `json:"member_ipv4"`
+		ActiveNodeID   string            `json:"active_node_id"`
+		IPv4           string            `json:"ipv4"`
+		ConfirmInbound bool              `json:"confirm_inbound"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
 	if !body.ConfirmInbound {
 		problem(w, 400, "首次发布须确认活动入口及其公网 IPv4 可直接入站")
+		return
+	}
+	var mode string
+	if err := p.db.QueryRowContext(r.Context(), "SELECT publication_mode FROM entry_groups WHERE id=?", r.PathValue("id")).Scan(&mode); err == nil && mode == "all" {
+		p.publishAllGroup(w, r, body.MemberIPv4)
 		return
 	}
 	a, err := p.SubmitEntryAction(r.Context(), EntryActionRequest{GroupID: r.PathValue("id"), NodeID: body.ActiveNodeID, IPv4: body.IPv4, Kind: "first_publish", ExpectedVersion: 0})
@@ -33,6 +39,11 @@ func (p *Panel) publishEntryGroup(w http.ResponseWriter, r *http.Request) {
 	respond(w, 202, a)
 }
 func (p *Panel) getEntryPublication(w http.ResponseWriter, r *http.Request) {
+	var mode string
+	if err := p.db.QueryRowContext(r.Context(), "SELECT publication_mode FROM entry_groups WHERE id=?", r.PathValue("id")).Scan(&mode); err == nil && mode == "all" {
+		p.getAllPublication(w, r)
+		return
+	}
 	var pub struct {
 		GroupID            string       `json:"group_id"`
 		DesiredVersion     int64        `json:"desired_version"`
@@ -82,6 +93,11 @@ func (p *Panel) getEntryPublication(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		pub.Action = &a
+		pub.Action.Records, err = loadActionRecords(r.Context(), tx, a.ID)
+		if err != nil {
+			problem(w, 503, "无法读取逐条动作状态")
+			return
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		problem(w, 503, "无法读取发布状态")
@@ -106,8 +122,17 @@ func (p *Panel) listEntryActions(w http.ResponseWriter, r *http.Request) {
 		actions = append(actions, a)
 	}
 	if rows.Err() != nil {
+		rows.Close()
 		problem(w, 503, "无法读取入口动作")
 		return
+	}
+	rows.Close()
+	for i := range actions {
+		actions[i].Records, err = loadActionRecords(r.Context(), p.db, actions[i].ID)
+		if err != nil {
+			problem(w, 503, "无法读取逐条动作状态")
+			return
+		}
 	}
 	respond(w, 200, map[string]any{"actions": actions})
 }

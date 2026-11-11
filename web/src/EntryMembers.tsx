@@ -1,12 +1,12 @@
 import { Button, Form, Select, Space, Typography } from 'antd';
 
 // 数组顺序就是入口优先级；显式上移/下移避免多选控件隐式排序。
-export function EntryMembers({ nodes }: { nodes: { id: string; name: string }[] }) {
+export function EntryMembers({ nodes, all = false }: { nodes: { id: string; name: string }[]; all?: boolean }) {
   return <Form.List name="members" rules={[{ validator: (_, values) => values?.length ? Promise.resolve() : Promise.reject(new Error('请至少添加一个成员')) }]}>
     {(fields, { add, remove, move }, { errors }) => <>
-      <Typography.Paragraph type="secondary">所有成员应用相同规则并监听。第一位为首选入口；调整排序后保存生效。</Typography.Paragraph>
+      <Typography.Paragraph type="secondary">{all ? '所有成员应用相同规则并监听。绑定记录后才可发布；移出已绑定成员请在受管记录页面操作。' : '所有成员应用相同规则并监听。第一位为首选入口；调整排序后保存生效。'}</Typography.Paragraph>
       {fields.map((field, index) => <div key={field.key} style={{ marginBottom: 12 }}>
-        <Typography.Text>{index === 0 ? '1 · 首选入口' : `${index + 1} · 入口成员`}</Typography.Text>
+        <Typography.Text>{index === 0 && !all ? '1 · 首选入口' : `${index + 1} · 入口成员`}</Typography.Text>
         <Form.Item name={field.name} rules={[{ required: true, message: '请选择入口节点' }]} style={{ marginBottom: 4 }}>
           <Select showSearch optionFilterProp="label" options={nodes.map(n => ({ value: n.id, label: n.name }))} placeholder="选择入口节点" />
         </Form.Item>

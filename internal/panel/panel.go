@@ -56,30 +56,31 @@ type Config struct {
 }
 
 type Panel struct {
-	operationsMu    sync.Mutex
-	operationsError string
-	entryChecks     map[[2]string]entryMemberState
-	dnsWatchMu      sync.Mutex
-	dnsWatchWake    chan struct{}
-	entryMu         sync.Mutex
-	coordinator     *entryCoordinator
-	config          Config
-	deps            Dependencies
-	db              *sql.DB
-	passwordSlots   chan struct{}
-	secrets         SecretStore
-	controlMu       sync.Mutex
-	controls        map[string]*controlSession
-	pendingControls map[string]map[*controlSession]struct{}
-	startedAt       time.Time
-	background      sync.WaitGroup
-	stopBackground  context.CancelFunc
-	closeOnce       sync.Once
-	closeErr        error
-	telegramMu      sync.Mutex
-	telegramWake    chan struct{}
-	offlineWake     chan struct{}
-	retentionWake   chan struct{}
+	operationsMu       sync.Mutex
+	operationsError    string
+	entryChecks        map[[2]string]entryMemberState
+	dnsWatchMu         sync.Mutex
+	dnsWatchWake       chan struct{}
+	entryMu            sync.Mutex
+	rotationDispatchMu sync.Mutex // 顺序：entryMu → rotationDispatchMu → controlMu；网络发送不持 controlMu。
+	coordinator        *entryCoordinator
+	config             Config
+	deps               Dependencies
+	db                 *sql.DB
+	passwordSlots      chan struct{}
+	secrets            SecretStore
+	controlMu          sync.Mutex
+	controls           map[string]*controlSession
+	pendingControls    map[string]map[*controlSession]struct{}
+	startedAt          time.Time
+	background         sync.WaitGroup
+	stopBackground     context.CancelFunc
+	closeOnce          sync.Once
+	closeErr           error
+	telegramMu         sync.Mutex
+	telegramWake       chan struct{}
+	offlineWake        chan struct{}
+	retentionWake      chan struct{}
 }
 
 func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error) {

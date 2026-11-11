@@ -12,10 +12,21 @@ const (
 )
 
 type entryFailbackWindow struct {
-	node, ip  string
-	version   int64
-	slot      time.Time
-	successes int
+	node, ip   string
+	version    int64
+	generation int64
+	slot       time.Time
+	successes  int
+}
+
+// 主备回切与全部发布加回共用连续候选样本口径，不补齐跳过的十秒时段。
+func advanceEntrySuccessWindow(w entryFailbackWindow, node, ip string, version int64, checked time.Time) entryFailbackWindow {
+	slot := checked.Truncate(entryCandidateInterval)
+	if w.node != node || w.ip != ip || w.version != version || !slot.Equal(w.slot.Add(entryCandidateInterval)) {
+		w = entryFailbackWindow{node: node, ip: ip, version: version}
+	}
+	w.slot, w.successes = slot, min(w.successes+1, entryFailbackSuccesses)
+	return w
 }
 
 type entryFailbackPublication struct {
@@ -26,7 +37,7 @@ type entryFailbackPublication struct {
 }
 
 const failbackPublicationColumns = `s.group_id,m.node_id,s.active_node_id,s.desired_version,s.written_at,g.auto_failback_paused`
-const failbackPublicationFrom = ` FROM entry_publications s JOIN entry_groups g ON g.id=s.group_id
+const failbackPublicationFrom = ` FROM entry_publications s JOIN entry_groups g ON g.id=s.group_id AND g.publication_mode='primary_backup'
  JOIN entry_group_members m ON m.group_id=s.group_id AND m.position=(SELECT MIN(position) FROM entry_group_members WHERE group_id=s.group_id)`
 
 func scanFailbackPublication(row scanner) (entryFailbackPublication, error) {
@@ -74,13 +85,8 @@ func (p *Panel) checkEntryFailbacks(ctx context.Context, states map[[2]string]en
 		}
 		// 每个十秒采样时段最多一次。跳过的时段不会补样本；按时段比较
 		// 而非纳秒级间隔，避免正常调度抖动把相邻检查误判为缺样。
-		slot := state.CheckedAt.Truncate(entryCandidateInterval)
-		w := previous[v.group]
 		ip := state.DomesticEvidence.PublicIPv4
-		if w.node != v.preferred || w.ip != ip || w.version != v.version || !slot.Equal(w.slot.Add(entryCandidateInterval)) {
-			w = entryFailbackWindow{node: v.preferred, ip: ip, version: v.version}
-		}
-		w.slot, w.successes = slot, min(w.successes+1, entryFailbackSuccesses)
+		w := advanceEntrySuccessWindow(previous[v.group], v.preferred, ip, v.version, *state.CheckedAt)
 		next[v.group] = w
 		if w.successes < entryFailbackSuccesses || v.paused || !v.written.Valid || now.Sub(time.Unix(0, v.written.Int64)) < entryMinimumResidence {
 			continue
@@ -122,9 +128,12 @@ func (p *Panel) submitEntryFailback(ctx context.Context, observed entryFailbackP
 	if err != nil || !fresh {
 		return false, err
 	}
-	_, err = p.submitEntryActionTx(ctx, tx, EntryActionRequest{GroupID: v.group, NodeID: v.preferred, IPv4: state.DomesticEvidence.PublicIPv4, Kind: "failback", ExpectedVersion: v.version})
+	a, err := p.submitEntryActionTx(ctx, tx, EntryActionRequest{GroupID: v.group, NodeID: v.preferred, IPv4: state.DomesticEvidence.PublicIPv4, Kind: "failback", ExpectedVersion: v.version})
 	if err != nil {
 		return false, err
+	}
+	if a.Stage == entryObserved {
+		return false, tx.Commit()
 	}
 	// 随机源或磁盘停顿也可能跨过证据期限；失效时连同动作和事件回滚。
 	fresh, err = p.offlineCandidateCurrent(ctx, tx, state)

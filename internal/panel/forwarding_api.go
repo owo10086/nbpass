@@ -11,16 +11,22 @@ import (
 )
 
 type entryGroupView struct {
-	MemberStates      []entryMemberState `json:"member_states"`
-	ID                string             `json:"id"`
-	Name              string             `json:"name"`
-	Members           []string           `json:"members"`
-	PublicationStatus string             `json:"publication_status"`
-	SyncStatus        string             `json:"sync_status"`
-	SyncMembers       []groupSyncMember  `json:"sync_members"`
+	ObservationEnabled bool                   `json:"observation_enabled"`
+	MemberRecords      []allMemberPublication `json:"member_records,omitempty"`
+	PublicationMode    string                 `json:"publication_mode"`
+	MinimumKept        int                    `json:"minimum_kept"`
+	FirstPublished     bool                   `json:"first_published"`
+	MemberStates       []entryMemberState     `json:"member_states"`
+	ID                 string                 `json:"id"`
+	Name               string                 `json:"name"`
+	Members            []string               `json:"members"`
+	PublicationStatus  string                 `json:"publication_status"`
+	SyncStatus         string                 `json:"sync_status"`
+	SyncMembers        []groupSyncMember      `json:"sync_members"`
 }
 
 func (p *Panel) forwardingRoutes(mux *http.ServeMux) {
+	p.observationRoutes(mux)
 	mux.HandleFunc("GET /api/entry-groups", p.listEntryGroups)
 	mux.HandleFunc("POST /api/entry-groups", p.saveEntryGroup)
 	mux.HandleFunc("PUT /api/entry-groups/{id}", p.saveEntryGroup)
@@ -46,7 +52,7 @@ func (p *Panel) listEntryGroups(w http.ResponseWriter, r *http.Request) {
 func (p *Panel) entryGroupViews(ctx context.Context) ([]entryGroupView, error) {
 	p.controlMu.Lock()
 	defer p.controlMu.Unlock()
-	rows, err := p.db.QueryContext(ctx, `SELECT id,name,publication_status FROM entry_groups ORDER BY `+listOrders["entry-groups"].orderBy)
+	rows, err := p.db.QueryContext(ctx, `SELECT id,name,publication_status,publication_mode,minimum_kept,first_published_at IS NOT NULL,observation_enabled FROM entry_groups ORDER BY `+listOrders["entry-groups"].orderBy)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +60,7 @@ func (p *Panel) entryGroupViews(ctx context.Context) ([]entryGroupView, error) {
 	groups := []entryGroupView{}
 	for rows.Next() {
 		var g entryGroupView
-		if err := rows.Scan(&g.ID, &g.Name, &g.PublicationStatus); err != nil {
+		if err := rows.Scan(&g.ID, &g.Name, &g.PublicationStatus, &g.PublicationMode, &g.MinimumKept, &g.FirstPublished, &g.ObservationEnabled); err != nil {
 			return nil, err
 		}
 		groups = append(groups, g)
@@ -70,6 +76,12 @@ func (p *Panel) entryGroupViews(ctx context.Context) ([]entryGroupView, error) {
 	}
 	for i := range groups {
 		groups[i].Members = members[groups[i].ID]
+		if groups[i].PublicationMode == "all" {
+			groups[i].MemberRecords, err = loadAllMembers(ctx, p.db, groups[i].ID)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	rules, err := loadRules(ctx, p.db)
 	if err != nil {
@@ -147,8 +159,9 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 	p.entryMu.Lock()
 	defer p.entryMu.Unlock()
 	var body struct {
-		Name    string   `json:"name"`
-		Members []string `json:"members"`
+		Name            string   `json:"name"`
+		PublicationMode string   `json:"publication_mode"`
+		Members         []string `json:"members"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -177,11 +190,27 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	publicationStatus := "未发布"
+	mode := body.PublicationMode
+	if creating && mode == "" {
+		mode = "primary_backup"
+	}
+	if mode != "" && mode != "primary_backup" && mode != "all" {
+		problem(w, 400, "发布模式须为主备或全部发布")
+		return
+	}
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
 		if err := validateEntryMembers(r.Context(), tx, body.Members); err != nil {
 			return err
 		}
 		if !creating {
+			var oldMode string
+			if err := tx.QueryRowContext(r.Context(), "SELECT publication_mode FROM entry_groups WHERE id=?", id).Scan(&oldMode); err != nil {
+				return err
+			}
+			if mode != "" && mode != oldMode {
+				return &forwardingError{409, "发布模式创建后不能更改，请新建组再修改规则入口"}
+			}
+			mode = oldMode
 			var active string
 			err := tx.QueryRowContext(r.Context(), "SELECT active_node_id FROM entry_publications WHERE group_id=?", id).Scan(&active)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -190,12 +219,17 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 			if active != "" && !containsEntryMember(body.Members, active) {
 				return &forwardingError{409, "请先通过入口动作切换活动入口，再移除该成员"}
 			}
+			if mode == "all" {
+				if err := protectAllMemberRemoval(r.Context(), tx, id, body.Members); err != nil {
+					return err
+				}
+			}
 			if err := protectPendingEntryMembers(r.Context(), tx, id, body.Members); err != nil {
 				return err
 			}
 		}
 		if creating {
-			if _, err := tx.ExecContext(r.Context(), "INSERT INTO entry_groups(id,name) VALUES(?,?)", id, body.Name); err != nil {
+			if _, err := tx.ExecContext(r.Context(), "INSERT INTO entry_groups(id,name,publication_mode) VALUES(?,?,?)", id, body.Name, mode); err != nil {
 				return err
 			}
 		} else {
@@ -219,14 +253,18 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 	if creating {
 		code = 201
 	}
-	respond(w, code, entryGroupView{ID: id, Name: body.Name, Members: body.Members, PublicationStatus: publicationStatus})
+	respond(w, code, entryGroupView{ID: id, Name: body.Name, Members: body.Members, PublicationStatus: publicationStatus, PublicationMode: mode, MinimumKept: 1})
 }
 func (p *Panel) deleteEntryGroup(w http.ResponseWriter, r *http.Request) {
+	var allMode bool
 	p.entryMu.Lock()
 	defer p.entryMu.Unlock()
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
+		if err := tx.QueryRowContext(r.Context(), "SELECT publication_mode='all' FROM entry_groups WHERE id=?", r.PathValue("id")).Scan(&allMode); err != nil {
+			return err
+		}
 		var pending int
-		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM entry_actions WHERE group_id=? AND stage<>?", r.PathValue("id"), EntryWritten).Scan(&pending); err != nil {
+		if err := tx.QueryRowContext(r.Context(), "SELECT (SELECT count(*) FROM entry_actions WHERE group_id=? AND stage NOT IN "+terminalActionStages+") + (SELECT count(*) FROM node_address_sync_jobs j JOIN managed_records m ON m.id=j.managed_record_id WHERE m.group_id=?)", r.PathValue("id"), r.PathValue("id")).Scan(&pending); err != nil {
 			return err
 		}
 		if pending > 0 {
@@ -241,6 +279,10 @@ func (p *Panel) deleteEntryGroup(w http.ResponseWriter, r *http.Request) {
 		}
 		return missingResult(tx.ExecContext(r.Context(), "DELETE FROM entry_groups WHERE id=?", r.PathValue("id")))
 	}) {
+		return
+	}
+	if allMode {
+		respond(w, 200, map[string]string{"warning": "成员 DNSPod 记录保持原状，请管理员自行核对和处理"})
 		return
 	}
 	respond(w, 204, nil)

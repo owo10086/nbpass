@@ -13,6 +13,10 @@ func (p *Panel) startEntryDNSAudit(ctx context.Context) {
 	go func() {
 		defer p.background.Done()
 		for ctx.Err() == nil {
+			p.finishAllMemberRemovals(ctx)
+			_ = p.notifyRecordRejections(ctx)
+			_ = p.notifyNodeAddressDrift(ctx)
+			p.auditAllDNS(ctx)
 			p.auditEntryDNS(ctx)
 			timer := p.deps.Clock.NewTimer(time.Second)
 			select {
@@ -29,7 +33,7 @@ func (p *Panel) startEntryDNSAudit(ctx context.Context) {
 func (p *Panel) auditEntryDNS(ctx context.Context) {
 	rows, err := p.db.QueryContext(ctx, `SELECT s.group_id,s.desired_version,s.active_node_id,s.expected_value,w.propagation_status
  FROM entry_publications s JOIN entry_dns_audits d ON d.group_id=s.group_id JOIN dns_watches w ON w.entry_group_id=s.group_id
- WHERE s.written_at IS NOT NULL AND d.next_check_at<=? ORDER BY d.next_check_at LIMIT 32`, p.deps.Clock.Now().UnixNano())
+ WHERE EXISTS(SELECT 1 FROM entry_groups g WHERE g.id=s.group_id AND g.publication_mode='primary_backup') AND s.written_at IS NOT NULL AND d.next_check_at<=? ORDER BY d.next_check_at LIMIT 32`, p.deps.Clock.Now().UnixNano())
 	if err != nil {
 		return
 	}
@@ -77,12 +81,12 @@ func (p *Panel) auditEntryDNS(ctx context.Context) {
 		actual, e := p.deps.DNSProvider.ReadRecord(query, dnsprovider.Credentials{TokenID: credential.TokenID, Token: credential.Token}, dnsprovider.Key{Domain: b.Domain, RecordID: b.RecordID})
 		cancel()
 		if e == nil {
-			if _, e = recordWarnings(actual, b.RecordID, b.LineID); e != nil || actual.Record.Name != b.Name {
-				message = "受管记录类型、名称或线路变化，等待人工核对"
+			if _, e = recordWarnings(actual, b.RecordID, b.LineID); e != nil || actual.Record.Name != b.Name || !actual.Record.Enabled {
+				message = "主备受管记录的类型、名称、启用状态或线路变化，等待人工核对"
 			} else {
 				message = ""
 				// 先存最新读回值；动作提交仍按当前版本核对，迟到核对不能改新期望。
-				_, e = p.db.ExecContext(ctx, `UPDATE managed_records SET current_value=?,current_ttl=? WHERE group_id=? AND EXISTS(SELECT 1 FROM entry_publications WHERE group_id=? AND desired_version=? AND written_at IS NOT NULL)`, actual.Record.Value, actual.Record.TTL, a.group, a.group, a.version)
+				_, e = p.db.ExecContext(ctx, `UPDATE managed_records SET current_value=?,current_ttl=?,current_enabled=? WHERE id=? AND binding_generation=? AND EXISTS(SELECT 1 FROM entry_publications WHERE group_id=? AND desired_version=? AND written_at IS NOT NULL)`, actual.Record.Value, actual.Record.TTL, actual.Record.Enabled, b.ID, b.BindingGeneration, a.group, a.version)
 				if e == nil && actual.Record.Value != a.ip {
 					_, e = p.SubmitEntryAction(ctx, EntryActionRequest{GroupID: a.group, NodeID: a.node, IPv4: a.ip, Kind: "writeback", ExpectedVersion: a.version})
 				}

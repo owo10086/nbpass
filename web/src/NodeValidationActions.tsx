@@ -13,6 +13,7 @@ export type NodeValidationMode = 'ports' | 'delete';
 // 由节点列表的「更多」菜单打开；mode 为空时不显示任何对话框。
 export function NodeValidationActions({ node, mode, onClose, onSaved, onError }: { node: Node; mode?: NodeValidationMode; onClose: () => void; onSaved: () => Promise<void>; onError: (e: unknown) => void }) {
   const [view, setView] = useState<NodeValidationMode>();
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [references, setReferences] = useState<Reference[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -26,10 +27,10 @@ export function NodeValidationActions({ node, mode, onClose, onSaved, onError }:
   useEffect(() => { if (mode) void open(mode); else setView(undefined); }, [mode, node.id]);
 
   async function open(mode: NodeValidationMode) {
-    setError(''); setLoading(true); setView(mode); setReferences([]); form.resetFields();
+    setError(''); setLoading(true); setView(mode); setReferences([]); setWarnings([]); form.resetFields();
     try {
       if (mode === 'ports') form.setFieldsValue(await api<ListenerPorts>(`/nodes/${node.id}/listener-ports`));
-      else setReferences((await api<{ references: Reference[] }>(`/nodes/${node.id}/references`)).references);
+      else { const result = await api<{ references: Reference[]; warnings: string[] }>(`/nodes/${node.id}/references`); setReferences(result.references); setWarnings(result.warnings); }
     } catch (e) { failed(e); }
     finally { setLoading(false); }
   }
@@ -62,6 +63,7 @@ export function NodeValidationActions({ node, mode, onClose, onSaved, onError }:
     </Modal>
     <Modal title={`删除节点「${node.name}」`} open={view === 'delete'} onCancel={onClose} width={680} footer={<Space><Button onClick={onClose}>取消</Button><Button danger type="primary" loading={loading} disabled={!!error || references.length > 0} onClick={() => void remove()}>确认删除节点</Button></Space>}>
       {error && <Alert title={error} type="error" showIcon className="message" />}
+      {warnings.map((warning, i) => <Alert key={i} title={warning} type="warning" showIcon className="message" />)}
       {references.length > 0 ? <>
         <Alert title="节点仍被引用，请先移除以下配置中的关联。" type="warning" showIcon className="message" />
         <Table<Reference> size="small" rowKey={ref => `${ref.kind}:${ref.id}`} dataSource={references} pagination={false} scroll={{ x: 440, y: 320 }} columns={[

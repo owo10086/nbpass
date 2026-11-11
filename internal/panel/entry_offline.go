@@ -20,6 +20,9 @@ type offlineEntry struct {
 	version, incident int64
 	port              int
 	revision          uint64
+	// 全部发布冻结成员记录身份；主备仍按组期望版本核对。
+	record  string
+	binding int64
 }
 
 // 与手动操作沿用 entryMu → controlMu；持锁期间只读写本地状态，不调用外部服务。
@@ -125,7 +128,7 @@ func (p *Panel) scheduleOfflineCheck(ctx context.Context, e offlineEntry, now ti
 		return err
 	}
 	deadline := now.Add(60 * time.Second)
-	if _, err = tx.ExecContext(ctx, `INSERT INTO entry_offline_checks(id,group_id,node_id,incident_id,desired_version,target_ip,target_port,config_revision,issued_at,deadline) VALUES(?,?,?,?,?,?,?,?,?,?)`, id, e.group, e.node, e.incident, e.version, e.ip, e.port, e.revision, now.UnixNano(), deadline.UnixNano()); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO entry_offline_checks(id,group_id,node_id,incident_id,desired_version,target_ip,target_port,config_revision,issued_at,deadline,managed_record_id,binding_generation) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, id, e.group, e.node, e.incident, e.version, e.ip, e.port, e.revision, now.UnixNano(), deadline.UnixNano(), e.record, e.binding); err != nil {
 		return err
 	}
 	rows, err := tx.QueryContext(ctx, `SELECT n.id FROM nodes n JOIN node_regions r ON r.node_id=n.id WHERE n.id<>? AND CASE WHEN r.override_name IS NULL THEN r.auto_mainland ELSE r.override_mainland END=1 AND r.checker_disabled=0 AND (n.maintenance_until IS NULL OR n.maintenance_until<=?) AND n.last_seen_at>? ORDER BY n.id`, e.node, now.UnixNano(), now.Add(-offlineWindow).UnixNano())
@@ -298,6 +301,9 @@ func (p *Panel) submitOfflineSwitch(ctx context.Context, e offlineEntry, id stri
 	a, err := p.submitEntryActionTx(ctx, tx, EntryActionRequest{GroupID: e.group, NodeID: candidate, IPv4: ip, Kind: "switch", ExpectedVersion: e.version})
 	if err != nil {
 		return err
+	}
+	if a.Stage == entryObserved {
+		return tx.Commit()
 	}
 	// 分配动作ID或存储也可能跨过有效期。提交前最后检查时间条件，
 	// 失败就回滚整个动作、期望版本和事件，绝不唤醒DNS协调器。
