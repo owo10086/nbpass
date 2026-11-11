@@ -30,6 +30,7 @@ func (p *Panel) forwardingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/rules/import/preflight", p.importRules)
 	mux.HandleFunc("POST /api/rules/import", p.importRules)
 	mux.HandleFunc("POST /api/rules", p.saveRule)
+	mux.HandleFunc("POST /api/rules/batch", p.batchRules)
 	mux.HandleFunc("PUT /api/rules/{id}", p.saveRule)
 	mux.HandleFunc("DELETE /api/rules/{id}", p.deleteRule)
 }
@@ -45,7 +46,7 @@ func (p *Panel) listEntryGroups(w http.ResponseWriter, r *http.Request) {
 func (p *Panel) entryGroupViews(ctx context.Context) ([]entryGroupView, error) {
 	p.controlMu.Lock()
 	defer p.controlMu.Unlock()
-	rows, err := p.db.QueryContext(ctx, `SELECT id,name,publication_status FROM entry_groups ORDER BY id`)
+	rows, err := p.db.QueryContext(ctx, `SELECT id,name,publication_status FROM entry_groups ORDER BY `+listOrders["entry-groups"].orderBy)
 	if err != nil {
 		return nil, err
 	}
@@ -256,6 +257,9 @@ func scanRule(row scanner) (forwarding.Rule, error) {
 }
 func (p *Panel) listRules(w http.ResponseWriter, r *http.Request) {
 	rules, err := p.ruleSyncViews(r.Context())
+	if err == nil {
+		err = sortByDisplayOrder(r.Context(), p.db, listOrders["rules"], rules, func(v ruleView) string { return v.ID })
+	}
 	if err != nil {
 		problem(w, 503, "存储暂不可用")
 		return
@@ -374,9 +378,12 @@ func (p *Panel) saveRule(w http.ResponseWriter, r *http.Request) {
 }
 func (p *Panel) deleteRule(w http.ResponseWriter, r *http.Request) {
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
-		return missingResult(tx.ExecContext(r.Context(), "DELETE FROM forward_rules WHERE id=?", r.PathValue("id")))
+		return removeRule(r.Context(), tx, r.PathValue("id"))
 	}) {
 		return
 	}
 	respond(w, 204, nil)
+}
+func removeRule(ctx context.Context, tx *sql.Tx, id string) error {
+	return missingResult(tx.ExecContext(ctx, "DELETE FROM forward_rules WHERE id=?", id))
 }

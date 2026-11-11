@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Switch, Table, Tag } from 'antd';
+import { Alert, App, Button, Form, Input, InputNumber, Modal, Popconfirm, Select, Switch, Table, Tag } from 'antd';
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
 import { RuleSyncDetails, SyncHelp, SyncTag, type SyncMember } from './ConfigSync';
 import { RulesTransfer } from './RulesTransfer';
 import { go } from './route';
 import { PageHeader } from './PageHeader';
+import { byMetric, byText, useDragOrder } from './ListOrder';
+
+type BatchAction = 'enable' | 'disable' | 'delete';
+const batchLabels: Record<BatchAction, string> = { enable: '启用', disable: '停用', delete: '删除' };
 
 type RuleInput = { name: string; entry_group_id?: string; entry_node_id?: string; kind: 'direct' | 'tunnel'; exit_group_id?: string; listen_port: number; target_address: string; target_family: 'ipv4'; target_port: number; allow_private: boolean; enabled: boolean };
 type Rule = RuleInput & { id: string; sync_status: string; sync_members: SyncMember[]; traffic?: { upload_bytes: number; download_bytes: number; active_connections: number | null } };
@@ -24,6 +28,7 @@ function ruleInput(row: RuleInput): RuleInput {
 }
 
 export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionExpired: () => void }) {
+  const { message } = App.useApp();
   const [rows, setRows] = useState<Rule[]>([]);
   const [nodes, setNodes] = useState<Group[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
@@ -34,6 +39,7 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedIDs, setSelectedIDs] = useState<string[]>([]);
+  const [batching, setBatching] = useState<BatchAction>();
   const [form] = Form.useForm();
   const entryType = Form.useWatch('entry_type', form);
   const kind = Form.useWatch('kind', form);
@@ -51,7 +57,8 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
     } catch (e) { failed(e); }
     finally { setLoading(false); }
   }
-  useEffect(() => { void load(); const timer = window.setInterval(() => void load(), 5000); return () => window.clearInterval(timer); }, []);
+  const order = useDragOrder(rows, setRows, '/rules', { filtered: !!focus, onError: failed, reload: load });
+  useEffect(() => { void load(); const timer = window.setInterval(() => { if (!order.busy()) void load(); }, 5000); return () => window.clearInterval(timer); }, []);
   function edit(row: Rule | null) {
     setError(''); form.resetFields(); form.setFieldsValue(row ? { ...row, entry_type: row.entry_node_id ? 'node' : 'group' } : { entry_type: 'node', kind: 'direct', enabled: true, allow_private: false }); setEditing(row);
   }
@@ -70,6 +77,18 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
   async function remove(id: string) {
     try { await api(`/rules/${id}`, 'DELETE'); await load(); } catch (e) { failed(e); }
   }
+  // 整批一次提交：只重新编译一次配置，任一条失败则整批不生效。
+  async function batch(action: BatchAction) {
+    setBatching(action);
+    try {
+      await api('/rules/batch', 'POST', { action, ids: selectedIDs });
+      message.success(`已${batchLabels[action]} ${selectedIDs.length} 条规则`);
+      if (action === 'delete') setSelectedIDs([]);
+      await load();
+    } catch (e) { failed(e); }
+    finally { setBatching(undefined); }
+  }
+  const entryName = (row: Rule) => row.entry_node_id ? nodes.find(n => n.id === row.entry_node_id)?.name ?? row.entry_node_id : groups.find(g => g.id === row.entry_group_id)?.name ?? row.entry_group_id ?? '';
   return <>
     <PageHeader title="转发规则" description="将入口节点或入口组的 TCP 监听端口通过直连或出口组转发到一个 IPv4 或域名目标。每 5 秒刷新。">
       <RulesTransfer selectedIDs={selectedIDs} onChanged={load} onSessionExpired={onSessionExpired} />
@@ -78,16 +97,28 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
     </PageHeader>
     {error && <Alert title={error} type="error" showIcon className="message" />}
     {focus && <Alert title={rows.some(r => r.id === focus) ? '已定位关联规则' : '关联规则已删除或尚未读取'} action={<Button onClick={() => go('rules')}>查看全部规则</Button>} type="info" showIcon className="message" />}
-    <div className="panel"><Table<Rule> rowKey="id" dataSource={focus ? rows.filter(r => r.id === focus) : rows} rowSelection={{ selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} loading={!loaded && !error} pagination={rows.length > 100 ? { pageSize: 100, showSizeChanger: false } : false} scroll={{ x: 1130 }} locale={{ emptyText: '暂无转发规则，请先接入入口节点。' }} expandable={{ defaultExpandedRowKeys: focus ? [focus] : [], expandedRowRender: row => <RuleSyncDetails members={row.sync_members} /> }} columns={[
-      { title: '规则', dataIndex: 'name', width: 130, render: value => <span className="node-name">{value}</span> },
-      { title: '入口', width: 130, render: (_, row) => <>{row.entry_node_id ? nodes.find(n => n.id === row.entry_node_id)?.name ?? row.entry_node_id : groups.find(g => g.id === row.entry_group_id)?.name ?? row.entry_group_id}<span className="cell-sub">{row.entry_node_id ? '入口节点' : '入口组'}</span></> },
+    {(selectedIDs.length > 0 || order.restore) && <div className="toolbar">
+      {selectedIDs.length > 0 && <div className="toolbar batch-bar" style={{ marginBottom: 0 }}>
+        <span>已选 <span className="num">{selectedIDs.length}</span> 条</span>
+        <Button size="small" loading={batching === 'enable'} disabled={!!batching} onClick={() => void batch('enable')}>启用</Button>
+        <Popconfirm title={`停用 ${selectedIDs.length} 条规则？`} description="会断开这些规则的所有连接。" onConfirm={() => batch('disable')}><Button size="small" loading={batching === 'disable'} disabled={!!batching}>停用</Button></Popconfirm>
+        <Popconfirm title={`删除 ${selectedIDs.length} 条规则？`} description="会断开这些规则的所有连接，删除后不可恢复。" okButtonProps={{ danger: true }} onConfirm={() => batch('delete')}><Button size="small" danger loading={batching === 'delete'} disabled={!!batching}>删除</Button></Popconfirm>
+        <Button size="small" type="text" onClick={() => setSelectedIDs([])}>取消选择</Button>
+      </div>}
+      <span className="spacer" />
+      {order.restore}
+    </div>}
+    <div className="panel"><Table<Rule> rowKey="id" dataSource={focus ? rows.filter(r => r.id === focus) : rows} rowSelection={{ selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} onChange={order.onChange} onRow={order.onRow} rowClassName={row => order.rowClass(row.id)} loading={!loaded && !error} pagination={rows.length > 100 ? { pageSize: 100, showSizeChanger: false } : false} scroll={{ x: 1196 }} locale={{ emptyText: '暂无转发规则，请先接入入口节点。' }} expandable={{ defaultExpandedRowKeys: focus ? [focus] : [], expandedRowRender: row => <RuleSyncDetails members={row.sync_members} /> }} columns={[
+      order.handle,
+      { title: '规则', dataIndex: 'name', width: 130, ...order.sorted('name'), sorter: byText(row => row.name), render: value => <span className="node-name">{value}</span> },
+      { title: '入口', width: 130, ...order.sorted('entry'), sorter: byText(entryName), render: (_, row) => <>{entryName(row)}<span className="cell-sub">{row.entry_node_id ? '入口节点' : '入口组'}</span></> },
       { title: '链路', width: 90, render: (_, row) => row.kind === 'tunnel' ? <>隧道<span className="cell-sub">经 {exitGroups.find(g => g.id === row.exit_group_id)?.name ?? row.exit_group_id}</span></> : <>直连</> },
-      { title: '监听端口', dataIndex: 'listen_port', width: 80, render: value => <span className="mono">{value}</span> },
-      { title: '目标', width: 170, render: (_, row) => <><span className="mono">{row.target_address}:{row.target_port}</span><span className="cell-sub">IPv4 · {row.allow_private ? '允许私网目标' : '仅公网目标'}</span></> },
-      { title: '状态', width: 70, render: (_, row) => <Tag color={row.enabled ? 'green' : 'default'}>{row.enabled ? '启用' : '停用'}</Tag> },
-      { title: '同步状态', width: 90, render: (_, row) => <SyncTag status={row.sync_status} /> },
-      { title: '累计上行 / 下行', width: 120, render: (_, row) => <span className="num" title={`上行 ${(row.traffic?.upload_bytes ?? 0).toLocaleString()} B，下行 ${(row.traffic?.download_bytes ?? 0).toLocaleString()} B`}>↑ {bytes(row.traffic?.upload_bytes ?? 0)}<span className="cell-sub">↓ {bytes(row.traffic?.download_bytes ?? 0)}</span></span> },
-      { title: '连接数', width: 80, render: (_, row) => row.traffic?.active_connections == null ? <span className="muted">缺测</span> : <span className="num">{row.traffic.active_connections.toLocaleString()}</span> },
+      { title: '监听端口', dataIndex: 'listen_port', width: 100, ...order.sorted('listen_port'), sorter: (a, b) => a.listen_port - b.listen_port, render: value => <span className="mono">{value}</span> },
+      { title: '目标', width: 170, ...order.sorted('target'), sorter: byText(row => `${row.target_address}:${row.target_port}`), render: (_, row) => <><span className="mono">{row.target_address}:{row.target_port}</span><span className="cell-sub">IPv4 · {row.allow_private ? '允许私网目标' : '仅公网目标'}</span></> },
+      { title: '状态', width: 80, ...order.sorted('enabled'), sorter: (a, b) => Number(b.enabled) - Number(a.enabled), render: (_, row) => <Tag color={row.enabled ? 'green' : 'default'}>{row.enabled ? '启用' : '停用'}</Tag> },
+      { title: '同步状态', width: 100, ...order.sorted('sync'), sorter: byText(row => row.sync_status), render: (_, row) => <SyncTag status={row.sync_status} /> },
+      { title: '累计上行 / 下行', width: 150, ...order.sorted('traffic'), sortDirections: ['descend', 'ascend'], sorter: byMetric<Rule>(row => row.traffic ? row.traffic.upload_bytes + row.traffic.download_bytes : null), render: (_, row) => <span className="num" title={`上行 ${(row.traffic?.upload_bytes ?? 0).toLocaleString()} B，下行 ${(row.traffic?.download_bytes ?? 0).toLocaleString()} B`}>↑ {bytes(row.traffic?.upload_bytes ?? 0)}<span className="cell-sub">↓ {bytes(row.traffic?.download_bytes ?? 0)}</span></span> },
+      { title: '连接数', width: 90, ...order.sorted('connections'), sortDirections: ['descend', 'ascend'], sorter: byMetric<Rule>(row => row.traffic?.active_connections), render: (_, row) => row.traffic?.active_connections == null ? <span className="muted">缺测</span> : <span className="num">{row.traffic.active_connections.toLocaleString()}</span> },
       { title: '', key: 'actions', fixed: 'right', width: 140, align: 'right', render: (_, row) => <div className="row-actions"><Button size="small" type="text" onClick={() => edit(row)}>编辑</Button><Popconfirm title={row.enabled ? '停用并断开该规则的所有连接？' : '启用该规则？'} onConfirm={() => toggle(row)}><Button size="small" type="text">{row.enabled ? '停用' : '启用'}</Button></Popconfirm><Popconfirm title="删除规则并断开所有连接？" onConfirm={() => remove(row.id)}><Button danger size="small" type="text">删除</Button></Popconfirm></div> },
     ]} /></div>
     <p className="footnote">保存后在节点页面核对期望与已应用配置版本。离线节点须恢复控制连接后才能应用改动。</p>

@@ -11,6 +11,7 @@ import { NodeSelfCheck, SelfCheckSettings } from './NodeSelfCheck';
 import { useFocusRow } from './route';
 import { PageHeader } from './PageHeader';
 import { ConnectionsCell, CpuCell, MemoryCell, memoryPercent, NetworkCell, networkRate, uptime, type NodeProbe } from './NodeMetrics';
+import { byMetric, byText, useDragOrder } from './ListOrder';
 
 type NodeRow = NodeRegionFields & NodeUpgradeFields & {
   id: string; name: string; status: string; status_label: string; connected: boolean;
@@ -33,13 +34,10 @@ function tone(row: NodeRow) {
   return '';
 }
 
-// 没有实时值的节点无论升序降序都排在最后；antd 降序时会把比较结果取反。
-function byMetric(value: (row: NodeRow) => number | null | undefined) {
-  return (a: NodeRow, b: NodeRow, order?: string | null) => {
-    const x = value(a), y = value(b);
-    if (x == null || y == null) return x == null && y == null ? 0 : (x == null) === (order === 'ascend') ? 1 : -1;
-    return x - y;
-  };
+// 状态列升序为在线优先、离线最后；控制连接中断的在线节点排在正常在线之后。
+function statusRank(row: NodeRow) {
+  if (row.status === 'online') return row.connected ? 0 : 1;
+  return ({ maintenance: 2, pending: 3, offline: 4 } as Record<string, number>)[row.status] ?? 5;
 }
 
 function ago(value: string) {
@@ -51,8 +49,10 @@ function ago(value: string) {
 }
 
 export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionExpired: () => void }) {
-  const { modal } = App.useApp();
+  const { message, modal } = App.useApp();
   const [rows, setRows] = useState<NodeRow[]>([]);
+  const [selectedIDs, setSelectedIDs] = useState<string[]>([]);
+  const [batching, setBatching] = useState<boolean>();
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -79,14 +79,19 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
 
   async function load() {
     setLoading(true);
-    try { setRows((await api<{ nodes: NodeRow[] }>('/nodes')).nodes); setError(''); setLoaded(true); }
+    try {
+      const nodes = (await api<{ nodes: NodeRow[] }>('/nodes')).nodes;
+      setRows(nodes); setSelectedIDs(ids => ids.filter(id => nodes.some(row => row.id === id))); setError(''); setLoaded(true);
+    }
     catch (e) { failed(e); }
     finally { setLoading(false); }
   }
 
+  const needle = query.trim().toLowerCase();
+  const order = useDragOrder(rows, setRows, '/nodes', { filtered: filter !== 'all' || !!needle, onError: failed, reload: load });
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void load(), 10_000);
+    const timer = window.setInterval(() => { if (!order.busy()) void load(); }, 10_000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -114,6 +119,21 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
     } catch (e) { failed(e); }
   }
 
+  // 维护是逐节点状态，没有整批事务；逐个调用后汇总成功与失败。
+  async function batchMaintenance(enabled: boolean) {
+    setBatching(enabled);
+    const targets = rows.filter(row => selectedIDs.includes(row.id));
+    const results = await Promise.allSettled(targets.map(row => api(`/nodes/${row.id}/maintenance`, 'PUT', { enabled })));
+    const failures = results.flatMap((result, i) => result.status === 'rejected' ? [{ name: targets[i].name, error: result.reason }] : []);
+    const ok = targets.length - failures.length;
+    const label = enabled ? '维护 10 分钟' : '结束维护';
+    if (failures.some(f => f.error instanceof APIError && (f.error.status === 401 || f.error.status === 428))) expired.current();
+    else if (failures.length) modal.warning({ title: `${label}：成功 ${ok}，失败 ${failures.length}`, content: failures.map(f => `${f.name}：${(f.error as Error).message}`).join('\n'), styles: { body: { whiteSpace: 'pre-line' } } });
+    else message.success(`${label}：已处理 ${ok} 个节点`);
+    setBatching(undefined);
+    await load();
+  }
+
   function more(row: NodeRow, key: string) {
     if (key === 'region') setRegionNode(row);
     else if (key === 'rotation') setRotationNode(row.id);
@@ -124,10 +144,8 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   }
 
   const counts = Object.fromEntries(filters.map(f => [f.value, f.value === 'all' ? rows.length : rows.filter(row => row.status === f.value).length]));
-  const needle = query.trim().toLowerCase();
-  // 默认保持添加顺序，离线节点排到最后。
-  const visible = rows.filter(row => (filter === 'all' || row.status === filter) && (!needle || row.name.toLowerCase().includes(needle) || row.public_ipv4.includes(needle)))
-    .sort((a, b) => Number(a.status === 'offline') - Number(b.status === 'offline'));
+  // 默认按保存的自定义顺序；要让离线排最后，点状态列排序。
+  const visible = rows.filter(row => (filter === 'all' || row.status === filter) && (!needle || row.name.toLowerCase().includes(needle) || row.public_ipv4.includes(needle)));
   const validationNode = rows.find(row => row.id === validation?.id);
 
   return <>
@@ -140,30 +158,38 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
       <Input allowClear prefix={<SearchOutlined style={{ color: 'var(--text-3)' }} />} placeholder="搜索名称或 IP" value={query} onChange={e => setQuery(e.target.value)} style={{ width: 240 }} />
       <Segmented<Filter> value={filter} onChange={setFilter} options={filters.map(f => ({ value: f.value, label: <>{f.label} <span className="num muted">{counts[f.value]}</span></> }))} />
       <span className="spacer" />
+      {order.restore}
       <Button icon={<ReloadOutlined spin={loading} />} onClick={() => void load()} aria-label="刷新" />
     </div>
+    {selectedIDs.length > 0 && <div className="toolbar batch-bar">
+      <span>已选 <span className="num">{selectedIDs.length}</span> 个节点</span>
+      <Button size="small" loading={batching === true} disabled={batching !== undefined} onClick={() => void batchMaintenance(true)}>维护 10 分钟</Button>
+      <Button size="small" loading={batching === false} disabled={batching !== undefined} onClick={() => void batchMaintenance(false)}>结束维护</Button>
+      <Button size="small" type="text" onClick={() => setSelectedIDs([])}>取消选择</Button>
+    </div>}
     <div className="panel">
-      <Table<NodeRow> rowKey="id" dataSource={visible} loading={!loaded && !error} rowClassName={row => rowClassName(row.id)} pagination={visible.length > 50 ? { pageSize: 50, showSizeChanger: false } : false} scroll={{ x: 1590 }}
+      <Table<NodeRow> rowKey="id" dataSource={visible} loading={!loaded && !error} rowSelection={{ selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} onChange={order.onChange} onRow={order.onRow} rowClassName={row => `${rowClassName(row.id)} ${order.rowClass(row.id)}`} pagination={visible.length > 50 ? { pageSize: 50, showSizeChanger: false } : false} scroll={{ x: 1690 }}
         locale={{ emptyText: rows.length ? '没有符合条件的节点' : '暂无节点。添加节点后，把安装命令复制到服务器执行。' }} columns={[
-          { title: '节点', key: 'name', fixed: 'left', width: 190, render: (_, row) => <>
+          order.handle,
+          { title: '节点', fixed: 'left', width: 190, ...order.sorted('name'), sorter: byText(row => row.name), render: (_, row) => <>
             <span className="status"><span className={`dot ${tone(row)}`} /><span className="node-name">{row.name}</span></span>
             <span className="cell-sub">{row.probe?.uptime_seconds != null ? <>运行 <span className="num">{uptime(row.probe.uptime_seconds)}</span></> : row.software_version ? '—' : '尚未接入'}</span>
           </> },
-          { title: '状态', key: 'status', width: 120, render: (_, row) => <>
+          { title: '状态', width: 120, ...order.sorted('status'), sorter: (a, b) => statusRank(a) - statusRank(b), render: (_, row) => <>
             {row.status_label}
             {row.status === 'online' && !row.connected && <span className="cell-danger">控制连接已中断</span>}
             {row.status === 'maintenance' && row.maintenance_until && <span className="cell-sub">至 <span className="num">{new Date(row.maintenance_until).toLocaleTimeString()}</span></span>}
           </> },
-          { title: 'CPU', key: 'cpu', width: 130, sortDirections: ['descend', 'ascend'], sorter: byMetric(row => row.probe?.cpu_percent), render: (_, row) => <CpuCell probe={row.probe} /> },
-          { title: '内存', key: 'memory', width: 130, sortDirections: ['descend', 'ascend'], sorter: byMetric(row => memoryPercent(row.probe)), render: (_, row) => <MemoryCell probe={row.probe} /> },
-          { title: '网络', key: 'network', width: 130, sortDirections: ['descend', 'ascend'], sorter: byMetric(row => networkRate(row.probe)), render: (_, row) => <NetworkCell probe={row.probe} /> },
-          { title: '连接', key: 'connections', width: 80, sortDirections: ['descend', 'ascend'], sorter: byMetric(row => row.probe?.business_connections), render: (_, row) => <ConnectionsCell probe={row.probe} /> },
-          { title: '地区 / IP', key: 'region', width: 170, render: (_, row) => <>
+          { title: 'CPU', width: 130, ...order.sorted('cpu'), sortDirections: ['descend', 'ascend'], sorter: byMetric<NodeRow>(row => row.probe?.cpu_percent), render: (_, row) => <CpuCell probe={row.probe} /> },
+          { title: '内存', width: 130, ...order.sorted('memory'), sortDirections: ['descend', 'ascend'], sorter: byMetric<NodeRow>(row => memoryPercent(row.probe)), render: (_, row) => <MemoryCell probe={row.probe} /> },
+          { title: '网络', width: 130, ...order.sorted('network'), sortDirections: ['descend', 'ascend'], sorter: byMetric<NodeRow>(row => networkRate(row.probe)), render: (_, row) => <NetworkCell probe={row.probe} /> },
+          { title: '连接', width: 80, ...order.sorted('connections'), sortDirections: ['descend', 'ascend'], sorter: byMetric<NodeRow>(row => row.probe?.business_connections), render: (_, row) => <ConnectionsCell probe={row.probe} /> },
+          { title: '地区 / IP', width: 170, ...order.sorted('region'), sorter: byText(row => row.region.name), render: (_, row) => <>
             {row.region.name}{row.region_source === 'manual' && <span className="muted">（人工）</span>}
             <span className="cell-sub mono">{row.public_ipv4 || '尚未查询到 IP'}</span>
           </> },
           { title: '检测点', key: 'checker', width: 100, render: (_, row) => row.domestic_checker ? <span className="status"><span className="dot ok" />{row.checker_label}</span> : <span className="muted">{row.checker_label}</span> },
-          { title: '最近活性', dataIndex: 'last_seen_at', width: 100, render: (value: string | null) => value ? <span className="num" title={new Date(value).toLocaleString()}>{ago(value)}</span> : <span className="muted">—</span> },
+          { title: '最近活性', dataIndex: 'last_seen_at', width: 110, ...order.sorted('last_seen_at'), sortDirections: ['descend', 'ascend'], sorter: byMetric<NodeRow>(row => row.last_seen_at ? Date.parse(row.last_seen_at) : null), render: (value: string | null) => value ? <span className="num" title={new Date(value).toLocaleString()}>{ago(value)}</span> : <span className="muted">—</span> },
           { title: '配置', key: 'revision', width: 160, render: (_, row) => <>
             <span className={row.config_status === '正常' ? undefined : 'muted'}>{row.config_status}</span>
             <span className="cell-sub mono">已应用 {row.applied_revision} / 期望 {row.desired_revision}</span>

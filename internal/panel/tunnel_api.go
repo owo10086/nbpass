@@ -173,6 +173,9 @@ func loadExitGroups(ctx context.Context, q queryer) ([]exitGroupView, error) {
 }
 func (p *Panel) listExitGroups(w http.ResponseWriter, r *http.Request) {
 	groups, err := loadExitGroups(r.Context(), p.db)
+	if err == nil {
+		err = sortByDisplayOrder(r.Context(), p.db, listOrders["exit-groups"], groups, func(g exitGroupView) string { return g.ID })
+	}
 	if err != nil {
 		problem(w, 503, "存储暂不可用")
 		return

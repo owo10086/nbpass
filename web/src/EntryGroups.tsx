@@ -8,6 +8,7 @@ import { EntryMembers } from './EntryMembers';
 import { EntryReadiness, type EntryMemberState } from './EntryReadiness';
 import { PageHeader } from './PageHeader';
 import { useFocusRow } from './route';
+import { byText, useDragOrder } from './ListOrder';
 
 type EntryGroup = { id: string; name: string; members: string[]; publication_status: string; sync_status: string; sync_members: GroupSyncMember[]; member_states: EntryMemberState[] };
 type Member = { id: string; name: string };
@@ -35,7 +36,8 @@ export function EntryGroups({ focus, onSessionExpired }: { focus?: string; onSes
     } catch (e) { failed(e); }
     finally { setLoading(false); }
   }
-  useEffect(() => { void load(); const timer = window.setInterval(() => void load(), 10_000); return () => window.clearInterval(timer); }, []);
+  const order = useDragOrder(rows, setRows, '/entry-groups', { onError: failed, reload: load });
+  useEffect(() => { void load(); const timer = window.setInterval(() => { if (!order.busy()) void load(); }, 10_000); return () => window.clearInterval(timer); }, []);
   const rowClassName = useFocusRow(focus, loaded);
   function edit(row: EntryGroup | null) {
     setError(''); form.resetFields(); form.setFieldsValue(row ? { name: row.name, members: row.members } : { members: [undefined] }); setEditing(row);
@@ -57,8 +59,10 @@ export function EntryGroups({ focus, onSessionExpired }: { focus?: string; onSes
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建入口组</Button>
     </PageHeader>
     {error && <Alert title={error} type="error" showIcon className="message" />}
-    <div className="panel"><Table<EntryGroup> rowKey="id" dataSource={rows} loading={!loaded && !error} pagination={false} rowClassName={row => rowClassName(row.id)} scroll={{ x: 800 }} locale={{ emptyText: '暂无入口组，请先添加节点，再创建入口组。' }} expandable={{ defaultExpandedRowKeys: focus ? [focus] : [], expandedRowRender: row => <Space orientation="vertical" size="middle" style={{ width: '100%' }}><EntryReadiness members={row.member_states} /><GroupSyncDetails members={row.sync_members} /></Space> }} columns={[
-      { title: '入口组', dataIndex: 'name', render: value => <span className="node-name">{value}</span> },
+    {order.restore && <div className="toolbar"><span className="spacer" />{order.restore}</div>}
+    <div className="panel"><Table<EntryGroup> rowKey="id" dataSource={rows} loading={!loaded && !error} pagination={false} onChange={order.onChange} onRow={order.onRow} rowClassName={row => `${rowClassName(row.id)} ${order.rowClass(row.id)}`} scroll={{ x: 836 }} locale={{ emptyText: '暂无入口组，请先添加节点，再创建入口组。' }} expandable={{ defaultExpandedRowKeys: focus ? [focus] : [], expandedRowRender: row => <Space orientation="vertical" size="middle" style={{ width: '100%' }}><EntryReadiness members={row.member_states} /><GroupSyncDetails members={row.sync_members} /></Space> }} columns={[
+      order.handle,
+      { title: '入口组', dataIndex: 'name', ...order.sorted('name'), sorter: byText(row => row.name), render: value => <span className="node-name">{value}</span> },
       { title: '成员（按优先级）', render: (_, row) => row.members.map((id, i) => `${nodes.find(n => n.id === id)?.name ?? id}${i === 0 ? '（首选入口）' : ''}`).join('、') },
       { title: '受管记录', render: (_, row) => <Tag>{row.publication_status}</Tag> },
       { title: '同步状态', render: (_, row) => <SyncTag status={row.sync_status} /> },

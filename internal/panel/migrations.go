@@ -114,6 +114,7 @@ var migrations = []string{
 	crossGroupRotationMigration,
 	singleEntryRuleMigration,
 	incidentsMigration,
+	listOrderMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

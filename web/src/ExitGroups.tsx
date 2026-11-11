@@ -5,6 +5,7 @@ import { PageHeader } from './PageHeader';
 import { api, APIError } from './api';
 import { TunnelRotation } from './TunnelRotation';
 import { ExitBlocked } from './ExitBlocked';
+import { byText, useDragOrder } from './ListOrder';
 
 type Group = { id: string; name: string; strategy: 'primary_backup'; members: string[] };
 type ExitHealth = { exit_id: string; state: string; consecutive_failures?: number; last_probe?: string; failure_class?: string; recovery_since_unix?: number; checked_at_unix?: number };
@@ -39,6 +40,7 @@ export function ExitGroups({ onSessionExpired }: { onSessionExpired: () => void 
     } catch (e) { failed(e); }
     finally { setLoading(false); }
   }
+  const order = useDragOrder(rows, setRows, '/exit-groups', { onError: failed, reload: load });
   useEffect(() => { void load(); }, []);
   useEffect(() => {
     if (!healthNode) { setHealth(undefined); return; }
@@ -84,8 +86,10 @@ export function ExitGroups({ onSessionExpired }: { onSessionExpired: () => void 
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建出口组</Button>
     </PageHeader>
     {error && <Alert title={error} type="error" showIcon className="message" />}
-    <div className="panel"><Table<Group> rowKey="id" dataSource={rows} loading={loading} pagination={false} scroll={{ x: 680 }} locale={{ emptyText: '暂无出口组，请先配置一个出口节点。' }} columns={[
-      { title: '出口组', dataIndex: 'name', render: value => <span className="node-name">{value}</span> },
+    {order.restore && <div className="toolbar"><span className="spacer" />{order.restore}</div>}
+    <div className="panel"><Table<Group> rowKey="id" dataSource={rows} loading={loading && !rows.length} pagination={false} onChange={order.onChange} onRow={order.onRow} rowClassName={row => order.rowClass(row.id)} scroll={{ x: 716 }} locale={{ emptyText: '暂无出口组，请先配置一个出口节点。' }} columns={[
+      order.handle,
+      { title: '出口组', dataIndex: 'name', ...order.sorted('name'), sorter: byText(row => row.name), render: value => <span className="node-name">{value}</span> },
       { title: '出口节点', render: (_, row) => row.members.map((id, i) => `${i + 1}. ${nodeName(id)}`).join(' → ') },
       { title: '出口策略', render: () => <Tag>主备 · 按顺序</Tag> },
       { title: '', key: 'actions', align: 'right', render: (_, row) => <div className="row-actions"><Button size="small" type="text" onClick={() => edit(row)}>编辑</Button><Popconfirm title="删除出口组？" description="须先删除引用该组的转发规则。" onConfirm={() => remove(row.id)}><Button danger size="small" type="text">删除</Button></Popconfirm></div> },

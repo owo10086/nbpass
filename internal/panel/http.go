@@ -12,6 +12,7 @@ func (p *Panel) Handler() http.Handler {
 	p.upgradeRoutes(mux)
 	p.recoveryRoutes(mux)
 	p.forwardingRoutes(mux)
+	p.listOrderRoutes(mux)
 	p.tunnelRoutes(mux)
 	p.managedDNSRoutes(mux)
 	p.telegramRoutes(mux)
@@ -98,11 +99,16 @@ func problem(w http.ResponseWriter, status int, message string) {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, body any) bool {
+	return decodeLimited(w, r, body, 8192)
+}
+
+// 整表 ID 列表（排序、批量）按条数增长，超出普通表单的 8 KiB 上限。
+func decodeLimited(w http.ResponseWriter, r *http.Request, body any, limit int64) bool {
 	if media := strings.Split(r.Header.Get("Content-Type"), ";")[0]; media != "application/json" {
 		problem(w, http.StatusUnsupportedMediaType, "请求体必须使用 JSON")
 		return false
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(body); err != nil {
 		problem(w, 400, "请求体无效或过大")

@@ -114,7 +114,7 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 		desired_revision, applied_revision, software_version, process_instance, apply_error, applied_digest, COALESCE((SELECT digest FROM node_snapshots WHERE node_id=nodes.id),''),
 		COALESCE(public_ipv4, ''), COALESCE(auto_name, '未知'), COALESCE(auto_mainland, 0),
 		override_name, COALESCE(override_mainland, 0), COALESCE(checker_disabled, 0)
-		FROM nodes LEFT JOIN node_regions ON node_id = id ORDER BY created_at, id`)
+		FROM nodes LEFT JOIN node_regions ON node_id = id ORDER BY `+listOrders["nodes"].orderBy)
 	if err != nil {
 		problem(w, 503, "存储暂不可用")
 		return
