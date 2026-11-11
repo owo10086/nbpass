@@ -21,6 +21,10 @@ import { useRoute } from './route';
 import { AppShell } from './AppShell';
 import { PlannedPage } from './PlannedPage';
 import { applyTheme, themeConfig } from './theme';
+import { LockOutlined } from '@ant-design/icons';
+import { PageHeader } from './PageHeader';
+import { FormSection } from './FormSection';
+import './AuthPages.css';
 
 type AuthStatus = { setup_required: boolean; authenticated: boolean };
 
@@ -104,20 +108,21 @@ function App() {
 
   const setup = status.setup_required;
   return (
-    <main className="auth-page">
+    <main className="auth-page zf-auth-page">
       <div className="auth-box">
         <div className="auth-brand"><span className="brand-mark">n</span>nbpass</div>
         <section className="auth-card">
-          <h1>{setup ? '设置管理员密码' : '登录面板'}</h1>
-          <p className="lead">{setup ? '首次使用，请设置一个 12–72 字节的密码。' : '输入管理员密码。'}</p>
+          <PageHeader title={setup ? '首次设置' : '登录面板'} description={setup ? '创建管理员密码，开始管理服务器与端口。' : '输入管理员密码，管理服务器与端口。'} />
           {error && <Alert title={error} type="error" showIcon className="message" />}
           {notice && <Alert title={notice} type="success" showIcon className="message" />}
           <Form form={form} layout="vertical" onFinish={submit} requiredMark={false} clearOnDestroy>
-            <Form.Item name="password" label="密码" rules={[{ required: true, message: '请输入管理员密码' }, ...(setup ? [{ validator: async (_: unknown, value: string) => { const size = new TextEncoder().encode(value ?? '').length; if (size < 12 || size > 72) throw new Error('密码须为 12–72 字节'); } }] : [])]}>
+            <FormSection title={setup ? '设置管理员密码' : '管理员验证'} icon={<LockOutlined />}>
+            <Form.Item name="password" label="密码" extra={setup ? '密码须为 12–72 字节，中文等字符会占用多个字节。' : undefined} rules={[{ required: true, message: '请输入管理员密码' }, ...(setup ? [{ validator: async (_: unknown, value: string) => { const size = new TextEncoder().encode(value ?? '').length; if (size < 12 || size > 72) throw new Error('密码须为 12–72 字节'); } }] : [])]}>
               <Input.Password autoComplete={setup ? 'new-password' : 'current-password'} autoFocus />
             </Form.Item>
             {setup && <Form.Item name="confirmation" label="确认密码" dependencies={['password']} rules={[{ required: true, message: '请再次输入密码' }, { validator: async (_, value) => { if (value && value !== form.getFieldValue('password')) throw new Error('两次密码不一致'); } }]}><Input.Password autoComplete="new-password" /></Form.Item>}
             <Button type="primary" htmlType="submit" block loading={busy}>{setup ? '设置密码' : '登录'}</Button>
+            </FormSection>
           </Form>
         </section>
         <p className="auth-foot">{setup ? '设置完成后使用新密码登录。' : '使用完毕后请退出登录。'}</p>
