@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
 
-export function PageHeader({ title, description, children }: { title: string; description?: ReactNode; children?: ReactNode }) {
+export function PageHeader({ title, description, actions, children }: { title: string; description?: ReactNode; actions?: ReactNode; children?: ReactNode }) {
   return <header className="page-header">
     <div><h1>{title}</h1>{description && <p>{description}</p>}</div>
-    {children && <div className="page-actions">{children}</div>}
+    {(actions || children) && <div className="page-actions">{actions}{children}</div>}
   </header>;
 }
 
