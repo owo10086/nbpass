@@ -8,6 +8,7 @@ import { api } from './api';
 import { EntryGroups } from './EntryGroups';
 import { ExitGroups } from './ExitGroups';
 import { Endpoints } from './Endpoints';
+import { Chains } from './Chains';
 import { Rules } from './Rules';
 import { Nodes } from './Nodes';
 import { Incidents } from './Incidents';
@@ -95,7 +96,7 @@ function App() {
           : page === 'endpoints' ? <Endpoints focus={route.focus} onSessionExpired={expired} />
           : page === 'endpoint-groups' ? <ExitGroups focus={route.focus} onSessionExpired={expired} />
           : page === 'ports' ? <Rules focus={route.focus} onSessionExpired={expired} />
-          : page === 'chains' ? <PlannedPage title="转发链管理" description="未来将支持编排多个转发端点组成转发链。" />
+          : page === 'chains' ? <Chains focus={route.focus} onSessionExpired={expired} />
           : page === 'smart-dns' ? <PlannedPage title="智能 DNS" description="未来将支持按线路与可用性管理 DNS 解析策略。" />
           : page === 'latency' ? <PlannedPage title="延迟监控总览" description="未来将汇总线路延迟与连通性监控结果。" />
           : page === 'dns-watch' ? <DNSWatch focus={route.focus} onSessionExpired={expired} />

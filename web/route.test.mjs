@@ -34,3 +34,15 @@ test('内部旧调用生成新链接并安全编码定位 ID', () => {
     globalThis.window = previous;
   }
 });
+
+test('转发链直接链接保留 focus 与其他查询参数，内部跳转安全编码链 ID', () => {
+  assert.deepEqual(resolveRoute('#/chains?focus=chain%2Fa%3Fb%26c&filter=history&filter=ready'), {
+    page: 'chains', focus: 'chain/a?b&c', hash: '#/chains?focus=chain%2Fa%3Fb%26c&filter=history&filter=ready',
+  });
+  const previous = globalThis.window;
+  globalThis.window = { location: { hash: '' } };
+  try {
+    go('chains', 'chain/a?b&c');
+    assert.equal(window.location.hash, '/chains?focus=chain%2Fa%3Fb%26c');
+  } finally { globalThis.window = previous; }
+});

@@ -1,0 +1,32 @@
+.chains-page { min-width: 0; }
+.chains-page .cell-sub, .chain-name, .chain-id, .chain-candidates, .chain-evidence { overflow-wrap: anywhere; }
+.chain-id.ant-typography { display: block; color: var(--text-3); }
+.chain-path, .chain-health, .chain-editor-hops { display: grid; gap: var(--space-md); }
+.chain-path-hop + .chain-path-hop, .chain-hop-health + .chain-hop-health { padding-top: var(--space-sm); border-top: 1px solid var(--line); }
+.chain-candidates { display: grid; gap: var(--space-xs); list-style: none; padding: 0; margin: var(--space-xs) 0 0; }
+.chain-candidates > li { display: flex; gap: var(--space-xs); align-items: flex-start; min-width: 0; }
+.chain-candidates > li > span:last-child { min-width: 0; }
+.chain-candidates .color-tag { flex: none; }
+.chain-hop-health > strong { display: block; margin-bottom: var(--space-xs); font-weight: 500; }
+.chain-observation + .chain-observation { margin-top: var(--space-sm); padding-top: var(--space-xs); border-top: 1px dashed var(--line); }
+.chain-evidence { margin-top: 4px; color: var(--text-2); font-size: var(--font-small); }
+.chain-evidence summary { cursor: pointer; color: var(--text-2); }
+.chain-evidence dl { margin: var(--space-xs) 0 0; padding: var(--space-xs); background: var(--bg-sunken); border: 1px solid var(--line); border-radius: var(--radius); }
+.chain-evidence dt { color: var(--text-3); margin-top: var(--space-xs); }
+.chain-evidence dt:first-child { margin-top: 0; }
+.chain-evidence dd { margin: 2px 0 0; }
+.chain-editor-hops { padding: 0; margin: 0 0 var(--space-md); list-style: none; }
+.chain-editor-hops > li { padding: var(--space-md); border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-sunken); }
+.chain-hop-heading { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-sm); }
+.chain-hop-heading > strong { flex: 1; min-width: 120px; overflow-wrap: anywhere; font-weight: 500; }
+.chain-hop-actions { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.chain-add-group { display: flex; gap: var(--space-xs); margin-bottom: var(--space-xs); }
+.chain-add-group > .ant-select { flex: 1; min-width: 0; }
+.chain-add-group .ant-select-content { white-space: normal; overflow-wrap: anywhere; }
+.chain-form-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-xs); padding-top: var(--space-lg); }
+@media (max-width: 700px) {
+  .chains-page .filter-field { width: 100%; }
+  .chains-page .filter-field > .ant-input-affix-wrapper { flex: 1; min-width: 120px; }
+  .chain-add-group { flex-direction: column; }
+  .chain-editor-hops > li { padding: var(--space-sm); }
+}
