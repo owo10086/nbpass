@@ -15,7 +15,7 @@ Parallel: 领域模型、新 API 及测试可在 03 后独立推进，与 04 并
 - 新建 `internal/panel/forward_chains_api.go`，在 `tunnelRoutes` 注册：`GET /api/forward-chains` 返回 `{chains:[...]}`；`POST /api/forward-chains`、`PUT /api/forward-chains/{id}` 输入 `{name,exit_group_ids:[id1,id2,...]}`，返回保存对象（201/200）；`DELETE` 成功 204，不存在 404。写入复用 `mutateForwarding`，认证、同源限制、严格 JSON 与现有 API 一致。
 - 链对象公开字段固定为 `id,name,exit_group_ids,rule_count,hops`；`hops` 每项 `{position,exit_group_id,name,members,observations}`，position 从 1 起，members 为 `[{node_id,node_name,address_id,address,port}]`，port 为有效拨号端口；observations 合约为 `[{from_node_id,to_node_id,address_id,endpoint_config_digest,chain_fingerprint,rule_id,generation,state,fresh,sampled_at}]`。同链可由不同规则授权，不能混用 grant 代次；端点摘要沿用 02/03。本票 rule_count 为真实 0、observations 为空；06a 接引用、06c 接真实逐边证据，不造样本。
 - 名称去空白且 1–200 字节；至少两组，组必须存在并非空；展开每组的所有成员，同节点跨任何两跳重复均拒绝，不能只校验主成员；重复组自然也拒绝。依赖 03 的地址引用与有效端口，不按 IP 相同就认作同节点。
-- `internal/panel/config_validation.go` / 新链校验文件按变更影响范围校验链：新建/编辑链及端点组成员变更时检查受影响链，即使链尚未绑定规则也不得造成跨跳重复。06a 加入被变更影响的引用规则及入口集合；不要把新增重复节点校验塞入每次全量编译，历史规则不能阻断无关保存/重连/授权确认，不写可被误认为可用多跳的数据面占位实现。
+- `internal/panel/config_validation.go` / 新链校验文件按变更影响范围校验链：新建/编辑链及端点组成员变更时检查受影响链，即使链尚未绑定规则也不得造成跨跳重复。本票同时落实单跳规则（含入口组）的受影响范围校验，06a 再扩到链引用规则及全部入口集合；不要把新增重复节点校验塞入每次全量编译，历史规则不能阻断无关保存/重连/授权确认，不写可被误认为可用多跳的数据面占位实现。
 - `tunnel_api.go:deleteExitGroup` 增加来自 forward_chain_hops 的引用保护，409 指出引用链；`node_references.go` 在现有端点组引用基础上补充间接链名称，避免用户看不到删节点的原因。链删除在本票只有无规则引用的情形，06a 再加入规则引用检查，任何接口不能级联删业务规则。
 - API 路径展开统一函数供 06a 的编译/校验和 07/08 查询复用；定义「变更对象→受影响链/规则」接缝，覆盖组、链和入口组的直接/间接引用。稳定顺序，读取不推进 revision，不把凭据或私钥放入预览。
 
