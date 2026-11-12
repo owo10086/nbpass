@@ -10,7 +10,7 @@ import { NodeRotation } from './NodeRotation';
 import { NodeSelfCheck, SelfCheckSettings } from './NodeSelfCheck';
 import { NodeInstallation, type Installation } from './NodeInstallation';
 import { NodeServerDetails, serverTone, type ServerAction, type ServerDetailTab } from './NodeServerDetails';
-import { matchesServer, serverGroupsFor, serverPortCount, type ServerGroup, type ServerPort, type ServerRow } from './NodeServerData';
+import { serverNamePayload, serverOutboundPayload, matchesServer, serverGroupsFor, serverPortCount, type ServerGroup, type ServerPort, type ServerRow } from './NodeServerData';
 import { useFocusRow } from './route';
 import { PageHeader } from './PageHeader';
 import { FilterCard, FilterField } from './FilterCard';
@@ -60,6 +60,9 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<ServerRow | null>();
   const [saving, setSaving] = useState(false);
+  const [outbound, setOutbound] = useState('');
+  const [outboundSaving, setOutboundSaving] = useState(false);
+  const [outboundStatus, setOutboundStatus] = useState('');
   const [installing, setInstalling] = useState<{ node: { id: string; name: string }; ticket?: Installation }>();
   const [regionNode, setRegionNode] = useState<ServerRow>();
   const [recordNode, setRecordNode] = useState<string>();
@@ -108,20 +111,31 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   }, [focus, loaded]);
 
   function edit(row: ServerRow | null) {
-    form.resetFields(); form.setFieldsValue({ name: row?.name ?? '' }); setError(''); setEditing(row);
+    form.resetFields(); form.setFieldsValue({ name: row?.name ?? '' }); setError(''); setOutbound(row?.outbound_ipv4 ?? ''); setOutboundStatus(''); setEditing(row);
   }
 
   async function save(values: { name: string }) {
     setSaving(true);
     try {
-      if (editing) await api(`/nodes/${editing.id}/name`, 'PUT', values);
+      if (editing) await api(`/nodes/${editing.id}/name`, 'PUT', serverNamePayload(values));
       else {
-        const result = await api<Installation>('/nodes', 'POST', values);
+        const result = await api<Installation>('/nodes', 'POST', serverNamePayload(values));
         setInstalling({ node: { id: result.id, name: values.name }, ticket: result });
       }
       setEditing(undefined); form.resetFields(); await load();
     } catch (e) { failed(e); }
     finally { setSaving(false); }
+  }
+
+  async function saveOutbound() {
+    if (!editing) return;
+    const id = editing.id;
+    setOutboundSaving(true); setOutboundStatus('');
+    try {
+      const saved = await api<{ outbound_ipv4: string }>(`/nodes/${id}/outbound`, 'PUT', serverOutboundPayload(outbound));
+      setOutbound(saved.outbound_ipv4); setOutboundStatus('已保存，应用结果见服务器同步状态。'); await load();
+    } catch (e) { setOutboundStatus((e as Error).message); failed(e); }
+    finally { setOutboundSaving(false); }
   }
 
   async function revoke(row: ServerRow) {
@@ -243,17 +257,21 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
     {validationNode && <NodeValidationActions node={validationNode} mode={validation?.mode} onClose={() => setValidation(undefined)} onSaved={load} onError={failed} />}
     {detailNode && details && <NodeServerDetails key={`${detailNode.id}-${details.tab}`} node={detailNode} groups={groups} initialTab={details.tab} error={error} onClose={() => setDetails(undefined)} onAction={(key: ServerAction) => action(detailNode, key)} onSaved={load} onError={failed} />}
     {installing && <NodeInstallation key={installing.node.id} node={installing.node} initialTicket={installing.ticket} onClose={() => setInstalling(undefined)} onSaved={load} onError={failed} />}
-    <Modal title={editing ? '编辑服务器' : '添加服务器'} open={editing !== undefined} onCancel={() => { setEditing(undefined); form.resetFields(); }} footer={null} width={680} className="servers-modal" destroyOnHidden>
+    <Modal title={editing ? '编辑服务器' : '添加服务器'} open={editing !== undefined} onCancel={() => { if (!outboundSaving) { setEditing(undefined); form.resetFields(); } }} footer={null} width={680} className="servers-modal" destroyOnHidden>
       {error && <Alert type="error" showIcon title={error} className="message" />}
       <Form form={form} layout="vertical" onFinish={save} clearOnDestroy>
         <FormSection title="基本信息" icon={<InfoCircleOutlined />} description={editing ? '修改显示名称；服务器地址由实际运行的程序上报。' : '创建服务器后生成一次性安装票据，在目标机器执行安装命令即可接入。'}>
           <Form.Item name="name" label="显示名称" rules={[{ required: true, whitespace: true, message: '请输入服务器名称' }, { validator: (_, value: string) => new TextEncoder().encode(value?.trim() || '').length <= 200 ? Promise.resolve() : Promise.reject(new Error('服务器名称最多 200 字节')) }]} extra="用于区分服务器，例如 HK-CN2-01。"><Input autoFocus maxLength={200} placeholder="请输入服务器名称" /></Form.Item>
           {editing && <Form.Item label="公网 IPv4" extra="地址确认及域名绑定在「受管记录与地址」中管理。"><Input readOnly value={editing.public_ipv4 || '尚未查询到 IP'} /></Form.Item>}
         </FormSection>
-        {editing && <FormSection title="服务器设置" icon={<GlobalOutlined />} description="地区、国内检测点和监听端口分别保存；关闭弹窗后仍可在更多操作中管理。" collapsible>
+        {editing && <FormSection title="服务器设置" icon={<GlobalOutlined />} description="出站 IP、地区、国内检测点和监听端口分别保存；关闭弹窗后仍可在更多操作中管理。" collapsible>
+          <Form.Item label="出站 IP" extra="可选 IPv4，仅连接最终目标时绑定。地址须已配置在本机接口；留空使用系统路由。">
+            <Space.Compact block><Input value={outbound} onChange={e => { setOutbound(e.target.value); setOutboundStatus(''); }} placeholder="留空使用系统路由" aria-label="出站 IP" disabled={outboundSaving} /><Button onClick={() => void saveOutbound()} loading={outboundSaving} disabled={saving}>保存出站 IP</Button></Space.Compact>
+            {outboundStatus && <Typography.Text type="secondary" role="status">{outboundStatus}</Typography.Text>}
+          </Form.Item>
           <Space wrap className="servers-section-actions"><Button onClick={() => setRegionNode(editing)}>地区与检测点</Button><Button icon={<CodeOutlined />} onClick={() => setValidation({ id: editing.id, mode: 'ports' })}>监听端口设置</Button></Space>
         </FormSection>}
-        <div className="servers-form-footer"><Button onClick={() => setEditing(undefined)}>取消</Button><Button type="primary" htmlType="submit" loading={saving}>{editing ? '保存' : '生成安装脚本'}</Button></div>
+        <div className="servers-form-footer"><Button disabled={outboundSaving} onClick={() => setEditing(undefined)}>取消</Button><Button type="primary" htmlType="submit" loading={saving} disabled={outboundSaving}>{editing ? '保存' : '生成安装脚本'}</Button></div>
       </Form>
     </Modal>
   </div>;

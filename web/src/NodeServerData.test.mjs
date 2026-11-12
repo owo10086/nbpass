@@ -44,3 +44,10 @@ test('状态和服务器组筛选与搜索同时生效，未分组筛选只匹�
   ]) assert.equal(matchesServer(server, groups, filter), false);
   assert.equal(matchesServer({ ...server, id: 'new', managed_record: null }, groups, { query: '', status: 'all', groupID: 'ungrouped' }), true);
 });
+
+test('名称和安装票据仅发送名称，出站配置独立序列化、清空不丢失', async () => {
+  const { serverNamePayload, serverOutboundPayload } = await import('./NodeServerData.ts');
+  assert.deepEqual(serverNamePayload({ name: ' A ', outbound_ipv4: '127.0.0.1' }), { name: ' A ' });
+  assert.deepEqual(serverOutboundPayload(' 127.0.0.1 '), { outbound_ipv4: '127.0.0.1' });
+  assert.deepEqual(serverOutboundPayload(''), { outbound_ipv4: '' });
+});

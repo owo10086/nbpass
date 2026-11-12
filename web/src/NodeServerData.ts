@@ -4,7 +4,7 @@ import type { NodeRecord } from './NodeManagedRecord';
 import type { NodeProbe } from './NodeMetrics';
 
 export type ServerRow = NodeRegionFields & NodeUpgradeFields & {
-  id: string; name: string; status: string; status_label: string; connected: boolean;
+  outbound_ipv4: string; id: string; name: string; status: string; status_label: string; connected: boolean;
   last_seen_at: string | null; maintenance_until: string | null;
   desired_revision: number; applied_revision: number; config_status: string; software_version: string; apply_error: string;
   probe: NodeProbe; confirmed_ipv4: string; managed_record: NodeRecord | null; record_status: string;
@@ -30,3 +30,6 @@ export function matchesServer(server: Pick<ServerRow, 'id' | 'name' | 'public_ip
   const needle = filter.query.trim().toLowerCase();
   return !needle || [server.name, server.public_ipv4, server.confirmed_ipv4, server.managed_record?.hostname].some(value => value?.toLowerCase().includes(needle));
 }
+
+export function serverNamePayload(values: { name: string }): { name: string } { return { name: values.name }; }
+export function serverOutboundPayload(value: string): { outbound_ipv4: string } { return { outbound_ipv4: value.trim() }; }
