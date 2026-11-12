@@ -12,7 +12,7 @@ import (
 
 // compileTunnels 给入口只发相关出口证书/节点对凭据，给出口发私钥及允许的规则目标。
 // 节点 revision 不参与跨节点授权；独立授权代次和应用确认控制入口门禁。
-func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwarding.Rule, members map[string][]string, compiled map[string]*controlpb.ConfigSnapshot) error {
+func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwarding.Rule, members map[string][]string, compiled map[string]*controlpb.ConfigSnapshot, plans map[[2]string]capabilityPlan) error {
 	groups, err := loadExitGroups(ctx, tx)
 	if err != nil {
 		return err
@@ -69,14 +69,6 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 	legacyReady := map[[2]string]bool{}
 	pairs := map[string]bool{}
 	seenGroups := map[string]bool{}
-	failoverCapable := map[string]bool{}
-	for id := range compiled {
-		var version uint32
-		if err := tx.QueryRowContext(ctx, "SELECT exit_failover_version FROM nodes WHERE id=?", id).Scan(&version); err != nil {
-			return err
-		}
-		failoverCapable[id] = version == 1
-	}
 	for _, r := range rules {
 		if !r.Enabled || r.Kind != forwarding.Tunnel {
 			continue
@@ -86,12 +78,16 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 			return errors.New("隧道规则引用的出口组不存在")
 		}
 		for _, entry := range forwarding.RuleEntryNodes(r, members) {
-			if len(g.Members) > 1 && !failoverCapable[entry] {
+			plan := plans[[2]string{entry, r.ID}]
+			if plan.Blocked {
 				continue
 			}
 			groupKey := entry + ":" + g.ID
 			cg := &controlpb.ExitGroup{Id: g.ID, Strategy: controlpb.ExitStrategy_EXIT_STRATEGY_PRIMARY_BACKUP}
 			for _, exit := range g.Members {
+				if !plan.allows(exit) {
+					continue
+				}
 				pairKey := entry + ":" + exit
 				token, err := p.pairCredential(ctx, tx, entry, exit)
 				if err != nil {
@@ -117,25 +113,33 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 			if !seenGroups[groupKey] {
 				compiled[entry].ExitGroups = append(compiled[entry].ExitGroups, cg)
 				seenGroups[groupKey] = true
+			} else {
+				// Shared groups keep the eligible union in their original order.
+				for _, existing := range compiled[entry].ExitGroups {
+					if existing.Id != g.ID {
+						continue
+					}
+					byID := map[string]*controlpb.TunnelEndpoint{}
+					for _, ep := range existing.Exits {
+						byID[ep.NodeId] = ep
+					}
+					for _, ep := range cg.Exits {
+						byID[ep.NodeId] = ep
+					}
+					existing.Exits = nil
+					for _, id := range g.Members {
+						if ep := byID[id]; ep != nil {
+							existing.Exits = append(existing.Exits, ep)
+						}
+					}
+				}
 			}
 		}
-	}
-	for entry, snapshot := range compiled {
-		if failoverCapable[entry] {
-			continue
-		}
-		var compatible []*controlpb.ForwardRule
-		for _, r := range snapshot.Rules {
-			if r.Kind != controlpb.RuleKind_RULE_KIND_TUNNEL || len(byGroup[r.ExitGroupId].Members) == 1 {
-				compatible = append(compatible, r)
-			}
-		}
-		snapshot.Rules = compatible
 	}
 	if err := p.compileTunnelRotations(ctx, tx, compiled); err != nil {
 		return err
 	}
-	return gateTunnelRules(ctx, tx, compiled, capable, generations, byGroup, legacyReady)
+	return gateTunnelRules(ctx, tx, compiled, capable, generations, byGroup, legacyReady, plans)
 }
 func (p *Panel) pairCredential(ctx context.Context, tx *sql.Tx, entry, exit string) (string, error) {
 	name := "tunnel-pair:" + entry + ":" + exit

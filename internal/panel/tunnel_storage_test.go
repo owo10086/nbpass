@@ -36,6 +36,10 @@ func TestTunnelSecretsArePairScopedAndEncryptedIncludingSnapshots(t *testing.T) 
 	}
 	eg := []string{}
 	xg := []string{}
+	// 本测试检查已支持逐流授权节点的秘密隔离；未准入能力的节点不得拿到孤立凭据。
+	if _, err := p.db.Exec("UPDATE nodes SET tunnel_authorization_version=1"); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 2; i++ {
 		eg = append(eg, request("POST", "/api/entry-groups", map[string]any{"name": "入口组", "members": []string{ids[i]}}, 201)["id"].(string))
 		request("PUT", "/api/nodes/"+ids[i+2]+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": 18001 + i, "transport": "wss"}, http.StatusOK)

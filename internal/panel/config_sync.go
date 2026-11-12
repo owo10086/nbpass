@@ -10,17 +10,19 @@ import (
 )
 
 type ruleSyncMember struct {
-	NodeID          string `json:"node_id"`
-	NodeName        string `json:"node_name"`
-	Connected       bool   `json:"connected"`
-	ListenPort      int    `json:"listen_port"`
-	DesiredRevision uint64 `json:"desired_revision"`
-	AppliedRevision uint64 `json:"applied_revision"`
-	SyncStatus      string `json:"sync_status"`
-	ApplyError      string `json:"apply_error"`
+	ConfigurationBlockers []configurationBlocker `json:"configuration_blockers"`
+	NodeID                string                 `json:"node_id"`
+	NodeName              string                 `json:"node_name"`
+	Connected             bool                   `json:"connected"`
+	ListenPort            int                    `json:"listen_port"`
+	DesiredRevision       uint64                 `json:"desired_revision"`
+	AppliedRevision       uint64                 `json:"applied_revision"`
+	SyncStatus            string                 `json:"sync_status"`
+	ApplyError            string                 `json:"apply_error"`
 }
 
 type ruleView struct {
+	ConfigurationBlockers []configurationBlocker `json:"configuration_blockers"`
 	forwarding.Rule
 	EntryStates []entryMemberState `json:"entry_states"`
 	SyncStatus  string             `json:"sync_status"`
@@ -107,7 +109,7 @@ func (p *Panel) loadSyncNodes(ctx context.Context) (map[string]*syncNode, map[st
 
 func aggregateSync(statuses []string) string {
 	result := "正常"
-	priority := map[string]int{"正常": 0, "未同步": 1, "待确认": 2, "同步失败": 3}
+	priority := map[string]int{"正常": 0, "未同步": 1, "待确认": 2, syncCapabilityDegraded: 3, syncCapabilityPending: 4, syncCapabilityUnconfirmed: 5, "同步失败": 6, syncCapabilityBlocked: 7}
 	for _, status := range statuses {
 		if priority[status] > priority[result] {
 			result = status
@@ -206,7 +208,7 @@ func attachGroupSync(groups []entryGroupView, rules []ruleView, nodes map[string
 			if len(memberStatuses) > 0 {
 				member.SyncStatus = aggregateSync(memberStatuses)
 			}
-			if !n.connected {
+			if !n.connected && len(memberStatuses) == 0 {
 				member.SyncStatus = "待确认"
 			}
 			g.SyncMembers = append(g.SyncMembers, member)

@@ -1,10 +1,11 @@
 import { Table, Typography } from 'antd';
 import type { SyncMember } from './ConfigSync';
-import { StatusDot, type StatusTone } from './StatusDot';
+import { ConfigurationBlockers } from './ConfigSync';
+import { configurationStatusTone } from './RulesData';
+import { StatusDot } from './StatusDot';
 
 export function PortSyncStatus({ status }: { status: string }) {
-  const tones: Record<string, StatusTone> = { 正常: 'ok', 同步失败: 'danger', 待确认: 'warn', 未同步: 'muted' };
-  return <StatusDot tone={tones[status] ?? 'muted'}>{status || '未同步'}</StatusDot>;
+  return <StatusDot tone={configurationStatusTone(status)}>{status || '未同步'}</StatusDot>;
 }
 
 // 共用版本详情仍用于其他页面；这里保留相同字段，使用端口页的新名称。
@@ -16,6 +17,7 @@ export function PortSyncDetails({ members }: { members: SyncMember[] }) {
       { title: '服务端口', dataIndex: 'listen_port', render: value => <span className="mono">{value}</span> },
       { title: '期望 / 实际生效版本', render: (_, row) => <span className="num">{row.desired_revision} / {row.applied_revision}</span> },
       { title: '同步状态', render: (_, row) => <PortSyncStatus status={row.sync_status} /> },
+      { title: '需升级服务器', render: (_, row) => <ConfigurationBlockers blockers={row.configuration_blockers} /> },
       { title: '应用错误', render: (_, row) => row.apply_error ? <Typography.Text type="danger" className="ports-apply-error">{row.apply_error}</Typography.Text> : '—' },
     ]} />
   </div>;

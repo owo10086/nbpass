@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 
 	"google.golang.org/protobuf/proto"
 	"nbpass/internal/compatibility"
@@ -17,6 +18,7 @@ const versionCompatibilityMigration = `CREATE TABLE node_compatibility (
 );`
 
 type nodeCompatibility struct {
+	ProcessInstance string                   `json:"process_instance,omitempty"`
 	ControlProtocol uint32                   `json:"control_protocol"`
 	Legacy          bool                     `json:"legacy"`
 	Node            *controlpb.Compatibility `json:"node"`
@@ -38,11 +40,36 @@ func resolveCompatibility(r *controlpb.NodeReport) (nodeCompatibility, error) {
 	}
 	caps := []string{}
 	for _, c := range local.Capabilities {
-		if legacy || compatibility.Supports(peer, c) {
+		supported := compatibility.Supports(peer, c)
+		if legacy {
+			// Protocol 1 has no extensible declaration: only its explicit flags
+			// prove the corresponding pre-IX capability, never future names.
+			switch c {
+			case "upgrade":
+				supported = r.UpgradeCapable
+			case "dns_watch":
+				supported = r.DnsWatchCapable
+			case "rotation_recheck":
+				supported = r.RotationRecheckCapable
+			case "tunnel_authorization":
+				supported = r.TunnelAuthorizationVersion == 1
+			case "exit_failover":
+				supported = r.ExitFailoverVersion == 1
+			case "tunnel_rotation":
+				supported = r.TunnelRotationVersion == 1
+			}
+		}
+		if c == "tunnel_authorization" || c == "exit_failover" || c == "tunnel_rotation" || c == compatibility.IXAddressDialing || c == compatibility.IXMemberIdentity || c == compatibility.ForwardChains {
+			supported = supported && compatibility.Contains(peer.TunnelMin, peer.TunnelMax, compatibility.TunnelCurrent)
+		}
+		if c == compatibility.IXAddressDialing || c == compatibility.IXMemberIdentity || c == compatibility.OutboundIPv4 || c == compatibility.ForwardChains {
+			supported = supported && compatibility.CompatibleState(peer)
+		}
+		if supported {
 			caps = append(caps, c)
 		}
 	}
-	return nodeCompatibility{ControlProtocol: r.ProtocolVersion, Legacy: legacy, Node: proto.Clone(peer).(*controlpb.Compatibility), Panel: local, Capabilities: caps}, nil
+	return nodeCompatibility{ProcessInstance: r.ProcessInstance, ControlProtocol: r.ProtocolVersion, Legacy: legacy, Node: proto.Clone(peer).(*controlpb.Compatibility), Panel: local, Capabilities: caps}, nil
 }
 func (c nodeCompatibility) supports(capability string) bool {
 	for _, v := range c.Capabilities {
@@ -102,4 +129,23 @@ func (p *Panel) saveNodeCompatibility(ctx context.Context, tx *sql.Tx, id string
 	}
 	_, err = tx.ExecContext(ctx, "INSERT INTO node_compatibility(node_id,report) VALUES(?,?) ON CONFLICT(node_id) DO UPDATE SET report=excluded.report", id, raw)
 	return err
+}
+
+func compatibilityChanged(ctx context.Context, tx *sql.Tx, id string, next nodeCompatibility) (bool, error) {
+	var raw []byte
+	err := tx.QueryRowContext(ctx, "SELECT report FROM node_compatibility WHERE node_id=?", id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var previous nodeCompatibility
+	if err := json.Unmarshal(raw, &previous); err != nil {
+		return false, err
+	}
+	oldCaps, nextCaps := slices.Clone(previous.Capabilities), slices.Clone(next.Capabilities)
+	slices.Sort(oldCaps)
+	slices.Sort(nextCaps)
+	return previous.ControlProtocol != next.ControlProtocol || previous.Legacy != next.Legacy || !slices.Equal(oldCaps, nextCaps), nil
 }

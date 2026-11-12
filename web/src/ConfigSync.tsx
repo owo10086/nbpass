@@ -1,6 +1,8 @@
 import { Space, Table, Tag, Typography } from 'antd';
+import { configurationBlockerText, configurationStatusTone, type ConfigurationBlocker } from './RulesData';
 
 export type SyncMember = {
+  configuration_blockers?: ConfigurationBlocker[];
   node_id: string; node_name: string; connected: boolean; listen_port: number;
   desired_revision: number; applied_revision: number; sync_status: string; apply_error: string;
 };
@@ -10,8 +12,13 @@ export type GroupSyncMember = {
 };
 
 export function SyncTag({ status }: { status: string }) {
-  const colors: Record<string, string> = { '正常': 'green', '同步失败': 'red', '待确认': 'orange', '未同步': 'default' };
-  return <Tag color={colors[status]}>{status}</Tag>;
+  const colors = { ok: 'green', danger: 'red', warn: 'orange', muted: 'default' };
+  return <Tag color={colors[configurationStatusTone(status)]}>{status}</Tag>;
+}
+
+export function ConfigurationBlockers({ blockers }: { blockers?: ConfigurationBlocker[] }) {
+  if (!blockers?.length) return <>—</>;
+  return <Space orientation="vertical" size={2}>{blockers.map((blocker, index) => <Typography.Text key={index} type="warning" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{configurationBlockerText(blocker)}</Typography.Text>)}</Space>;
 }
 
 export function RuleSyncDetails({ members }: { members: SyncMember[] }) {
@@ -20,6 +27,7 @@ export function RuleSyncDetails({ members }: { members: SyncMember[] }) {
     { title: '监听端口', dataIndex: 'listen_port' },
     { title: '期望 / 实际生效版本', render: (_, row) => `${row.desired_revision} / ${row.applied_revision}` },
     { title: '同步状态', render: (_, row) => <SyncTag status={row.sync_status} /> },
+    { title: '需升级服务器', render: (_, row) => <ConfigurationBlockers blockers={row.configuration_blockers} /> },
     { title: '应用错误', render: (_, row) => row.apply_error ? <Typography.Text type="danger" style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{row.apply_error}</Typography.Text> : '—' },
   ]} />;
 }

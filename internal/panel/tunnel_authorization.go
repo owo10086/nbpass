@@ -90,7 +90,7 @@ func authorizationCapabilities(ctx context.Context, tx *sql.Tx) (map[string]bool
 
 // 单成员出口组：未确认的规则不下发入口监听。出口确认后才生成含规则的新入口快照。
 // 后续多出口票可按同一确认表过滤每条规则的候选，不能按整个出口组共享确认。
-func gateTunnelRules(ctx context.Context, tx *sql.Tx, compiled map[string]*controlpb.ConfigSnapshot, capable map[string]bool, generations map[string]uint64, groups map[string]exitGroupView, legacyReady map[[2]string]bool) error {
+func gateTunnelRules(ctx context.Context, tx *sql.Tx, compiled map[string]*controlpb.ConfigSnapshot, capable map[string]bool, generations map[string]uint64, groups map[string]exitGroupView, legacyReady map[[2]string]bool, plans map[[2]string]capabilityPlan) error {
 	rows, err := tx.QueryContext(ctx, "SELECT exit_id,entry_id,rule_id,generation FROM tunnel_authorization_confirmations")
 	if err != nil {
 		return err
@@ -123,6 +123,9 @@ func gateTunnelRules(ctx context.Context, tx *sql.Tx, compiled map[string]*contr
 			}
 			r.AuthorizationGeneration = generations[r.Id]
 			for _, exit := range groups[r.ExitGroupId].Members {
+				if !plans[[2]string{entry, r.Id}].allows(exit) {
+					continue
+				}
 				if capable[entry] && capable[exit] && confirmed[[3]string{exit, entry, r.Id}] == r.AuthorizationGeneration {
 					r.AuthorizedExitIds = append(r.AuthorizedExitIds, exit)
 				}
@@ -208,9 +211,21 @@ func (p *Panel) admitTunnelAuthorization(ctx context.Context, tx *sql.Tx, id str
 	if _, err := tx.ExecContext(ctx, "DELETE FROM tunnel_authorization_confirmations WHERE exit_id=?", id); err != nil {
 		return nil, err
 	}
-	if previous != version {
+	if previous != version || force {
 		// 入口降级会撤掉其他出口上的 grants；再次升级不能复用撤销前的确认。
 		if _, err := tx.ExecContext(ctx, "DELETE FROM tunnel_authorization_confirmations WHERE entry_id=?", id); err != nil {
+			return nil, err
+		}
+		// A capability transition needs a new durable grant even when its rule
+		// content is unchanged. Otherwise the successor would never receive a
+		// changed snapshot and could reuse an old acknowledgement after upgrade.
+		// Only this node's predecessor role needs a new remote grant. Its
+		// successor role already receives a changed snapshot when becoming
+		// eligible; invalidating the whole rule there would revoke healthy peers.
+		// Chain consumers extend predecessor references for ordered hops.
+		if _, err := tx.ExecContext(ctx, `UPDATE rule_authorizations SET fingerprint='' WHERE rule_id IN (
+ SELECT r.id FROM forward_rules r WHERE r.entry_node_id=?
+ OR EXISTS(SELECT 1 FROM entry_group_members m WHERE m.group_id=r.entry_group_id AND m.node_id=?))`, id, id); err != nil {
 			return nil, err
 		}
 	}
@@ -218,7 +233,7 @@ func (p *Panel) admitTunnelAuthorization(ctx context.Context, tx *sql.Tx, id str
 	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM tunnel_exits").Scan(&tunnels); err != nil {
 		return nil, err
 	}
-	if tunnels == 0 {
+	if tunnels == 0 && !force {
 		return nil, nil
 	}
 	return p.compileSnapshots(ctx, tx)

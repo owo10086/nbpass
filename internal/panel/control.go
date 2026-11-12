@@ -386,14 +386,19 @@ func (p *Panel) admitControl(ctx context.Context, id string, digest []byte, sess
 	}
 	var authorizationChanges []string
 	var failoverChanged bool
+	var declarationChanged bool
+	if err == nil {
+		declarationChanged, err = compatibilityChanged(ctx, tx, id, negotiated)
+	}
+	// Compile using this admission, including same-process reconnects.
+	if err == nil {
+		err = p.saveNodeCompatibility(ctx, tx, id, negotiated)
+	}
 	if err == nil {
 		failoverChanged, err = p.admitExitFailover(ctx, tx, id, first.ExitFailoverVersion)
 	}
 	if err == nil {
-		authorizationChanges, err = p.admitTunnelAuthorization(ctx, tx, id, previous != first.ProcessInstance, first.TunnelAuthorizationVersion, failoverChanged)
-	}
-	if err == nil {
-		err = p.saveNodeCompatibility(ctx, tx, id, negotiated)
+		authorizationChanges, err = p.admitTunnelAuthorization(ctx, tx, id, previous != first.ProcessInstance, first.TunnelAuthorizationVersion, failoverChanged || declarationChanged)
 	}
 	if err == nil {
 		err = tx.Commit()

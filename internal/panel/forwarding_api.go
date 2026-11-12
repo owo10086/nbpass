@@ -87,7 +87,13 @@ func (p *Panel) entryGroupViews(ctx context.Context) ([]entryGroupView, error) {
 	if err != nil {
 		return nil, err
 	}
-	attachGroupSync(groups, buildRuleViews(rules, nodes, members), nodes)
+	plans, err := p.ruleCapabilityPlans(ctx, p.db, rules, members)
+	if err != nil {
+		return nil, err
+	}
+	views := buildRuleViews(rules, nodes, members)
+	attachCapabilitySync(views, plans)
+	attachGroupSync(groups, views, nodes)
 	p.attachEntryStates(groups, nodes)
 	return groups, nil
 }
@@ -326,6 +332,11 @@ func (p *Panel) ruleSyncViews(ctx context.Context) ([]ruleView, error) {
 		return nil, err
 	}
 	views := buildRuleViews(rules, nodes, groups)
+	plans, err := p.ruleCapabilityPlans(ctx, p.db, rules, groups)
+	if err != nil {
+		return nil, err
+	}
+	attachCapabilitySync(views, plans)
 	for i := range views {
 		view := &views[i]
 		view.EntryStates = []entryMemberState{}

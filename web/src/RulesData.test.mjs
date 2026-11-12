@@ -3,6 +3,14 @@ import { test } from 'node:test';
 import { buildRuleInput, filterRules } from './RulesData.ts';
 import * as data from './RulesData.ts';
 
+test('升级提示保留服务器、地址、能力和原因，备用不足使用警示色', () => {
+  assert.equal(data.configurationStatusTone('整条阻塞（需升级服务器）'), 'danger');
+  assert.equal(data.configurationStatusTone('可运行但备用成员能力不足'), 'warn');
+  assert.equal(data.configurationStatusTone('正常'), 'ok');
+  assert.equal(data.configurationBlockerText({ node_id: 'b', node_name: '日本备用', address_id: '沪日 IX', capability: 'ix_member_identity', reason: '需升级服务器' }), '日本备用 · 沪日 IX：ix_member_identity；需升级服务器');
+  assert.equal(data.configurationBlockerText({ node_id: 'b', node_name: '', address_id: '', capability: 'outbound_ipv4', reason: '未声明能力' }), 'b：outbound_ipv4；未声明能力');
+});
+
 test('合并列后仍可按完整 ID 与同步状态双向排序，清除后恢复自定义顺序', () => {
   const ports = [
     { id: 'port10', sync_status: '同步失败' },

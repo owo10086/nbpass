@@ -123,6 +123,10 @@ func (p *Panel) checkEntryCandidates(ctx context.Context) (map[[2]string]entryMe
 	if err != nil {
 		return nil, err
 	}
+	plans, err := p.ruleCapabilityPlans(ctx, p.db, rules, groups)
+	if err != nil {
+		return nil, err
+	}
 	// 空规则组仍保留原有候选语义；单节点入口按实际节点集合追加独立分桶。
 	for _, r := range rules {
 		if r.EntryNodeID != "" {
@@ -169,6 +173,12 @@ func (p *Panel) checkEntryCandidates(ctx context.Context) (map[[2]string]entryMe
 			state := entryMemberState{DesiredRevision: n.desired, AppliedRevision: n.reported, NodeID: id, NodeName: n.name, CheckedAt: &now, Ready: true, ReadinessStatus: "ready", ReadinessReasons: []entryStateReason{}, CandidateReasons: []entryStateReason{}, DomesticEvidence: inputs.domestic}
 			for _, r := range rules {
 				if !r.Enabled || ruleEntryKey(r) != group {
+					continue
+				}
+				if plan := plans[[2]string{id, r.ID}]; plan.Blocked {
+					for _, b := range plan.Blockers {
+						state.ReadinessReasons = append(state.ReadinessReasons, entryStateReason{Code: "capability_missing", RuleID: r.ID, Message: fmt.Sprintf("转发规则“%s”：%s（%s / %s）", r.Name, b.Reason, b.NodeName, b.Capability)})
+					}
 					continue
 				}
 				result, exists := n.results[r.ID]

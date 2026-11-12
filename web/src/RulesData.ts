@@ -1,11 +1,25 @@
 import type { SyncMember } from './ConfigSync';
 
+export type ConfigurationBlocker = { node_id: string; node_name: string; address_id: string; capability: string; reason: string };
+
+export function configurationBlockerText(blocker: ConfigurationBlocker): string {
+  return `${blocker.node_name || blocker.node_id}${blocker.address_id ? ` · ${blocker.address_id}` : ''}：${blocker.capability}；${blocker.reason}`;
+}
+
+export function configurationStatusTone(status: string): 'ok' | 'danger' | 'warn' | 'muted' {
+  if (status === '正常') return 'ok';
+  if (status === '同步失败' || status === '整条阻塞（需升级服务器）') return 'danger';
+  if (status === '待确认' || status.includes('备用成员能力不足')) return 'warn';
+  return 'muted';
+}
+
 export type RuleInput = {
   name: string; entry_group_id?: string; entry_node_id?: string; kind: 'direct' | 'tunnel';
   exit_group_id?: string; listen_port: number; target_address: string; target_family: 'ipv4';
   target_port: number; allow_private: boolean; enabled: boolean;
 };
 export type Rule = RuleInput & {
+	configuration_blockers?: ConfigurationBlocker[];
   id: string; sync_status: string; sync_members: SyncMember[];
   traffic?: { upload_bytes: number; download_bytes: number; active_connections: number | null };
 };

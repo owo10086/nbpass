@@ -54,15 +54,22 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 			compiled[n.id].CheckPort = 0
 		}
 	}
+	plans, err := p.ruleCapabilityPlans(ctx, tx, rules, members)
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range rules {
 		if !r.Enabled {
 			continue
 		}
 		for _, id := range forwarding.RuleEntryNodes(r, members) {
+			if plans[[2]string{id, r.ID}].Blocked {
+				continue
+			}
 			compiled[id].Rules = append(compiled[id].Rules, r.Config())
 		}
 	}
-	if err := p.compileTunnels(ctx, tx, rules, members, compiled); err != nil {
+	if err := p.compileTunnels(ctx, tx, rules, members, compiled, plans); err != nil {
 		return nil, err
 	}
 	if err := p.compileSelfChecks(ctx, tx, compiled); err != nil {

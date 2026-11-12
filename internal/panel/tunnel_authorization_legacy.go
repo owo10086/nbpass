@@ -2,7 +2,6 @@ package panel
 
 import (
 	"context"
-	"database/sql"
 
 	"nbpass/internal/controlpb"
 	"nbpass/internal/forwarding"
@@ -10,7 +9,7 @@ import (
 
 // 仅保留升级前已经同时下发双端、授权内容未变化的零代次规则。
 // 删除、停用或修改授权后，下一份完整快照不再包含它，不能借兼容路径复活。
-func (p *Panel) legacyTunnelAuthorizations(ctx context.Context, tx *sql.Tx, rules []forwarding.Rule, members map[string][]string) (map[[3]string]bool, error) {
+func (p *Panel) legacyTunnelAuthorizations(ctx context.Context, tx queryer, rules []forwarding.Rule, members map[string][]string) (map[[3]string]bool, error) {
 	relevant := map[string]bool{}
 	for _, r := range rules {
 		for _, id := range forwarding.RuleEntryNodes(r, members) {

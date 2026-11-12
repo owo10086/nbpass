@@ -106,6 +106,16 @@ func TestControlResendsFullSnapshotEverySixtySeconds(t *testing.T) {
 	if _, err := p.db.Exec("INSERT INTO nodes(id,name,token_hash,created_at,desired_revision) VALUES('n','入口',?,0,7)", digest); err != nil {
 		t.Fatal(err)
 	}
+	// 首次准入会按本次能力重新编译，快照必须有真实规则作为事实来源。
+	for _, statement := range []string{
+		"INSERT INTO entry_groups(id,name) VALUES('g','入口组')",
+		"INSERT INTO entry_group_members(group_id,node_id,position) VALUES('g','n',0)",
+		"INSERT INTO forward_rules(id,name,entry_group_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled) VALUES('r','规则','g','direct',12345,'8.8.8.8','ipv4',443,0,1)",
+	} {
+		if _, err := p.db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err := p.db.Exec("INSERT INTO node_snapshots(node_id,snapshot,digest) VALUES('n',?,?)", data, snapshot.Digest); err != nil {
 		t.Fatal(err)
 	}
