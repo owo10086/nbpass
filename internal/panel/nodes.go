@@ -26,7 +26,7 @@ func (p *Panel) randomCredential() (string, []byte, error) {
 func (p *Panel) installation(id, ticket string, expires time.Time) map[string]any {
 	return map[string]any{
 		"id": id, "installation_ticket": ticket, "ticket_expires_at": expires.UTC().Format(time.RFC3339),
-		"installation_command": "curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL " + shellQuote(p.config.PublicOrigin+"/install-node.sh") + " | sh -s -- -control-url " + shellQuote(p.config.ControlURL) + " -ticket " + shellQuote(ticket),
+		"installation_command": "sh -c " + shellQuote(nodeInstallBootstrap) + " sh " + shellQuote(p.config.PublicOrigin+"/install-node.sh") + " -control-url " + shellQuote(p.config.ControlURL) + " -ticket " + shellQuote(ticket),
 	}
 }
 

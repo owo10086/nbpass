@@ -13,6 +13,10 @@ var nodeInstaller string
 //go:embed node-update-install.sh
 var nodeUpdateInstaller string
 
+// Download fully before executing: a failed or truncated response must never
+// execute a partial installer or have its exit status hidden by a shell pipe.
+const nodeInstallBootstrap = `set -eu; umask 077; installer=$(mktemp "${TMPDIR:-/tmp}/nbpass-install.XXXXXX"); trap 'rm -f "$installer"' EXIT; trap 'exit 1' HUP INT TERM; printf '%s\n' '[准备] 正在下载安装脚本，网络故障最多重试 2 次…'; if curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL --show-error --connect-timeout 60 --max-time 180 --retry 2 --retry-delay 3 --retry-connrefused "$1" -o "$installer"; then shift; sh "$installer" "$@"; else result=$?; printf '%s\n' '[失败] 安装脚本下载失败，未执行安装；请检查网络后重试。' >&2; exit "$result"; fi`
+
 func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 
 func (p *Panel) installNode(w http.ResponseWriter, r *http.Request) {

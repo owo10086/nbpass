@@ -2,11 +2,43 @@
 set -eu
 umask 077
 
+stage='环境检查'
+staging=''
+update_staging=''
+enrollment_attempted=0
+started_at=$(date +%s)
+step() {
+  stage=$2
+  printf '\n[%s/6] %s\n' "$1" "$stage"
+}
+cleanup() {
+  result=$?
+  trap - EXIT
+  [ -z "$staging" ] || rm -rf "$staging"
+  [ -z "$update_staging" ] || rm -rf "$update_staging"
+  if [ "$result" -ne 0 ]; then
+    printf '\n[失败] %s未完成（退出码 %s）。\n' "$stage" "$result" >&2
+    if [ "$enrollment_attempted" = 0 ]; then
+      printf '%s\n' '票据尚未兑换；排除故障后可在有效期内重试，过期请在面板重新生成安装命令。' >&2
+    else
+      printf '%s\n' '已尝试兑换票据；再次安装前请在面板重新生成安装命令。' >&2
+    fi
+    case "$stage" in
+      启动服务|检查服务状态)
+        printf '%s\n' '查看原因：journalctl -u nbpass-node.service -u nbpass-update.service -n 50 --no-pager' >&2 ;;
+    esac
+  fi
+  exit "$result"
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+step 1 '环境检查'
 [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || { echo '仅支持 Linux amd64' >&2; exit 1; }
 [ "$(id -u)" = 0 ] || { echo '请以 root 运行安装命令（非 root 用户先执行 sudo -i）' >&2; exit 1; }
-command -v systemctl >/dev/null
-command -v curl >/dev/null
-command -v useradd >/dev/null
+for dependency in systemctl curl useradd; do
+  command -v "$dependency" >/dev/null || { printf '缺少必需命令：%s\n' "$dependency" >&2; exit 1; }
+done
 
 control_url=''
 ticket=''
@@ -47,12 +79,24 @@ id nbpass-node >/dev/null 2>&1 || useradd --system --user-group --no-create-home
 install -d -m 0700 /var/lib/nbpass-node
 install -d -m 0755 /usr/local/bin /usr/local/libexec
 staging=$(mktemp -d /usr/local/bin/.nbpass-install-XXXXXX)
-trap 'rm -rf "$staging"' EXIT
-trap 'exit 1' HUP INT TERM
-curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL __NODE_DOWNLOAD_URL__ -o "$staging/nbpass-node"
+printf '%s\n' '系统：Linux amd64；运行身份：root；安装路径检查通过。'
+step 2 '下载节点程序'
+printf '下载地址：%s\n' __NODE_DOWNLOAD_URL__
+printf '%s\n' '下面显示已下载字节、平均速度和耗时；连接最多等待 60 秒，单次下载最多 60 分钟，网络故障最多重试 2 次。' \
+  '连续 60 秒低于 1 KiB/s 会中止并重试。票据有效期为 30 分钟，下载过慢可能需要重新生成安装命令。'
+curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL --show-error \
+  --connect-timeout 60 --max-time 3600 --retry 2 --retry-delay 3 --retry-connrefused \
+  --speed-limit 1024 --speed-time 60 \
+  --write-out '\n[下载统计] HTTP %{http_code}；已下载 %{size_download} 字节；平均 %{speed_download} 字节/秒；耗时 %{time_total} 秒\n' \
+  __NODE_DOWNLOAD_URL__ -o "$staging/nbpass-node"
 chmod 0700 "$staging/nbpass-node"
+step 3 '注册节点'
+printf '控制地址：%s（使用 TLS 验证连接，正在兑换一次性票据）\n' "$control_url"
 # 不把票据写入 unit；兑换失败时保留原有程序和服务。
+enrollment_attempted=1
 "$staging/nbpass-node" -control-url "$control_url" -ticket "$ticket" -data-dir /var/lib/nbpass-node -enroll-only
+printf '%s\n' '节点注册成功，凭据已保存。'
+step 4 '安装节点与更新服务'
 install -m 0755 "$staging/nbpass-node" "$staging/node-ready"
 chown root:root "$staging/node-ready"
 mv -f "$staging/node-ready" /usr/local/bin/nbpass-node
@@ -88,8 +132,18 @@ EOF
 install -m 0644 "$staging/nbpass-node.service" /etc/systemd/system/nbpass-node.service
 chown root:root /etc/systemd/system/nbpass-node.service
 __UPDATE_INSTALL__
+step 5 '启动服务'
 systemctl daemon-reload
 systemctl enable nbpass-node.service nbpass-update.service
 systemctl restart nbpass-update.service
 systemctl restart nbpass-node.service
-echo '节点已安装，请在面板确认在线状态。'
+step 6 '检查服务状态'
+for service in nbpass-update.service nbpass-node.service; do
+  if systemctl is-active --quiet "$service"; then
+    printf '%s: active\n' "$service"
+  else
+    printf '%s: 未运行\n' "$service" >&2
+    exit 1
+  fi
+done
+printf '\n节点已安装，本机两个服务均已启动（总耗时 %s 秒）；请在面板确认在线状态。\n' "$(($(date +%s) - started_at))"

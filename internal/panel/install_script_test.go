@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The real shell scripts run against a private filesystem. Only Linux/root,
@@ -81,7 +82,7 @@ func (s *installSandbox) write(path, value string, mode os.FileMode) {
 	}
 }
 
-func (s *installSandbox) run(wantOK bool, args ...string) {
+func (s *installSandbox) run(wantOK bool, args ...string) string {
 	s.t.Helper()
 	c := exec.Command("sh", append([]string{s.script}, args...)...)
 	c.Env = s.env
@@ -89,6 +90,7 @@ func (s *installSandbox) run(wantOK bool, args ...string) {
 	if (err == nil) != wantOK {
 		s.t.Fatalf("installer success=%v, want %v: %v\n%s", err == nil, wantOK, err, out)
 	}
+	return string(out)
 }
 
 func (s *installSandbox) contents(path string) string {
@@ -269,5 +271,87 @@ func TestNodeInstallerReplacesUpdaterOnSeparateFilesystem(t *testing.T) {
 	s.run(true, "-control-url", "https://control.example.com", "-ticket", strings.Repeat("a", 43))
 	if s.contents("/usr/local/libexec/nbpass-update") != s.contents("/download") {
 		t.Fatal("updater was not replaced")
+	}
+}
+
+// An operator must know where installation stopped without exposing the ticket
+// or mistaking a failed service start for a successful installation.
+func TestNodeInstallerReportsStagesAndFailuresWithoutTicket(t *testing.T) {
+	for _, failure := range []string{"", "download", "enroll", "service"} {
+		t.Run(failure, func(t *testing.T) {
+			s := newInstallSandbox(t, true)
+			switch failure {
+			case "download":
+				s.env = append(s.env, "FAIL_DOWNLOAD=1")
+			case "enroll":
+				s.env = append(s.env, "FAIL_ENROLL=1")
+			case "service":
+				s.write("/mock/systemctl", "#!/bin/sh\n[ \"$1\" != is-active ] || exit 3\n", 0700)
+			}
+			ticket := strings.Repeat("s", 43)
+			out := s.run(failure == "", "-control-url", "https://control.example.com", "-ticket", ticket)
+			if strings.Contains(out, ticket) {
+				t.Fatal("installation output exposed the ticket")
+			}
+			if !strings.Contains(out, "[1/6]") || !strings.Contains(out, "[2/6]") {
+				t.Fatalf("missing environment/download stages: %s", out)
+			}
+			if failure == "" {
+				if !strings.Contains(out, "[6/6]") || !strings.Contains(out, "请在面板确认在线状态") {
+					t.Fatalf("missing local-service result and panel verification reminder: %s", out)
+				}
+				return
+			}
+			if !strings.Contains(out, "[失败]") || strings.Contains(out, "节点已安装") {
+				t.Fatalf("missing failure result or false success: %s", out)
+			}
+			if failure == "download" && (!strings.Contains(out, "下载") || !strings.Contains(out, "尚未兑换")) {
+				t.Fatalf("download failure must describe stage and ticket status: %s", out)
+			}
+			if failure == "enroll" && !strings.Contains(out, "重新生成") {
+				t.Fatalf("enrollment failure must explain how to retry: %s", out)
+			}
+			if failure == "service" && !strings.Contains(out, "journalctl") {
+				t.Fatalf("service failure must include diagnostic command: %s", out)
+			}
+		})
+	}
+}
+
+// A truncated script must never run, and its download error must reach the
+// caller instead of being hidden by a successful shell at the end of a pipe.
+func TestInstallationCommandRequiresCompleteDownload(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("download-failure=%v", fail), func(t *testing.T) {
+			s := newInstallSandbox(t, true)
+			s.write("/download", "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$TEST_ROOT/install.args\"\n", 0700)
+			status := "0"
+			if fail {
+				status = "28"
+			}
+			s.write("/mock/curl", "#!/bin/sh\nwhile [ $# -gt 0 ]; do\n if [ \"$1\" = -o ]; then\n  cp \"$TEST_ROOT/download\" \"$2\"\n  printf '%s' \"$2\" > \"$TEST_ROOT/download.path\"\n  exit "+status+"\n fi\n shift\ndone\nexit 1\n", 0700)
+			p := &Panel{config: Config{PublicOrigin: "https://panel.example.com", ControlURL: "https://control.example.com:18444"}}
+			ticket := strings.Repeat("c", 43)
+			command := p.installation("node", ticket, time.Now())["installation_command"].(string)
+			c := exec.Command("sh", "-c", command)
+			c.Env = append(s.env, "TMPDIR="+s.root)
+			out, err := c.CombinedOutput()
+			if (err != nil) != fail {
+				t.Fatalf("download failure=%v, err=%v, output=%s", fail, err, out)
+			}
+			if strings.Contains(string(out), ticket) || !strings.Contains(string(out), "安装脚本") {
+				t.Fatalf("missing bootstrap progress or leaked ticket: %s", out)
+			}
+			if fail {
+				if _, err := os.Stat(s.root + "/install.args"); !os.IsNotExist(err) {
+					t.Fatal("partial installer was executed")
+				}
+			} else if s.contents("/install.args") != "-control-url\nhttps://control.example.com:18444\n-ticket\n"+ticket+"\n" {
+				t.Fatal("installer arguments were changed")
+			}
+			if _, err := os.Stat(s.contents("/download.path")); !os.IsNotExist(err) {
+				t.Fatal("bootstrap download was not cleaned up")
+			}
+		})
 	}
 }
