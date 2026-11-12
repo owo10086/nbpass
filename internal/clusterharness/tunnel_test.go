@@ -187,7 +187,7 @@ func TestTunnelManagementValidationAndGates(t *testing.T) {
 	}
 	g := c.Do("POST", "/api/exit-groups", map[string]any{"name": "组", "members": []string{id}, "strategy": "primary_backup"}, 201)
 	c.Do("PUT", "/api/exit-groups/"+g["id"].(string), map[string]any{"name": "重命名", "members": []string{id}, "strategy": "primary_backup"}, 200)
-	gid := entryGroup(c, id)["id"].(string)
+	gid := entryGroup(c, addNode(c, "独立入口")["id"].(string))["id"].(string)
 	body := directBody(gid, h.ReserveTCPPort(), "127.0.0.1", 443)
 	body["kind"], body["exit_group_id"] = "tunnel", g["id"]
 	rule := c.Do("POST", "/api/rules", body, 201)
@@ -204,22 +204,37 @@ func TestTunnelManagementValidationAndGates(t *testing.T) {
 
 func TestCombinedEntryExitCountsBusinessOnce(t *testing.T) {
 	h, c := nodeBrowser(t)
-	n := addNode(c, "兼任入口和出口")
-	id := n["id"].(string)
-	reservePort, listenOption := directPorts(t)
-	h.StartNode(n["installation_ticket"].(string), listenOption)
-	awaitNode(t, c, id, connected)
-	awaitUptime(t, c, id, 0)
-	c.Do("PUT", "/api/nodes/"+id+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": reservePort(), "transport": "wss"}, 200)
-	g := c.Do("POST", "/api/exit-groups", map[string]any{"name": "出口组", "members": []string{id}, "strategy": "primary_backup"}, 201)
-	port := reservePort()
-	body := directBody(entryGroup(c, id)["id"].(string), port, "127.0.0.1", echoTarget(t, "T:"))
-	body["kind"], body["exit_group_id"] = "tunnel", g["id"]
-	c.Do("POST", "/api/rules", body, 201)
-	awaitRevision(t, c, id, 0)
+	a, b := addNode(c, "兼任入口和出口"), addNode(c, "另一入口")
+	aid, bid := a["id"].(string), b["id"].(string)
+	reserve, listen := directPorts(t)
+	h.StartNode(a["installation_ticket"].(string), listen)
+	h.StartNode(b["installation_ticket"].(string), listen)
+	awaitNode(t, c, aid, connected)
+	awaitNode(t, c, bid, connected)
+	awaitUptime(t, c, aid, 0)
+	c.Do("PUT", "/api/nodes/"+aid+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": reserve(), "transport": "wss"}, 200)
+	g := c.Do("POST", "/api/exit-groups", map[string]any{"name": "出口组", "members": []string{aid}, "strategy": "primary_backup"}, 201)
+	port := reserve()
+	body := directBody("", port, "127.0.0.1", echoTarget(t, "T:"))
+	body["entry_node_id"], body["kind"], body["exit_group_id"] = aid, "tunnel", g["id"]
+	// New paths cannot use the same server twice, even when it has both roles.
+	c.Do("POST", "/api/rules", body, 409)
+	body["entry_node_id"] = bid
+	tunnel := c.Do("POST", "/api/rules", body, 201)
+	directPort := reserve()
+	directBody := directBody("", directPort, "127.0.0.1", echoTarget(t, "D:"))
+	directBody["entry_node_id"] = aid
+	direct := c.Do("POST", "/api/rules", directBody, 201)
+	awaitRule(t, c, tunnel["id"].(string), "正常")
+	awaitRule(t, c, direct["id"].(string), "正常")
 	tcpExchange(t, port, "T:")
+	tcpExchange(t, directPort, "D:")
 	h.Clock.Advance(5 * time.Second)
-	awaitProbe(t, c, id, func(v map[string]any) bool {
+	awaitProbe(t, c, aid, func(v map[string]any) bool {
+		rt, ok := v["realtime"].(map[string]any)
+		return ok && rt["business_connections"] == float64(2)
+	})
+	awaitProbe(t, c, bid, func(v map[string]any) bool {
 		rt, ok := v["realtime"].(map[string]any)
 		return ok && rt["business_connections"] == float64(1)
 	})

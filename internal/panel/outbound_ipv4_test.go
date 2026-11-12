@@ -88,7 +88,7 @@ func TestOutboundIPv4Migration49Preserves48NodesAndRules(t *testing.T) {
 	if err = p.db.QueryRow("SELECT name,desired_revision,outbound_ipv4 FROM nodes WHERE id='old'").Scan(&name, &revision, &source); err != nil || source != "" || name != "旧服务器" || revision != 17 {
 		t.Fatal(source, name, revision, err)
 	}
-	if err = p.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 49 {
+	if err = p.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != len(migrations) {
 		t.Fatal(version, err)
 	}
 }

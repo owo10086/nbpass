@@ -44,6 +44,9 @@ func (p *Panel) batchRules(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
+		if body.Action != "delete" {
+			return validatePathChanges(r.Context(), tx, pathChanges{RuleIDs: body.IDs})
+		}
 		return nil
 	}) {
 		return

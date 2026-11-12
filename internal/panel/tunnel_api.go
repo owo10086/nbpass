@@ -44,6 +44,10 @@ type memberAddress struct {
 
 func (p *Panel) tunnelRoutes(mux *http.ServeMux) {
 	p.exitBlockedRoutes(mux)
+	mux.HandleFunc("GET /api/forward-chains", p.listForwardChains)
+	mux.HandleFunc("POST /api/forward-chains", p.saveForwardChain)
+	mux.HandleFunc("PUT /api/forward-chains/{id}", p.saveForwardChain)
+	mux.HandleFunc("DELETE /api/forward-chains/{id}", p.deleteForwardChain)
 	mux.HandleFunc("GET /api/tunnel-exits", p.listTunnelExits)
 	mux.HandleFunc("GET /api/nodes/{id}/exit-health", p.getExitHealth)
 	mux.HandleFunc("POST /api/nodes/{id}/tunnel/rotation", p.startTunnelRotation)
@@ -373,7 +377,7 @@ func (p *Panel) saveExitGroup(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		return nil
+		return validatePathChanges(r.Context(), tx, pathChanges{ExitGroupIDs: []string{id}})
 	}) {
 		return
 	}
@@ -385,6 +389,14 @@ func (p *Panel) saveExitGroup(w http.ResponseWriter, r *http.Request) {
 }
 func (p *Panel) deleteExitGroup(w http.ResponseWriter, r *http.Request) {
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
+		var chain string
+		err := tx.QueryRowContext(r.Context(), "SELECT c.name FROM forward_chains c JOIN forward_chain_hops h ON h.chain_id=c.id WHERE h.exit_group_id=? ORDER BY c.id LIMIT 1", r.PathValue("id")).Scan(&chain)
+		if err == nil {
+			return &forwardingError{409, "端点组仍被转发链“" + chain + "”引用"}
+		}
+		if err != sql.ErrNoRows {
+			return err
+		}
 		var n int
 		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM forward_rules WHERE exit_group_id=?", r.PathValue("id")).Scan(&n); err != nil {
 			return err

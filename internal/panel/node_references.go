@@ -41,6 +41,12 @@ func nodeReferences(ctx context.Context, tx *sql.Tx, id string) ([]nodeReference
 			queries = append(queries, `SELECT DISTINCT 'rule',r.id,r.name FROM forward_rules r JOIN exit_group_members m ON m.group_id=r.exit_group_id WHERE m.node_id=?`)
 		}
 	}
+	if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='forward_chain_hops'").Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists > 0 {
+		queries = append(queries, `SELECT DISTINCT 'forward_chain',c.id,c.name FROM forward_chains c JOIN forward_chain_hops h ON h.chain_id=c.id JOIN exit_group_members m ON m.group_id=h.exit_group_id WHERE m.node_id=?`)
+	}
 	args := make([]any, len(queries))
 	for i := range args {
 		args[i] = id
@@ -127,7 +133,7 @@ func (p *Panel) deleteNode(w http.ResponseWriter, r *http.Request) {
 	if len(refs) > 0 {
 		labels := make([]string, 0, len(refs))
 		for _, ref := range refs {
-			labels = append(labels, map[string]string{"rule": "转发规则", "entry_group": "入口组", "exit_group": "出口组"}[ref.Kind]+"「"+ref.Name+"」（"+ref.ID+"）")
+			labels = append(labels, map[string]string{"rule": "转发规则", "entry_group": "入口组", "exit_group": "出口组", "forward_chain": "转发链"}[ref.Kind]+"「"+ref.Name+"」（"+ref.ID+"）")
 		}
 		respond(w, 409, map[string]any{"error": "节点仍被引用，请先移除：" + strings.Join(labels, "、"), "code": "node_referenced", "references": refs})
 		return

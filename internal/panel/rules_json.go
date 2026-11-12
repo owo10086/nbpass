@@ -219,6 +219,14 @@ func (p *Panel) preflightRuleImport(ctx context.Context, tx *sql.Tx, body ruleIm
 	for _, rule := range existing {
 		byID[rule.ID] = rule
 	}
+	pathGroups, pathErr := loadChainGroups(ctx, tx)
+	if pathErr != nil {
+		return nil, pathErr
+	}
+	pathMembers, pathErr := loadEntryGroupMembers(ctx, tx)
+	if pathErr != nil {
+		return nil, pathErr
+	}
 	seen := map[string]int{}
 	imported := make([]forwarding.Rule, len(body.Document.Rules))
 	for i, raw := range body.Document.Rules {
@@ -237,6 +245,9 @@ func (p *Panel) preflightRuleImport(ctx context.Context, tx *sql.Tx, body ruleIm
 				return nil, err
 			}
 			row.Errors = append(row.Errors, invalid.message)
+		}
+		if pathErr = validateRulePath(*rule, pathMembers, pathGroups); pathErr != nil {
+			row.Errors = append(row.Errors, pathErr.Error())
 		}
 		row.Name, row.ID = rule.Name, rule.ID
 		if rule.ID != "" {
@@ -332,6 +343,17 @@ func (p *Panel) preflightRuleImport(ctx context.Context, tx *sql.Tx, body ruleIm
 }
 
 func storeRule(ctx context.Context, tx *sql.Tx, rule forwarding.Rule, creating bool) error {
+	groups, err := loadChainGroups(ctx, tx)
+	if err != nil {
+		return err
+	}
+	members, err := loadEntryGroupMembers(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if err := validateRulePath(rule, members, groups); err != nil {
+		return err
+	}
 	args := []any{rule.Name, nullableRuleEntry(rule.EntryGroupID), nullableRuleEntry(rule.EntryNodeID), rule.Kind, rule.ListenPort, rule.TargetAddress, rule.TargetFamily, rule.TargetPort, rule.AllowPrivate, rule.Enabled, rule.ExitGroupID, rule.ID}
 	if creating {
 		_, err := tx.ExecContext(ctx, `INSERT INTO forward_rules(name,entry_group_id,entry_node_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled,exit_group_id,id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, args...)

@@ -254,6 +254,9 @@ func (p *Panel) saveEntryGroup(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
+		if err := validatePathChanges(r.Context(), tx, pathChanges{EntryGroupIDs: []string{id}}); err != nil {
+			return err
+		}
 		return tx.QueryRowContext(r.Context(), "SELECT publication_status FROM entry_groups WHERE id=?", id).Scan(&publicationStatus)
 	}) {
 		return
