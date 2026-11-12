@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Form, Input, InputNumber, Modal, Select, Space, Typography } from 'antd';
-import { CloudServerOutlined, LockOutlined, PlusOutlined, SafetyCertificateOutlined, SearchOutlined } from '@ant-design/icons';
+import { DeleteOutlined, CloudServerOutlined, LockOutlined, PlusOutlined, SafetyCertificateOutlined, SearchOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
 import { PageHeader } from './PageHeader';
 import { FilterCard, FilterField } from './FilterCard';
@@ -12,10 +12,9 @@ import { TunnelRotation } from './TunnelRotation';
 import { ExitBlocked } from './ExitBlocked';
 import { EndpointHealth } from './EndpointHealth';
 import { useFocusRow } from './route';
-import type { Endpoint, EndpointGroup, EndpointNode } from './EndpointData';
+import { endpointFormValues, endpointPayload, effectiveEndpointPort } from './EndpointData';
+import type { Endpoint, EndpointGroup, EndpointNode, EndpointValues } from './EndpointData';
 import './Endpoints.css';
-
-type EndpointValues = { node_id: string; address: string; listen_port: number };
 
 export function Endpoints({ focus, onSessionExpired }: { focus?: string; onSessionExpired: () => void }) {
   const [exits, setExits] = useState<Endpoint[]>([]);
@@ -57,14 +56,14 @@ export function Endpoints({ focus, onSessionExpired }: { focus?: string; onSessi
   }, [focus, exits]);
   function edit(row: Endpoint | null) {
     setSaveError(''); form.resetFields();
-    if (row) form.setFieldsValue(row);
+    form.setFieldsValue(endpointFormValues(row ?? undefined));
     setEditing(row);
   }
   function close() { setEditing(undefined); setSaveError(''); form.resetFields(); }
   async function save(values: EndpointValues) {
     setSaving(true); setSaveError('');
     try {
-      await api(`/nodes/${values.node_id}/tunnel`, 'PUT', { address: values.address.trim(), listen_port: values.listen_port, transport: 'wss' });
+      await api(`/nodes/${values.node_id}/tunnel`, 'PUT', endpointPayload(values));
       close(); await load();
     } catch (e) { failed(e, true); }
     finally { setSaving(false); }
@@ -74,7 +73,7 @@ export function Endpoints({ focus, onSessionExpired }: { focus?: string; onSessi
   const visible = exits.filter(exit => {
     const memberships = endpointGroups(exit.node_id);
     const node = nodes.find(node => node.id === exit.node_id);
-    return `${exit.node_id} ${nodeName(exit.node_id)} ${exit.address}:${exit.listen_port}`.toLowerCase().includes(query.trim().toLowerCase())
+    return `${exit.node_id} ${nodeName(exit.node_id)} ${exit.address}:${effectiveEndpointPort(exit)} ${(exit.dedicated_addresses ?? []).map(address => `${address.name} ${address.address}`).join(' ')}`.toLowerCase().includes(query.trim().toLowerCase())
       && (!status || (status === 'online' ? node?.connected === true : node?.connected === false))
       && (!group || (group === 'ungrouped' ? !memberships.length : memberships.some(item => item.id === group)));
   });
@@ -91,7 +90,9 @@ export function Endpoints({ focus, onSessionExpired }: { focus?: string; onSessi
     </FilterCard>
     <TableCard<Endpoint> title="转发端点列表" rowKey="node_id" dataSource={visible} loading={loading} pagination={{ current: page, pageSize: 10, showSizeChanger: false, onChange: setPage }} rowClassName={row => focused(row.node_id)} scroll={{ x: 1050 }} locale={{ emptyText: query.trim() || status || group ? '没有匹配的转发端点' : '暂无转发端点，请先添加服务器并配置 WSS 地址。' }} columns={[
       { title: 'ID', dataIndex: 'node_id', fixed: 'left', width: 120, render: value => <Typography.Text className="endpoint-id mono" ellipsis={{ tooltip: value }} copyable={{ text: value }}>{value}</Typography.Text> },
-      { title: '名称 / 地址', fixed: 'left', width: 220, render: (_, row) => <><span className="node-name">{nodeName(row.node_id)}</span><span className="cell-sub mono">{row.address}:{row.listen_port}</span></> },
+      { title: '名称 / 地址', fixed: 'left', width: 220, render: (_, row) => <><span className="node-name">{nodeName(row.node_id)}</span><span className="cell-sub">公网地址 <span className="mono">{row.address}:{effectiveEndpointPort(row)}</span></span>
+        {(row.dedicated_addresses ?? []).map(address => <span className="cell-sub" key={address.id}>{address.name} <span className="mono">{address.address}:{address.public_port ?? row.listen_port}</span></span>)}
+        <span className="cell-sub">本机监听 <span className="mono">{row.listen_port}</span></span></> },
       { title: '协议', width: 72, render: () => <ColorTag tone="blue">WSS</ColorTag> },
       { title: '状态', width: 120, render: (_, row) => { const node = nodes.find(node => node.id === row.node_id); return <StatusDot tone={!node ? 'muted' : node.connected ? 'ok' : 'danger'}>{!node ? '控制状态未知' : node.connected ? '控制在线' : '控制离线'}</StatusDot>; } },
       { title: '所属端点组', render: (_, row) => { const memberships = endpointGroups(row.node_id); return <Space wrap size={[4, 4]}>{memberships.length ? memberships.map(group => <a key={group.id} href={`#/endpoint-groups?focus=${encodeURIComponent(group.id)}`}><ColorTag>{group.name}</ColorTag></a>) : <span className="muted">未分组</span>}</Space>; } },
@@ -108,13 +109,26 @@ export function Endpoints({ focus, onSessionExpired }: { focus?: string; onSessi
         {saveError && <Alert title={saveError} type="error" showIcon className="message" />}
         <FormSection title="端点配置" icon={<CloudServerOutlined />}>
           {!nodes.length && <Alert type="info" showIcon title={<>请先在 <a href="#/servers">服务器管理</a> 添加服务器。</>} className="message" />}
-          <Form.Item name="node_id" label="所属服务器" extra="一个服务器对应一个 WSS 转发端点，端点名称沿用服务器名称。" rules={[{ required: true, message: '请选择所属服务器' }]}><Select showSearch optionFilterProp="label" disabled={saving || !!editing} placeholder="选择服务器" options={nodes.map(node => ({ value: node.id, label: `${node.name}${exits.some(exit => exit.node_id === node.id) ? '（已配置）' : ''}` }))} onChange={id => { const exit = exits.find(exit => exit.node_id === id); form.setFieldsValue({ address: exit?.address, listen_port: exit?.listen_port }); }} /></Form.Item>
+          <Form.Item name="node_id" label="所属服务器" extra="一个服务器对应一个 WSS 转发端点，端点名称沿用服务器名称。" rules={[{ required: true, message: '请选择所属服务器' }]}><Select showSearch optionFilterProp="label" disabled={saving || !!editing} placeholder="选择服务器" options={nodes.map(node => ({ value: node.id, label: `${node.name}${exits.some(exit => exit.node_id === node.id) ? '（已配置）' : ''}` }))} onChange={id => { const exit = exits.find(exit => exit.node_id === id); form.setFieldsValue(endpointFormValues(exit)); }} /></Form.Item>
           {!editing && configured && <Alert type="info" showIcon title="该服务器已有转发端点，保存将更新其地址与端口。" className="message" />}
-          <Form.Item name="address" label="可直接入站的 IPv4" extra="填写入口可以访问的端点地址；出站公网 IP 观测值不能证明可入站。" rules={[{ required: true, whitespace: true, message: '请输入端点 IPv4' }]}><Input maxLength={15} placeholder="例如：203.0.113.20" /></Form.Item>
+          <Form.Item name="address" label="公网地址（IPv4 或域名）" extra="填写前一跳可连接的公网地址；换公网 IP 会更新此地址。域名只解析 IPv4。" rules={[{ required: true, whitespace: true, message: '请输入公网 IPv4 或域名' }]}><Input maxLength={253} placeholder="例如：203.0.113.20 或 exit.example.com" /></Form.Item>
           <div className="endpoint-form-grid">
             <Form.Item label="传输协议" extra="使用 WSS（加密 WebSocket）转发连接。"><ColorTag tone="blue">WSS</ColorTag></Form.Item>
-            <Form.Item name="listen_port" label="WSS 监听端口" extra="须在所属服务器上放行此端口。" rules={[{ required: true, message: '请输入监听端口' }]}><InputNumber min={1} max={65535} precision={0} className="endpoint-port" placeholder="1–65535" /></Form.Item>
+            <Form.Item name="listen_port" label="本机 WSS 监听端口" extra="服务器实际监听的端口，须放行且不能与本机业务或检测端口冲突。" rules={[{ required: true, message: '请输入监听端口' }]}><InputNumber min={1} max={65535} precision={0} className="endpoint-port" placeholder="1–65535" /></Form.Item>
           </div>
+          <Form.Item name="public_port" label="公网对外端口（可空）" extra="前一跳连接对外端口，由运营商/NAT 映射到本机监听端口；留空使用本机监听端口。"><InputNumber min={1} max={65535} precision={0} className="endpoint-port" placeholder="同本机监听端口" /></Form.Item>
+        </FormSection>
+        <FormSection title="专线地址" icon={<CloudServerOutlined />} description="专线地址由管理员维护，换公网 IP 不会修改。前一跳连接对外端口，域名只解析 IPv4。">
+          <Form.List name="dedicated_addresses">{(fields, { add, remove }) => <>
+            {fields.map(field => <div className="endpoint-dedicated" key={field.key}>
+              <Form.Item name={[field.name, 'id']} hidden><Input /></Form.Item>
+              <div className="endpoint-dedicated-header"><Typography.Text>专线 {field.name + 1}</Typography.Text><Button type="text" danger icon={<DeleteOutlined />} onClick={() => remove(field.name)}>删除专线</Button></div>
+              <Form.Item name={[field.name, 'name']} label="专线名称" rules={[{ required: true, whitespace: true, message: '请输入专线名称' }]}><Input maxLength={200} placeholder="例如：沪日 IX" /></Form.Item>
+              <Form.Item name={[field.name, 'address']} label="专线地址（IPv4 或域名）" rules={[{ required: true, whitespace: true, message: '请输入 IPv4 或域名' }]}><Input maxLength={253} placeholder="例如：10.0.0.2 或 ix.example.com" /></Form.Item>
+              <Form.Item name={[field.name, 'public_port']} label="对外端口（可空）" extra="前一跳连接此端口；留空使用本机监听端口。"><InputNumber min={1} max={65535} precision={0} className="endpoint-port" placeholder="同本机监听端口" /></Form.Item>
+            </div>)}
+            <Button type="dashed" icon={<PlusOutlined />} onClick={() => add({ name: '', address: '', public_port: null })}>添加专线地址</Button>
+          </>}</Form.List>
         </FormSection>
         <FormSection title="证书身份" icon={<SafetyCertificateOutlined />} description="面板自动生成有效期 5 年的端点证书，更换地址会保留证书身份。">
           {configured ? <><Form.Item label="证书身份（SNI）"><Typography.Text copyable className="mono endpoint-certificate">{configured.server_name}</Typography.Text></Form.Item>

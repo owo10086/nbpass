@@ -1,6 +1,8 @@
 export type EndpointGroup = { id: string; name: string; strategy: 'primary_backup'; members: string[] };
 export type EndpointNode = { id: string; name: string; connected: boolean };
-export type Endpoint = { node_id: string; address: string; listen_port: number; transport: 'wss'; server_name: string; certificate_pem: string };
+export type DedicatedAddress = { id?: string; name: string; address: string; public_port: number | null };
+export type EndpointValues = { node_id: string; address: string; listen_port: number; public_port?: number | null; dedicated_addresses?: DedicatedAddress[] };
+export type Endpoint = { public_port: number | null; dedicated_addresses: DedicatedAddress[]; node_id: string; address: string; listen_port: number; transport: 'wss'; server_name: string; certificate_pem: string };
 export type EndpointHealth = { exit_id: string; state: string; consecutive_failures?: number; last_probe?: string; failure_class?: string; recovery_since_unix?: number; checked_at_unix?: number };
 export type HealthReport = { fresh: boolean; sampled_at: string | null; exits: EndpointHealth[] };
 export type EndpointOption = { id: string; name: string; address: string };
@@ -31,4 +33,23 @@ export function healthIsFresh(report: HealthReport | undefined, now: number): bo
   if (!report?.fresh || !report.sampled_at) return false;
   const age = now - Date.parse(report.sampled_at);
   return age >= 0 && age < 10000;
+}
+
+export function effectiveEndpointPort(endpoint: { public_port?: number | null; listen_port: number }): number {
+  return endpoint.public_port ?? endpoint.listen_port;
+}
+
+export function endpointFormValues(endpoint?: EndpointValues) {
+  return endpoint ? { ...endpoint, public_port: endpoint.public_port ?? null, dedicated_addresses: (endpoint.dedicated_addresses ?? []).map(address => ({ ...address })) }
+    : { address: '', listen_port: undefined, public_port: null, dedicated_addresses: [] };
+}
+
+export function endpointPayload(values: EndpointValues) {
+  const normalize = (value: string) => value.trim().replace(/\.$/, '').toLowerCase();
+  return {
+    address: normalize(values.address), listen_port: values.listen_port, transport: 'wss', public_port: values.public_port ?? null,
+    dedicated_addresses: (values.dedicated_addresses ?? []).map(address => ({
+      ...(address.id ? { id: address.id } : {}), name: address.name.trim(), address: normalize(address.address), public_port: address.public_port ?? null,
+    })),
+  };
 }

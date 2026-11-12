@@ -1,4 +1,5 @@
 .endpoint-page { min-width: 0; }
+.endpoint-page .node-name, .endpoint-page .cell-sub { overflow-wrap: anywhere; }
 .endpoint-id.ant-typography { display: block; width: 100%; max-width: 100%; }
 .endpoint-group-members { overflow-wrap: anywhere; }
 .endpoint-row-actions { flex-wrap: wrap; }
@@ -40,3 +41,6 @@
   .endpoint-page .filter-field { width: 100%; }
   .endpoint-page .filter-field > :is(.ant-input-affix-wrapper, .ant-select) { flex: 1; min-width: 140px; }
 }
+
+.endpoint-dedicated { padding: var(--space-md); margin-bottom: var(--space-md); border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-sunken); }
+.endpoint-dedicated-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-sm); }

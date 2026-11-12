@@ -43,3 +43,23 @@ test('健康观测在采样后 10 秒自动过期，后续请求挂起也不能�
   assert.equal(healthIsFresh(report, sampled - 1), false);
   assert.equal(healthIsFresh(undefined, sampled), false);
 });
+
+test('地址表单保留专线稳定 ID，空对外端口明确清空并显示本机监听端口', async () => {
+  const { endpointPayload, endpointFormValues, effectiveEndpointPort } = await import('./EndpointData.ts');
+  const endpoint = { node_id: 'b', address: 'exit.test', listen_port: 18443, public_port: 2443, dedicated_addresses: [
+    { id: 'stable-ix', name: '沪日 IX', address: '10.0.0.2', public_port: null },
+  ] };
+  assert.deepEqual(endpointFormValues(endpoint), endpoint);
+  assert.equal(effectiveEndpointPort(endpoint), 2443);
+  assert.equal(effectiveEndpointPort({ public_port: null, listen_port: 18443 }), 18443);
+  const values = { ...endpoint, address: ' EXIT.Test. ', public_port: undefined, dedicated_addresses: [
+    { id: 'stable-ix', name: ' 沪日 IX ', address: ' IX.Test. ', public_port: undefined },
+    { name: '新增', address: '10.0.0.3', public_port: 3443 },
+  ] };
+  assert.deepEqual(endpointPayload(values), { address: 'exit.test', listen_port: 18443, transport: 'wss', public_port: null, dedicated_addresses: [
+    { id: 'stable-ix', name: '沪日 IX', address: 'ix.test', public_port: null },
+    { name: '新增', address: '10.0.0.3', public_port: 3443 },
+  ] });
+  assert.deepEqual(endpointPayload({ ...values, dedicated_addresses: [] }).dedicated_addresses, []);
+  assert.deepEqual(endpointFormValues(undefined), { address: '', listen_port: undefined, public_port: null, dedicated_addresses: [] });
+});
