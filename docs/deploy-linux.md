@@ -109,11 +109,24 @@ openssl s_client -connect control.example.com:443 -servername control.example.co
 
 ## 3. 安装节点与独立更新服务
 
-在网页添加节点，复制面板生成的完整命令，以 root 身份到 Linux amd64 节点执行（非 root 用户先执行 `sudo -i`）。命令形式为：
+在网页添加节点，复制面板生成的完整命令，以 root 身份到 Linux amd64 节点执行（非 root 用户先执行 `sudo -i`）。命令先完整下载脚本，下载失败不会执行残缺脚本，临时文件会自动清理。需要分步查看时，可执行以下等效命令（填写网页生成的新票据）：
 
 ```sh
-curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL 'https://panel.example.com/install-node.sh' | sh -s -- -control-url 'https://control.example.com' -ticket '网页生成的43字符一次性票据'
+(
+  set -eu
+  umask 077
+  installer=$(mktemp "${TMPDIR:-/tmp}/nbpass-install.XXXXXX")
+  trap 'rm -f "$installer"' EXIT
+  trap 'exit 1' HUP INT TERM
+  printf '%s\n' '[准备] 正在下载安装脚本…'
+  curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fL --show-error \
+    --connect-timeout 60 --max-time 180 --retry 2 --retry-delay 3 --retry-connrefused \
+    'https://panel.example.com/install-node.sh' -o "$installer"
+  sh "$installer" -control-url 'https://control.example.com' -ticket '网页生成的43字符一次性票据'
+)
 ```
+
+安装过程依次显示环境检查、下载、注册、程序安装、服务启动、服务检查。下载显示已接收字节、平均速度和耗时；连接最多等待 60 秒，节点程序单次下载最多 60 分钟，临时故障最多重试 2 次，连续 60 秒低于 1 KiB/s 会中止并重试。失败会显示所在阶段与退出码；服务异常时给出 `journalctl` 命令。成功仅表示本机两个服务处于 active，仍须到面板确认在线。不要使用 `sh -x` 查看详情，以免回显票据。
 
 票据只有 30 分钟有效且只能兑换一次；命令不含长期 token。脚本下载面板内嵌节点，通过经过 TLS 验证的 gRPC 兑换并加密保存凭据，之后才替换程序、注册 unit。下载或兑换失败时不覆盖原有程序和 unit。兑换后若本地写入失败，应在面板重置 token 领取新票据，不能反复重用已消费票据。
 
