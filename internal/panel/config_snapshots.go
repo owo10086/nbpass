@@ -114,8 +114,8 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 			return nil, err
 		}
 		// 与控制消息上限一致；拒绝过大的事务，避免保存后永远无法同步。
-		if len(data) > 60<<10 {
-			return nil, errors.New("节点配置快照超过控制消息上限")
+		if err := validateSnapshotWireSize(next); err != nil {
+			return nil, err
 		}
 		data, err = p.secrets.(*sealedSecrets).seal("node-snapshot:"+n.id, data)
 		if err != nil {
@@ -173,4 +173,11 @@ func (p *Panel) controlMessage(ctx context.Context, id string) (*controlpb.Panel
 		return nil, err
 	}
 	return m, nil
+}
+
+func validateSnapshotWireSize(snapshot *controlpb.ConfigSnapshot) error {
+	if proto.Size(snapshot) > 60<<10 || proto.Size(&controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: snapshot.Revision, Snapshot: snapshot}) > 64<<10 {
+		return errors.New("节点配置快照超过控制消息上限")
+	}
+	return nil
 }

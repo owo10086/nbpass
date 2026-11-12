@@ -1,6 +1,7 @@
 package forwarding
 
 import (
+	"net/netip"
 	"reflect"
 	"testing"
 )
@@ -26,5 +27,27 @@ func TestExpandForwardChainAllMembersAndOrder(t *testing.T) {
 	}
 	if err := ValidatePathNodes([]string{"d", "e"}, hops); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestChainTargetDialerLoops(t *testing.T) {
+	nodes := []ValidationNode{{ID: "a", ObservedIPv4: "192.0.2.1"}, {ID: "b", ObservedIPv4: "192.0.2.2"}, {ID: "c", ObservedIPv4: "192.0.2.3"}}
+	for i := range nodes {
+		nodes[i].NodeListenerPorts = NodeListenerPorts{TunnelListenPort: 18443, CheckPort: 18080}
+	}
+	for _, host := range []string{"127.0.0.1", "localhost", "target.test", "192.0.2.3"} {
+		t.Run(host, func(t *testing.T) {
+			rules := []Rule{{ID: "chain", Name: "链入口", EntryNodeID: "a", Kind: Tunnel, ListenPort: 20001, TargetAddress: host, TargetPort: 20002, AllowPrivate: true, Enabled: true}, {ID: "back", Name: "末跳本机监听", EntryNodeID: "c", Kind: Direct, ListenPort: 20002, TargetAddress: "192.0.2.1", TargetPort: 20001, AllowPrivate: true, Enabled: true}}
+			targets := map[string][]netip.Addr{"target.test": {netip.MustParseAddr("127.0.0.1")}}
+			failures := ConfigurationErrors(nodes, rules, nil, targets, map[string][]string{"chain": {"b", "c"}})
+			if len(failures) != 1 || failures[0].Code != "forwarding_loop" {
+				t.Fatalf("备用末跳环路未发现: %+v", failures)
+			}
+			rules = rules[:1]
+			rules[0].TargetPort = 20001
+			if got := ConfigurationErrors(nodes, rules, nil, targets, map[string][]string{"chain": {"b", "c"}}); len(got) > 0 {
+				t.Fatalf("末跳无业务监听却报自环: %+v", got)
+			}
+		})
 	}
 }

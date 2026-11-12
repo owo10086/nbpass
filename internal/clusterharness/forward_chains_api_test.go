@@ -74,7 +74,7 @@ func TestForwardChainsAPIHTTPPersistenceIsolationAndHistoricalCompile(t *testing
 		}
 	}
 	c.Do("DELETE", "/api/exit-groups/"+cg, nil, 409)
-	c.Do("PUT", "/api/exit-groups/"+cg, map[string]any{"name": "坏组", "members": []string{cid, f.exitID}, "strategy": "primary_backup"}, 409)
+	c.Do("PUT", "/api/exit-groups/"+cg, map[string]any{"name": "坏组", "members": []string{cid, f.exitID}, "strategy": "primary_backup"}, 400)
 	if got := c.Do("GET", "/api/forward-chains", nil, 200)["chains"].([]any); !reflect.DeepEqual(got, []any{chain}) {
 		t.Fatal("失败改变链", got)
 	}
@@ -151,4 +151,97 @@ func TestForwardChainsAPIAuthenticationAndOrigin(t *testing.T) {
 	if got := c.Do("GET", "/api/forward-chains", nil, 200)["chains"].([]any); len(got) != 0 {
 		t.Fatal(got)
 	}
+}
+
+func TestForwardChainsAPIRuleReferencesTransactionsAndCapabilityGate(t *testing.T) {
+	f := newAuthorizationFixture(t)
+	ordinary := f.create(t)
+	h, c := f.h, f.c
+	cid := addNode(c, "末跳")["id"].(string)
+	c.Do("PUT", "/api/nodes/"+cid+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": h.ReserveTCPPort(), "transport": "wss"}, 200)
+	cg := c.Do("POST", "/api/exit-groups", map[string]any{"name": "末跳组", "members": []string{cid}, "strategy": "primary_backup"}, 201)["id"].(string)
+	chain := c.Do("POST", "/api/forward-chains", map[string]any{"name": "共享链", "exit_group_ids": []string{f.body["exit_group_id"].(string), cg}}, 201)["id"].(string)
+	body := map[string]any{}
+	for k, v := range f.body {
+		body[k] = v
+	}
+	delete(body, "id")
+	delete(body, "exit_group_id")
+	body["chain_id"] = chain
+	body["listen_port"] = h.ReserveTCPPort()
+	body["name"] = "链入口"
+	rid := c.Do("POST", "/api/rules", body, 201)["id"].(string)
+	awaitRule(t, c, rid, "整条阻塞（需升级服务器）")
+	tcpExchange(t, f.port, "T:")
+	c.Do("DELETE", "/api/forward-chains/"+chain, nil, 409)
+	body["enabled"] = false
+	body["listen_port"] = h.ReserveTCPPort()
+	second := c.Do("POST", "/api/rules", body, 201)["id"].(string)
+	list := c.Do("GET", "/api/forward-chains", nil, 200)["chains"].([]any)
+	if list[0].(map[string]any)["rule_count"] != float64(2) {
+		t.Fatal(list)
+	}
+	// Every member of an entry group participates, including disabled references.
+	c.Do("PUT", "/api/entry-groups/"+body["entry_group_id"].(string), map[string]any{"name": "坏入口", "members": []string{f.entryID, cid}}, 400)
+	c.Do("PUT", "/api/exit-groups/"+cg, map[string]any{"name": "入口作备用", "members": []string{cid, f.entryID}, "strategy": "primary_backup"}, 400)
+	c.Do("PUT", "/api/forward-chains/"+chain, map[string]any{"name": "合法重排", "exit_group_ids": []string{cg, f.body["exit_group_id"].(string)}}, 200)
+	for _, version := range []int{1, 2, 3} {
+		doc := map[string]any{"format_version": version, "rules": []any{body}}
+		code := 400
+		if version == 3 {
+			code = 200
+		}
+		importRules(c, "/preflight", "create", doc, code)
+	}
+	// One bad changed rule rejects the entire import, including a valid first row.
+	bad := map[string]any{}
+	for k, v := range body {
+		bad[k] = v
+	}
+	delete(bad, "entry_group_id")
+	bad["entry_node_id"] = cid
+	doc := map[string]any{"format_version": 3, "rules": []any{body, bad}}
+	importRules(c, "/preflight", "create", doc, 400)
+	importRules(c, "", "create", doc, 400)
+	if len(c.Do("GET", "/api/rules", nil, 200)["rules"].([]any)) != 3 {
+		t.Fatal("partial import")
+	}
+	db, err := (platform.SQLite{Path: filepath.Join(h.Dir, "panel.db")}).Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	// Failure inside generation persistence must roll back rule edits too.
+	if _, err = db.Exec(`CREATE TRIGGER fail_chain_authorization BEFORE UPDATE ON rule_authorizations WHEN NEW.rule_id='` + rid + `' BEGIN SELECT RAISE(ABORT,'injected authorization storage failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	body["target_port"] = 8443
+	c.Do("PUT", "/api/rules/"+rid, body, 503)
+	if _, err = db.Exec("DROP TRIGGER fail_chain_authorization"); err != nil {
+		t.Fatal(err)
+	}
+	var port int
+	if err = db.QueryRow("SELECT target_port FROM forward_rules WHERE id=?", rid).Scan(&port); err != nil || port == 8443 {
+		t.Fatal("rule was not rolled back", port, err)
+	}
+	// Random port and mode conversion share the same references and path checks.
+	body["target_port"] = f.body["target_port"]
+	body["listen_port"] = 0
+	body["random_port"] = true
+	random := c.Do("POST", "/api/rules", body, 201)
+	if random["listen_port"].(float64) < 1024 {
+		t.Fatal(random)
+	}
+	delete(body, "random_port")
+	body["listen_port"] = h.ReserveTCPPort()
+	delete(body, "chain_id")
+	body["exit_group_id"] = f.body["exit_group_id"]
+	c.Do("PUT", "/api/rules/"+second, body, 200)
+	delete(body, "exit_group_id")
+	body["kind"] = "direct"
+	c.Do("PUT", "/api/rules/"+second, body, 200)
+	c.Do("POST", "/api/rules/batch", map[string]any{"action": "delete", "ids": []string{rid, random["id"].(string)}}, 200)
+	c.Do("DELETE", "/api/forward-chains/"+chain, nil, 204)
+	awaitRule(t, c, ordinary, "正常")
+	tcpExchange(t, f.port, "T:")
 }

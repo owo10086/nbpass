@@ -65,7 +65,7 @@ func (p *Panel) legacyTunnelAuthorizations(ctx context.Context, tx queryer, rule
 }
 
 func sameLegacyAuthorization(a, b *controlpb.ForwardRule) bool {
-	return a != nil && b != nil && a.AuthorizationGeneration == 0 && b.AuthorizationGeneration == 0 &&
+	return a != nil && b != nil && a.ChainId == "" && b.ChainId == "" && a.AuthorizationGeneration == 0 && b.AuthorizationGeneration == 0 &&
 		a.Id == b.Id && a.EntryGroupId == b.EntryGroupId && a.ExitGroupId == b.ExitGroupId && a.Kind == b.Kind &&
 		a.TargetAddress == b.TargetAddress && a.TargetFamily == b.TargetFamily && a.TargetPort == b.TargetPort && a.AllowPrivate == b.AllowPrivate
 }

@@ -88,7 +88,12 @@ func (p *Panel) listForwardChains(w http.ResponseWriter, r *http.Request) {
 				err = e
 				break
 			}
-			views = append(views, forwardChainView{ForwardChain: chain, Hops: hops})
+			var count int
+			if e := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM forward_rules WHERE chain_id=?", chain.ID).Scan(&count); e != nil {
+				err = e
+				break
+			}
+			views = append(views, forwardChainView{ForwardChain: chain, Hops: hops, RuleCount: count})
 		}
 	}
 	_ = tx.Rollback()
@@ -124,6 +129,7 @@ func (p *Panel) saveForwardChain(w http.ResponseWriter, r *http.Request) {
 	}
 	chain := forwarding.ForwardChain{ID: id, Name: body.Name, ExitGroupIDs: body.ExitGroupIDs}
 	var hops []forwarding.ChainHop
+	var count int
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
 		groups, err := loadChainGroups(r.Context(), tx)
 		if err != nil {
@@ -149,7 +155,10 @@ func (p *Panel) saveForwardChain(w http.ResponseWriter, r *http.Request) {
 				return err
 			}
 		}
-		return validatePathChanges(r.Context(), tx, pathChanges{ChainIDs: []string{id}})
+		if err := validatePathChanges(r.Context(), tx, pathChanges{ChainIDs: []string{id}}); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(r.Context(), "SELECT count(*) FROM forward_rules WHERE chain_id=?", id).Scan(&count)
 	}) {
 		return
 	}
@@ -157,11 +166,18 @@ func (p *Panel) saveForwardChain(w http.ResponseWriter, r *http.Request) {
 	if creating {
 		code = 201
 	}
-	respond(w, code, forwardChainView{ForwardChain: chain, Hops: hops})
+	respond(w, code, forwardChainView{ForwardChain: chain, Hops: hops, RuleCount: count})
 }
 
 func (p *Panel) deleteForwardChain(w http.ResponseWriter, r *http.Request) {
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
+		var count int
+		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM forward_rules WHERE chain_id=?", r.PathValue("id")).Scan(&count); err != nil {
+			return err
+		}
+		if count > 0 {
+			return &forwardingError{409, "转发链仍被端口引用，请先移除引用"}
+		}
 		return missingResult(tx.ExecContext(r.Context(), "DELETE FROM forward_chains WHERE id=?", r.PathValue("id")))
 	}) {
 		return

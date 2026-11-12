@@ -13,6 +13,8 @@ message EnrollResponse { string node_id = 1; string token = 2; }
 
 // 身份由认证 token 决定，node_id 仅用于向后兼容，服务端不得信任。
 message NodeReport {
+  // Bound to attempted_revision/digest and durable revocations_applied.
+  repeated TunnelGrantApplyResult tunnel_grant_results = 285;
   Compatibility compatibility = 270;
   bool upgrade_only = 260;
   bytes upgrade_progress = 261;
@@ -148,7 +150,23 @@ message ConfigSnapshot {
   TunnelServer tunnel_server = 41;
 }
 
+// Public evidence context; never grants arbitrary dialing authority.
+message ChainEdgeAuthorization {
+  string from_node_id = 1;
+  string to_node_id = 2;
+  string address_id = 3;
+  uint32 hop_index = 4;
+  string endpoint_config_digest = 5;
+}
+message ChainAuthorization {
+  string fingerprint = 1;
+  repeated ChainEdgeAuthorization edges = 2;
+}
 message ForwardRule {
+  string chain_id = 285;
+  uint32 hop_index = 286;
+  // Trusted ordered path fingerprint from the panel snapshot, never a client claim.
+  ChainAuthorization chain_authorization = 287;
   // 当前代次已由出口确认的候选；缺失仅兼容旧版单成员快照。
   repeated string authorized_exit_ids = 150;
   uint64 authorization_generation = 110;
@@ -192,7 +210,18 @@ message TunnelPeer {
   string entry_id = 40;
   string credential = 41;
 }
+message TunnelGrantApplyResult {
+  string entry_id = 1;
+  string rule_id = 2;
+  uint64 generation = 3;
+  uint64 applied_revision = 4;
+  string apply_error = 5;
+}
+
 message TunnelGrant {
+  string next_exit_group_id = 285;
+  uint32 hop_index = 286;
+  repeated string authorized_next_node_ids = 287;
   string entry_id = 40;
   ForwardRule rule = 41;
 }

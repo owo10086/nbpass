@@ -300,13 +300,13 @@ func (p *Panel) deleteEntryGroup(w http.ResponseWriter, r *http.Request) {
 	respond(w, 204, nil)
 }
 
-const ruleColumns = "r.id,r.name,coalesce(r.entry_group_id,''),coalesce(r.entry_node_id,''),r.kind,r.listen_port,r.target_address,r.target_family,r.target_port,r.allow_private,r.enabled,r.exit_group_id"
+const ruleColumns = "r.id,r.name,coalesce(r.entry_group_id,''),coalesce(r.entry_node_id,''),r.kind,r.listen_port,r.target_address,r.target_family,r.target_port,r.allow_private,r.enabled,r.exit_group_id,coalesce(r.chain_id,'')"
 
 type scanner interface{ Scan(...any) error }
 
 func scanRule(row scanner) (forwarding.Rule, error) {
 	var r forwarding.Rule
-	err := row.Scan(&r.ID, &r.Name, &r.EntryGroupID, &r.EntryNodeID, &r.Kind, &r.ListenPort, &r.TargetAddress, &r.TargetFamily, &r.TargetPort, &r.AllowPrivate, &r.Enabled, &r.ExitGroupID)
+	err := row.Scan(&r.ID, &r.Name, &r.EntryGroupID, &r.EntryNodeID, &r.Kind, &r.ListenPort, &r.TargetAddress, &r.TargetFamily, &r.TargetPort, &r.AllowPrivate, &r.Enabled, &r.ExitGroupID, &r.ChainID)
 	return r, err
 }
 func (p *Panel) listRules(w http.ResponseWriter, r *http.Request) {
@@ -354,6 +354,9 @@ func (p *Panel) ruleSyncViews(ctx context.Context) ([]ruleView, error) {
 				view.EntryStates = append(view.EntryStates, p.entryStateView(ruleEntryKey(view.Rule), id, n.name))
 			}
 		}
+	}
+	if err := p.attachRulePaths(ctx, views, groups); err != nil {
+		return nil, err
 	}
 	return views, nil
 }
@@ -413,7 +416,7 @@ func (p *Panel) saveRule(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		var n int
-		if body.Kind == forwarding.Tunnel {
+		if body.Kind == forwarding.Tunnel && body.ChainID == "" {
 			if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM exit_groups WHERE id=?", body.ExitGroupID).Scan(&n); err != nil {
 				return err
 			}

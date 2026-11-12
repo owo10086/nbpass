@@ -127,6 +127,7 @@ var migrations = []string{
 	ixMemberAddressesMigration,
 	outboundIPv4Migration,
 	forwardChainsMigration,
+	chainRulesMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

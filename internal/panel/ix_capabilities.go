@@ -96,6 +96,7 @@ type capabilityRequirements struct {
 	Hops     [][]capabilityCandidate
 }
 type capabilityPlan struct {
+	Edges    map[[2]string]bool
 	Blocked  bool
 	Blockers []configurationBlocker
 	Hops     [][]capabilityCandidate
@@ -215,13 +216,28 @@ func (p *Panel) ruleCapabilityPlans(ctx context.Context, q queryer, rules []forw
 	if err != nil {
 		return nil, err
 	}
+	chains, err := loadForwardChains(ctx, q)
+	if err != nil {
+		return nil, err
+	}
 	plans := map[[2]string]capabilityPlan{}
 	for _, r := range rules {
 		if !r.Enabled {
 			continue
 		}
 		for _, entry := range forwarding.RuleEntryNodes(r, members) {
-			plans[[2]string{entry, r.ID}] = caps.evaluate(ruleCapabilityRequirements(r, entry, byGroup[r.ExitGroupID], legacy, addresses, sources))
+			if r.ChainID != "" {
+				var ids []string
+				for _, c := range chains {
+					if c.ID == r.ChainID {
+						ids = c.ExitGroupIDs
+						break
+					}
+				}
+				plans[[2]string{entry, r.ID}] = chainCapabilityPlan(r, entry, ids, byGroup, caps, addresses, sources)
+			} else {
+				plans[[2]string{entry, r.ID}] = caps.evaluate(ruleCapabilityRequirements(r, entry, byGroup[r.ExitGroupID], legacy, addresses, sources))
+			}
 		}
 	}
 	return plans, nil
@@ -262,4 +278,98 @@ func attachCapabilitySync(views []ruleView, plans map[[2]string]capabilityPlan) 
 		}
 		v.SyncStatus = aggregateSync(statuses)
 	}
+}
+
+// Each predecessor must support the address semantics of its own next group.
+// Eligible alternatives are retained in declared order, not sorted by node ID.
+func chainCapabilityPlan(r forwarding.Rule, entry string, ids []string, groups map[string]exitGroupView, caps capabilitySet, addresses map[string]tunnelExitView, sources map[string]string) capabilityPlan {
+	plan := capabilityPlan{Edges: map[[2]string]bool{}, Blockers: []configurationBlocker{}, Hops: make([][]capabilityCandidate, len(ids))}
+	if len(ids) < 2 {
+		plan.Blocked = true
+		return plan
+	}
+	seen := map[configurationBlocker]bool{}
+	check := func(node, address string, required []string) bool {
+		missing := caps.missing(node, required)
+		for _, cap := range missing {
+			b := configurationBlocker{NodeID: node, NodeName: caps[node].name, AddressID: address, Capability: cap, Reason: "服务器未声明所需能力或兼容范围不支持，需升级服务器"}
+			if !seen[b] {
+				seen[b] = true
+				plan.Blockers = append(plan.Blockers, b)
+			}
+		}
+		return len(missing) == 0
+	}
+	link := func(from string, next capabilityCandidate) bool {
+		needs := []string{}
+		if next.AddressID != "public" {
+			needs = append(needs, compatibility.IXMemberIdentity)
+		}
+		address, port, _ := selectedTunnelAddress(addresses[next.NodeID], next.AddressID)
+		if _, err := netip.ParseAddr(address); err != nil || port != nil {
+			needs = append(needs, compatibility.IXAddressDialing)
+		}
+		return check(from, next.AddressID, needs)
+	}
+	// Backward reachability keeps a predecessor if at least one complete suffix
+	// is executable. An unsupported backup address must not block a public path.
+	for i := len(ids) - 1; i >= 0; i-- {
+		for _, m := range groups[ids[i]].MemberAddresses {
+			needs := []string{compatibility.ForwardChains, "tunnel_authorization"}
+			if i == len(ids)-1 && sources[m.NodeID] != "" {
+				needs = append(needs, compatibility.OutboundIPv4)
+			}
+			if i+1 < len(ids) && len(groups[ids[i+1]].Members) > 1 {
+				needs = append(needs, "exit_failover")
+			}
+			ok := check(m.NodeID, m.AddressID, needs)
+			if i+1 < len(ids) {
+				hasNext := false
+				for _, next := range plan.Hops[i+1] {
+					if link(m.NodeID, next) && ok {
+						plan.Edges[[2]string{m.NodeID, next.NodeID}] = true
+						hasNext = true
+					}
+				}
+				ok = ok && hasNext
+			}
+			if ok {
+				plan.Hops[i] = append(plan.Hops[i], capabilityCandidate{NodeID: m.NodeID, AddressID: m.AddressID})
+			}
+		}
+	}
+	needs := []string{compatibility.ForwardChains, "tunnel_authorization"}
+	if len(groups[ids[0]].Members) > 1 {
+		needs = append(needs, "exit_failover")
+	}
+	entryOK := check(entry, "", needs)
+	reachable := map[string]bool{entry: entryOK}
+	for i := range plan.Hops {
+		nextReachable := map[string]bool{}
+		kept := []capabilityCandidate{}
+		for _, next := range plan.Hops[i] {
+			for from, ok := range reachable {
+				if !ok {
+					continue
+				}
+				allowed := plan.Edges[[2]string{from, next.NodeID}]
+				if i == 0 {
+					allowed = link(from, next)
+					if allowed {
+						plan.Edges[[2]string{from, next.NodeID}] = true
+					}
+				}
+				if allowed {
+					nextReachable[next.NodeID] = true
+				}
+			}
+			if nextReachable[next.NodeID] {
+				kept = append(kept, next)
+			}
+		}
+		plan.Hops[i] = kept
+		reachable = nextReachable
+		plan.Blocked = plan.Blocked || len(kept) == 0
+	}
+	return plan
 }

@@ -53,9 +53,29 @@ func (p *Panel) configurationErrors(ctx context.Context, tx *sql.Tx, rules []for
 	if err != nil {
 		return nil, err
 	}
+	chains, err := loadForwardChains(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	groups, err := loadChainGroups(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	dialers := map[string][]string{}
+	for _, r := range rules {
+		if r.Kind == forwarding.Tunnel {
+			hops, err := rulePathHops(r, chains, groups)
+			if err != nil {
+				return nil, err
+			}
+			for _, m := range hops[len(hops)-1].Members {
+				dialers[r.ID] = append(dialers[r.ID], m.NodeID)
+			}
+		}
+	}
 	// 先做无需 DNS 的检查；冲突时不依赖外部解析服务。
 	if !all {
-		if failures := forwarding.ConfigurationErrors(nodes, rules, members, nil); len(failures) > 0 {
+		if failures := forwarding.ConfigurationErrors(nodes, rules, members, nil, dialers); len(failures) > 0 {
 			return failures, nil
 		}
 	}
@@ -93,7 +113,7 @@ func (p *Panel) configurationErrors(ctx context.Context, tx *sql.Tx, rules []for
 			}
 		}
 	}
-	return forwarding.ConfigurationErrors(nodes, rules, members, targets), nil
+	return forwarding.ConfigurationErrors(nodes, rules, members, targets, dialers), nil
 }
 
 func writeConfigurationError(w http.ResponseWriter, err error) bool {

@@ -48,6 +48,13 @@ func authorizationFingerprint(r forwarding.Rule, entries, exits []string) string
 
 func updateAuthorizationGeneration(ctx context.Context, tx *sql.Tx, r forwarding.Rule, entries, exits []string) (uint64, error) {
 	fingerprint := authorizationFingerprint(r, entries, exits)
+	if r.ChainID != "" {
+		var err error
+		fingerprint, err = chainAuthorizationFingerprint(ctx, tx, r, entries)
+		if err != nil {
+			return 0, err
+		}
+	}
 	var generation uint64
 	var previous string
 	err := tx.QueryRowContext(ctx, "SELECT generation,fingerprint FROM rule_authorizations WHERE rule_id=?", r.ID).Scan(&generation, &previous)
@@ -117,6 +124,10 @@ func gateTunnelRules(ctx context.Context, tx *sql.Tx, compiled map[string]*contr
 				ready = append(ready, r)
 				continue
 			}
+			// Chain readiness is enabled by 06c after durable per-grant confirmation.
+			if r.ChainId != "" {
+				continue
+			}
 			if legacyReady[[2]string{entry, r.Id}] {
 				ready = append(ready, r)
 				continue
@@ -164,7 +175,7 @@ func (p *Panel) confirmTunnelAuthorizations(ctx context.Context, tx *sql.Tx, id 
 	changed := false
 	for _, grant := range s.GetTunnelServer().GetGrants() {
 		r := grant.Rule
-		if r.GetAuthorizationGeneration() == 0 {
+		if r.GetAuthorizationGeneration() == 0 || r.GetChainId() != "" {
 			continue
 		}
 		result, err := tx.ExecContext(ctx, `INSERT INTO tunnel_authorization_confirmations(exit_id,entry_id,rule_id,generation) VALUES(?,?,?,?)
@@ -225,7 +236,8 @@ func (p *Panel) admitTunnelAuthorization(ctx context.Context, tx *sql.Tx, id str
 		// Chain consumers extend predecessor references for ordered hops.
 		if _, err := tx.ExecContext(ctx, `UPDATE rule_authorizations SET fingerprint='' WHERE rule_id IN (
  SELECT r.id FROM forward_rules r WHERE r.entry_node_id=?
- OR EXISTS(SELECT 1 FROM entry_group_members m WHERE m.group_id=r.entry_group_id AND m.node_id=?))`, id, id); err != nil {
+ OR EXISTS(SELECT 1 FROM entry_group_members m WHERE m.group_id=r.entry_group_id AND m.node_id=?)
+ OR EXISTS(SELECT 1 FROM forward_chain_hops h JOIN exit_group_members m ON m.group_id=h.exit_group_id WHERE h.chain_id=r.chain_id AND m.node_id=?))`, id, id, id); err != nil {
 			return nil, err
 		}
 	}

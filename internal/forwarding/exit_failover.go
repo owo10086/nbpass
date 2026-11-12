@@ -15,10 +15,11 @@ import (
 type failureClass string
 
 const (
-	failureLink   failureClass = "entry_exit"
-	failureTarget failureClass = "exit_target"
-	failureLocal  failureClass = "local_resource"
-	failureConfig failureClass = "configuration_authorization"
+	failureLink       failureClass = "entry_exit"
+	failureDownstream failureClass = "downstream_next_hop"
+	failureTarget     failureClass = "exit_target"
+	failureLocal      failureClass = "local_resource"
+	failureConfig     failureClass = "configuration_authorization"
 )
 
 type tunnelFailure struct {

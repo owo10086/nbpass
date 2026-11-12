@@ -78,7 +78,7 @@ func TestForwardChainsAPIValidationOrderAndRollback(t *testing.T) {
 	}
 
 	request("PUT", path, map[string]any{"name": "坏", "exit_group_ids": []string{g1, g3}}, 400)
-	request("PUT", "/api/exit-groups/"+g2, map[string]any{"name": "坏组", "members": []string{nodes[2], nodes[1]}, "strategy": "primary_backup"}, 409)
+	request("PUT", "/api/exit-groups/"+g2, map[string]any{"name": "坏组", "members": []string{nodes[2], nodes[1]}, "strategy": "primary_backup"}, 400)
 	list := request("GET", "/api/forward-chains", nil, 200)["chains"].([]any)
 	if !reflect.DeepEqual(list, []any{got}) {
 		t.Fatal("失败未回滚", list, got)
@@ -131,7 +131,7 @@ func TestForwardChainsMigration49To50AndForeignKeys(t *testing.T) {
 	p := openDiskPanel(t, dir)
 	defer p.Close()
 	var version int
-	if err = p.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 50 {
+	if err = p.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != len(migrations) {
 		t.Fatal(version, err)
 	}
 	var oldRevision int
@@ -183,7 +183,7 @@ func TestForwardChainsAffectedSingleHopAndHistoricalCompile(t *testing.T) {
 	group := request("POST", "/api/exit-groups", map[string]any{"name": "出口", "members": []string{ids[1], ids[0]}, "strategy": "primary_backup"}, 201)["id"].(string)
 	entry := request("POST", "/api/entry-groups", map[string]any{"name": "入口", "members": []string{ids[2], ids[0]}}, 201)["id"].(string)
 	body := map[string]any{"name": "历史", "entry_node_id": ids[0], "kind": "tunnel", "exit_group_id": group, "listen_port": 27000, "target_address": "8.8.8.8", "target_port": 443, "target_family": "ipv4", "enabled": false, "allow_private": false}
-	request("POST", "/api/rules", body, 409)
+	request("POST", "/api/rules", body, 400)
 	// Simulate an untouched database rule written by the previous release.
 	_, err := p.db.Exec("INSERT INTO forward_rules(id,name,entry_node_id,kind,exit_group_id,listen_port,target_address,target_port,target_family,enabled,allow_private) VALUES('legacy','历史',?,'tunnel',?,27000,'8.8.8.8',443,'ipv4',0,0)", ids[0], group)
 	if err != nil {
@@ -200,9 +200,9 @@ func TestForwardChainsAffectedSingleHopAndHistoricalCompile(t *testing.T) {
 	unrelatedImport := map[string]any{"mode": "create", "document": map[string]any{"format_version": 2, "rules": []any{direct}}}
 	request("POST", "/api/rules/import/preflight", unrelatedImport, 200)
 	request("POST", "/api/rules/import", unrelatedImport, 200)
-	request("PUT", "/api/rules/legacy", body, 409)
-	request("PUT", "/api/exit-groups/"+group, map[string]any{"name": "仅改名也影响引用", "members": []string{ids[1], ids[0]}, "strategy": "primary_backup"}, 409)
-	request("POST", "/api/rules/batch", map[string]any{"action": "disable", "ids": []string{"legacy"}}, 409)
+	request("PUT", "/api/rules/legacy", body, 400)
+	request("PUT", "/api/exit-groups/"+group, map[string]any{"name": "仅改名也影响引用", "members": []string{ids[1], ids[0]}, "strategy": "primary_backup"}, 400)
+	request("POST", "/api/rules/batch", map[string]any{"action": "disable", "ids": []string{"legacy"}}, 400)
 	imported := map[string]any{}
 	for k, v := range body {
 		imported[k] = v
@@ -218,10 +218,10 @@ func TestForwardChainsAffectedSingleHopAndHistoricalCompile(t *testing.T) {
 	}
 	delete(good, "entry_node_id")
 	good["entry_group_id"] = entry
-	request("POST", "/api/rules", good, 409)
+	request("POST", "/api/rules", good, 400)
 	request("PUT", "/api/exit-groups/"+group, map[string]any{"name": "修复", "members": []string{ids[1]}, "strategy": "primary_backup"}, 200)
 	request("POST", "/api/rules", good, 201)
-	request("PUT", "/api/entry-groups/"+entry, map[string]any{"name": "坏入口", "members": []string{ids[2], ids[1]}}, 409)
+	request("PUT", "/api/entry-groups/"+entry, map[string]any{"name": "坏入口", "members": []string{ids[2], ids[1]}}, 400)
 	// Ensure failure did not replace either group.
 	var raw string
 	err = p.db.QueryRow("SELECT name FROM entry_groups WHERE id=?", entry).Scan(&raw)

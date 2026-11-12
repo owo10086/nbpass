@@ -35,19 +35,24 @@ type tunnelAuth struct {
 	Credential      string `json:"credential"`
 }
 type tunnelRequest struct {
-	RuleID        string                  `json:"rule_id"`
-	EntryID       string                  `json:"entry_id,omitempty"`
-	Generation    uint64                  `json:"generation,omitempty"`
-	TargetAddress string                  `json:"target_address,omitempty"`
-	TargetPort    uint32                  `json:"target_port,omitempty"`
-	TargetFamily  controlpb.AddressFamily `json:"target_family,omitempty"`
+	ChainID           string                  `json:"chain_id,omitempty"`
+	HopIndex          uint32                  `json:"hop_index,omitempty"`
+	ChainFingerprint  string                  `json:"chain_fingerprint,omitempty"`
+	RemainingBudgetMS uint32                  `json:"remaining_budget_ms,omitempty"`
+	RuleID            string                  `json:"rule_id"`
+	EntryID           string                  `json:"entry_id,omitempty"`
+	Generation        uint64                  `json:"generation,omitempty"`
+	TargetAddress     string                  `json:"target_address,omitempty"`
+	TargetPort        uint32                  `json:"target_port,omitempty"`
+	TargetFamily      controlpb.AddressFamily `json:"target_family,omitempty"`
 	// Check 仅核验同一逐流授权，不拨目标、不创建业务流。
 	Check *controlpb.ForwardRule `json:"check,omitempty"`
 }
 type tunnelResult struct {
-	Failure failureClass `json:"failure,omitempty"`
-	OK      bool         `json:"ok"`
-	Ready   bool         `json:"ready,omitempty"`
+	Edge    *ChainFailure `json:"edge,omitempty"`
+	Failure failureClass  `json:"failure,omitempty"`
+	OK      bool          `json:"ok"`
+	Ready   bool          `json:"ready,omitempty"`
 	// 仅认证响应声明预检能力；旧节点缺省不支持。
 	CheckSupported bool `json:"check_supported,omitempty"`
 }

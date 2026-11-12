@@ -218,7 +218,7 @@ func TestCombinedEntryExitCountsBusinessOnce(t *testing.T) {
 	body := directBody("", port, "127.0.0.1", echoTarget(t, "T:"))
 	body["entry_node_id"], body["kind"], body["exit_group_id"] = aid, "tunnel", g["id"]
 	// New paths cannot use the same server twice, even when it has both roles.
-	c.Do("POST", "/api/rules", body, 409)
+	c.Do("POST", "/api/rules", body, 400)
 	body["entry_node_id"] = bid
 	tunnel := c.Do("POST", "/api/rules", body, 201)
 	directPort := reserve()

@@ -63,17 +63,38 @@ func tunnelEntryNodes(ctx context.Context, tx *sql.Tx, exit string) (map[string]
 	if err != nil {
 		return nil, err
 	}
-	related := map[string]bool{}
+	chains, err := loadForwardChains(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	byID := map[string]exitGroupView{}
 	for _, g := range groups {
-		if !containsEntryMember(g.Members, exit) {
+		byID[g.ID] = g
+	}
+	related := map[string]bool{}
+	for _, r := range rules {
+		if !r.Enabled || r.Kind != forwarding.Tunnel {
 			continue
 		}
-		for _, r := range rules {
-			if r.Enabled && r.Kind == forwarding.Tunnel && r.ExitGroupID == g.ID {
-				for _, id := range forwarding.RuleEntryNodes(r, members) {
-					related[id] = true
+		ids := []string{r.ExitGroupID}
+		if r.ChainID != "" {
+			ids = nil
+			for _, c := range chains {
+				if c.ID == r.ChainID {
+					ids = c.ExitGroupIDs
+					break
 				}
 			}
+		}
+		prev := forwarding.RuleEntryNodes(r, members)
+		for _, id := range ids {
+			g := byID[id]
+			if containsEntryMember(g.Members, exit) {
+				for _, entry := range prev {
+					related[entry] = true
+				}
+			}
+			prev = g.Members
 		}
 	}
 	return related, nil

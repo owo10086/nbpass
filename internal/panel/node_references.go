@@ -45,6 +45,7 @@ func nodeReferences(ctx context.Context, tx *sql.Tx, id string) ([]nodeReference
 		return nil, err
 	}
 	if exists > 0 {
+		queries = append(queries, `SELECT DISTINCT 'rule',r.id,r.name FROM forward_rules r JOIN forward_chain_hops h ON h.chain_id=r.chain_id JOIN exit_group_members m ON m.group_id=h.exit_group_id WHERE m.node_id=?`)
 		queries = append(queries, `SELECT DISTINCT 'forward_chain',c.id,c.name FROM forward_chains c JOIN forward_chain_hops h ON h.chain_id=c.id JOIN exit_group_members m ON m.group_id=h.exit_group_id WHERE m.node_id=?`)
 	}
 	args := make([]any, len(queries))

@@ -64,7 +64,7 @@ func ValidateConfiguration(nodes []ValidationNode, rules []Rule, members map[str
 
 // ConfigurationErrors 一次收集端口冲突和所有强连通分量中的环路参与者。
 // targets 为当前能确认的 A 记录；域名解析失败或未来变化不构成静态证明。
-func ConfigurationErrors(nodes []ValidationNode, rules []Rule, members map[string][]string, targets map[string][]netip.Addr) []*ValidationError {
+func ConfigurationErrors(nodes []ValidationNode, rules []Rule, members map[string][]string, targets map[string][]netip.Addr, targetDialers ...map[string][]string) []*ValidationError {
 	failures := ListenerConflicts(nodes, rules, members)
 	invalid := map[string]bool{}
 	for _, failure := range failures {
@@ -99,6 +99,10 @@ func ConfigurationErrors(nodes []ValidationNode, rules []Rule, members map[strin
 	}
 	edges := make([][]int, len(endpoints))
 	for i, e := range endpoints {
+		dialers := []string{e.ref.NodeID}
+		if e.rule.Kind == Tunnel && len(targetDialers) > 0 {
+			dialers = targetDialers[0][e.rule.ID]
+		}
 		ips := targets[e.rule.TargetAddress]
 		if ip, err := netip.ParseAddr(e.rule.TargetAddress); err == nil {
 			ips = []netip.Addr{ip}
@@ -112,7 +116,14 @@ func ConfigurationErrors(nodes []ValidationNode, rules []Rule, members map[strin
 				if !AllowedIP(ip, e.rule.AllowPrivate) {
 					continue
 				}
-				if ip.IsLoopback() && e.ref.NodeID == destination.ref.NodeID || ip.String() == byNode[destination.ref.NodeID].ObservedIPv4 {
+				local := false
+				for _, dialer := range dialers {
+					if dialer == destination.ref.NodeID {
+						local = true
+						break
+					}
+				}
+				if ip.IsLoopback() && local || !ip.IsLoopback() && ip.String() == byNode[destination.ref.NodeID].ObservedIPv4 {
 					edges[i] = append(edges[i], j)
 					break
 				}

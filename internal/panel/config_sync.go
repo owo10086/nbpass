@@ -22,6 +22,7 @@ type ruleSyncMember struct {
 }
 
 type ruleView struct {
+	Path                  rulePathView           `json:"path"`
 	ConfigurationBlockers []configurationBlocker `json:"configuration_blockers"`
 	forwarding.Rule
 	EntryStates []entryMemberState `json:"entry_states"`

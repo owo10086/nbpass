@@ -96,9 +96,14 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 	}
 	legacyReady := map[[2]string]bool{}
 	pairs := map[string]bool{}
-	seenGroups := map[string]bool{}
 	for _, r := range rules {
 		if !r.Enabled || r.Kind != forwarding.Tunnel {
+			continue
+		}
+		if r.ChainID != "" {
+			if err := p.compileChain(ctx, tx, r, forwarding.RuleEntryNodes(r, members), byGroup, compiled, plans, endpoints, pairs, generations[r.ID]); err != nil {
+				return err
+			}
 			continue
 		}
 		g, ok := byGroup[r.ExitGroupID]
@@ -110,7 +115,6 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 			if plan.Blocked {
 				continue
 			}
-			groupKey := entry + ":" + g.ID
 			cg := &controlpb.ExitGroup{Id: g.ID, Strategy: controlpb.ExitStrategy_EXIT_STRATEGY_PRIMARY_BACKUP}
 			for _, member := range g.MemberAddresses {
 				exit := member.NodeID
@@ -151,30 +155,7 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 					legacyReady[[2]string{entry, r.ID}] = true
 				}
 			}
-			if !seenGroups[groupKey] {
-				compiled[entry].ExitGroups = append(compiled[entry].ExitGroups, cg)
-				seenGroups[groupKey] = true
-			} else {
-				// Shared groups keep the eligible union in their original order.
-				for _, existing := range compiled[entry].ExitGroups {
-					if existing.Id != g.ID {
-						continue
-					}
-					byID := map[string]*controlpb.TunnelEndpoint{}
-					for _, ep := range existing.Exits {
-						byID[ep.NodeId] = ep
-					}
-					for _, ep := range cg.Exits {
-						byID[ep.NodeId] = ep
-					}
-					existing.Exits = nil
-					for _, id := range g.Members {
-						if ep := byID[id]; ep != nil {
-							existing.Exits = append(existing.Exits, ep)
-						}
-					}
-				}
-			}
+			mergeChainGroup(compiled[entry], cg, g)
 		}
 	}
 	if err := p.compileTunnelRotations(ctx, tx, compiled); err != nil {
