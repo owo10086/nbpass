@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 
 export const pageTitles = {
-  overview: '概览', ports: '端口管理', servers: '服务器管理', endpoints: '转发端点',
-  'endpoint-groups': '端点组管理', chains: '转发链管理', 'server-groups': '服务器组管理',
+  overview: '概览', ports: '端口管理 | 转发规则', servers: '服务器管理 | 节点管理', endpoints: '转发端点 | 隧道接收端',
+  'endpoint-groups': '端点组管理 | 出口组', chains: '转发链管理 | 多跳路径', 'server-groups': '服务器组管理 | 入口组',
   'smart-dns': '智能 DNS', latency: '延迟监控总览', 'dns-watch': '解析监控',
   incidents: '故障', events: '事件日志', telegram: 'Telegram 通知', security: '安全设置', retention: '保留期',
 };

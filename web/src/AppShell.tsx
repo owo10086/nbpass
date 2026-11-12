@@ -41,8 +41,9 @@ export function AppShell({ page, counts, busy, onLogout, children }: {
   function link(target: Page) {
     const key = countKeys[target];
     const count = key && counts?.[key];
+    const [name, note] = pageTitles[target].split(' | ');
     return <a key={target} href={`#/${target}`} className={`nav-item${target === 'overview' ? ' nav-home' : ''}`} aria-current={page === target ? 'page' : undefined} onClick={() => setDrawerOpen(false)}>
-      {target === 'overview' && <DashboardOutlined />}<span>{pageTitles[target]}</span>
+      {target === 'overview' && <DashboardOutlined />}<span className="nav-label">{name}{note && <span className="nav-note"> | {note}</span>}</span>
       {count !== undefined && (target !== 'overview' || count > 0) && <span className={`nav-count${target === 'overview' ? ' alert' : ''}`} aria-label={target === 'overview' ? `${count} 项需要处理` : undefined}>{count}</span>}
     </a>;
   }

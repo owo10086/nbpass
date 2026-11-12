@@ -13,7 +13,7 @@ import { TableCard } from './TableCard';
 import { ColorTag } from './ColorTag';
 import { StatusDot, type StatusTone } from './StatusDot';
 import { FormSection } from './FormSection';
-import { useFocusRow } from './route';
+import { pageTitles, useFocusRow } from './route';
 import { byText, useDragOrder } from './ListOrder';
 import './EntryGroups.css';
 
@@ -138,7 +138,7 @@ export function EntryGroups({ focus, onSessionExpired }: { focus?: string; onSes
   });
   const selected = rows.find(row => row.id === statusID);
   return <div className="sg-page">
-    <PageHeader title="服务器组管理" description="多台服务器统一部署端口，通过主备或全部发布维护组入口。单成员组无需绑定 DNS 也可使用。" actions={<Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建组</Button>} />
+    <PageHeader title={pageTitles['server-groups']} description="多台服务器统一部署端口，通过主备或全部发布维护组入口。单成员组无需绑定 DNS 也可使用。" actions={<Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建组</Button>} />
     {error && <Alert title={error} type="error" showIcon closable onClose={() => setError('')} className="message" />}
     {order.error && <Alert title={order.error} type="error" showIcon className="message" />}
     <FilterCard onRefresh={() => { setError(''); void load(); }} loading={loading}>

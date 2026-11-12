@@ -3,7 +3,7 @@ import { Alert, App, Button, Dropdown, Form, Input, InputNumber, Modal, Popconfi
 import { DeleteOutlined, DownOutlined, InfoCircleOutlined, LinkOutlined, PauseCircleOutlined, PlayCircleOutlined, PlusOutlined, SearchOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
 import { RulesTransfer } from './RulesTransfer';
-import { go } from './route';
+import { go, pageTitles } from './route';
 import { PageHeader } from './PageHeader';
 import { FilterCard, FilterField } from './FilterCard';
 import { TableCard } from './TableCard';
@@ -160,7 +160,7 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
   const mutating = !!batching || !!actingID;
 
   return <div className="ports-page">
-    <PageHeader title="端口管理" description="管理线路、服务端口与转发目标；运行数据每 5 秒刷新。">
+    <PageHeader title={pageTitles.ports} description="管理线路、服务端口与转发目标；运行数据每 5 秒刷新。">
       <RulesTransfer selectedIDs={selectedIDs} onChanged={load} onSessionExpired={onSessionExpired} />
       <Dropdown trigger={['click']} disabled={!selectedIDs.length || mutating} menu={{
         items: [

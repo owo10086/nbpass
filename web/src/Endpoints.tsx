@@ -11,7 +11,7 @@ import { FormSection } from './FormSection';
 import { TunnelRotation } from './TunnelRotation';
 import { ExitBlocked } from './ExitBlocked';
 import { EndpointHealth } from './EndpointHealth';
-import { useFocusRow } from './route';
+import { pageTitles, useFocusRow } from './route';
 import { endpointFormValues, endpointPayload, effectiveEndpointPort } from './EndpointData';
 import type { Endpoint, EndpointGroup, EndpointNode, EndpointValues } from './EndpointData';
 import './Endpoints.css';
@@ -78,7 +78,7 @@ export function Endpoints({ focus, onSessionExpired }: { focus?: string; onSessi
       && (!group || (group === 'ungrouped' ? !memberships.length : memberships.some(item => item.id === group)));
   });
   return <div className="endpoint-page">
-    <PageHeader title="转发端点" description="配置服务器的 WSS 转发地址，管理端点组归属、证书身份与链路健康。">
+    <PageHeader title={pageTitles.endpoints} description="配置服务器的 WSS 转发地址，管理端点组归属、证书身份与链路健康。">
       <Button href="#/endpoint-groups">管理端点组</Button>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>添加转发端点</Button>
     </PageHeader>

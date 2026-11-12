@@ -9,7 +9,7 @@ import { ColorTag } from './ColorTag';
 import { FormSection } from './FormSection';
 import { EndpointMembers } from './EndpointMembers';
 import { byText, useDragOrder } from './ListOrder';
-import { useFocusRow } from './route';
+import { pageTitles, useFocusRow } from './route';
 import { endpointMemberOptions, memberKey, type Endpoint, type EndpointGroup, type EndpointNode, type MemberAddress } from './EndpointData';
 import './Endpoints.css';
 
@@ -73,7 +73,7 @@ export function ExitGroups({ focus, onSessionExpired }: { focus?: string; onSess
   const memberDescription = (member: MemberAddress) => { const option = options.find(option => option.id === memberKey(member)); return `${memberName(member)} ${option?.address ?? ''}`; };
   const visible = rows.filter(row => `${row.id} ${row.name} ${row.member_addresses.map(memberDescription).join(' ')}`.toLowerCase().includes(query.trim().toLowerCase()));
   return <div className="endpoint-page">
-    <PageHeader title="端点组管理" description="按主备顺序组织转发端点，供单跳转发端口使用。">
+    <PageHeader title={pageTitles['endpoint-groups']} description="按主备顺序组织转发端点，供单跳转发端口使用。">
       <Button href="#/endpoints">管理转发端点</Button>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>创建端点组</Button>
     </PageHeader>

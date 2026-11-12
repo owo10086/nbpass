@@ -8,7 +8,7 @@ import { TableCard } from './TableCard';
 import { FormSection } from './FormSection';
 import { StatusDot } from './StatusDot';
 import { ColorTag } from './ColorTag';
-import { useFocusRow } from './route';
+import { pageTitles, useFocusRow } from './route';
 import { endpointMemberOptions, memberKey, type Endpoint, type EndpointGroup, type EndpointNode, type EndpointOption } from './EndpointData';
 import {
   addChainGroup, moveChainGroup, removeChainGroup, chainFormValues, chainSaveRequest,
@@ -185,7 +185,7 @@ export function Chains({ focus, onSessionExpired }: { focus?: string; onSessionE
     finally { if (active.current) setRemoving(false); }
   }
   return <div className="chains-page">
-    <PageHeader title="转发链管理" description="按顺序连接端点组；每跳必经，组内按主备顺序选择候选。">
+    <PageHeader title={pageTitles.chains} description="按顺序连接端点组；每跳必经，组内按主备顺序选择候选。">
       <Button href="#/endpoint-groups">管理端点组</Button><Button type="primary" icon={<PlusOutlined />} disabled={loading} onClick={() => edit(null)}>创建转发链</Button>
     </PageHeader>
     {error && <Alert title={error} type="error" showIcon className="message" />}

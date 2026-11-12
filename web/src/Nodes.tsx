@@ -11,7 +11,7 @@ import { NodeSelfCheck, SelfCheckSettings } from './NodeSelfCheck';
 import { NodeInstallation, type Installation } from './NodeInstallation';
 import { NodeServerDetails, serverTone, type ServerAction, type ServerDetailTab } from './NodeServerDetails';
 import { serverNamePayload, serverOutboundPayload, matchesServer, serverGroupsFor, serverPortCount, type ServerGroup, type ServerPort, type ServerRow } from './NodeServerData';
-import { useFocusRow } from './route';
+import { pageTitles, useFocusRow } from './route';
 import { PageHeader } from './PageHeader';
 import { FilterCard, FilterField } from './FilterCard';
 import { TableCard } from './TableCard';
@@ -189,7 +189,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   const rowClassName = useFocusRow(focus, loaded && (!focus || visible.slice((currentPage - 1) * 20, currentPage * 20).some(row => row.id === focus)));
 
   return <div className="servers-page">
-    <PageHeader title="服务器管理" description="管理入口服务器、安装状态与实时资源。每 10 秒自动刷新。">
+    <PageHeader title={pageTitles.servers} description="管理入口服务器、安装状态与实时资源。每 10 秒自动刷新。">
       <Button icon={<SettingOutlined />} onClick={() => setSelfCheckSettings(true)}>自检设置</Button>
       <Button type="primary" icon={<PlusOutlined />} onClick={() => edit(null)}>添加服务器</Button>
     </PageHeader>
