@@ -69,7 +69,7 @@ export function Endpoints({ focus, onSessionExpired }: { focus?: string; onSessi
     finally { setSaving(false); }
   }
   const nodeName = (id: string) => nodes.find(node => node.id === id)?.name ?? id;
-  const endpointGroups = (id: string) => groups.filter(group => group.members.includes(id));
+  const endpointGroups = (id: string) => groups.filter(group => group.member_addresses.some(member => member.node_id === id));
   const visible = exits.filter(exit => {
     const memberships = endpointGroups(exit.node_id);
     const node = nodes.find(node => node.id === exit.node_id);
@@ -103,7 +103,7 @@ export function Endpoints({ focus, onSessionExpired }: { focus?: string; onSessi
       </div> },
     ]} />
     <p className="footnote">状态表示服务器与面板的控制连接；各入口到端点的链路状态请查看下方健康观测。端点名称沿用所属服务器名称，可在服务器管理中修改。</p>
-    <EndpointHealth nodes={nodes} onSessionExpired={onSessionExpired} />
+    <EndpointHealth exits={exits} nodes={nodes} onSessionExpired={onSessionExpired} />
     <Modal title={editing ? '编辑转发端点' : '添加转发端点'} open={editing !== undefined} onCancel={close} footer={null} width={760} closable={!saving} maskClosable={!saving} keyboard={!saving} forceRender className="endpoint-modal">
       <Form form={form} layout="vertical" onFinish={save} disabled={saving} requiredMark={false}>
         {saveError && <Alert title={saveError} type="error" showIcon className="message" />}

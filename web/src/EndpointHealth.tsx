@@ -4,10 +4,10 @@ import { api, APIError } from './api';
 import { FilterCard, FilterField } from './FilterCard';
 import { StatusDot } from './StatusDot';
 import { TableCard } from './TableCard';
-import { healthIsFresh, healthStatus, type EndpointHealth as Health, type EndpointNode, type HealthReport } from './EndpointData';
+import { endpointMemberOptions, memberKey, healthIsFresh, healthStatus, type Endpoint, type EndpointHealth as Health, type EndpointNode, type HealthReport } from './EndpointData';
 import './Endpoints.css';
 
-export function EndpointHealth({ nodes, onSessionExpired }: { nodes: EndpointNode[]; onSessionExpired: () => void }) {
+export function EndpointHealth({ nodes, exits, onSessionExpired }: { nodes: EndpointNode[]; exits: Endpoint[]; onSessionExpired: () => void }) {
   const [entry, setEntry] = useState<string>();
   const [health, setHealth] = useState<HealthReport>();
   const [error, setError] = useState('');
@@ -43,6 +43,8 @@ export function EndpointHealth({ nodes, onSessionExpired }: { nodes: EndpointNod
   }, [entry, refreshKey]);
   const nodeName = (id: string) => nodes.find(node => node.id === id)?.name ?? id;
   const fresh = healthIsFresh(health, now);
+  const options = endpointMemberOptions(exits, nodes);
+  const identity = (row: Health) => ({ node_id: row.exit_id, address_id: row.address_id || 'public' });
   return <section className="endpoint-health" aria-label="端点链路健康">
     <div className="endpoint-section-heading"><h2>端点链路健康</h2><p>选择入口服务器查看它到各端点的观测，每 5 秒刷新。目标不可达不影响端点健康；控制失联后服务器仍自行探测和切换。</p></div>
     <FilterCard onRefresh={entry ? () => setRefreshKey(key => key + 1) : undefined}><FilterField label="观测入口" htmlFor="endpoint-health-entry"><Select id="endpoint-health-entry" showSearch optionFilterProp="label" allowClear placeholder="选择入口服务器" value={entry} onChange={setEntry} options={nodes.map(node => ({ value: node.id, label: node.name }))} /></FilterField>
@@ -50,8 +52,8 @@ export function EndpointHealth({ nodes, onSessionExpired }: { nodes: EndpointNod
     </FilterCard>
     {error && <Alert type="error" title={error} showIcon className="message" />}
     {health && !fresh && <Alert type="warning" title="当前无实时证据，以下为最近观测，不代表当前健康状态。" showIcon className="message" />}
-    <TableCard<Health> title="健康观测" rowKey="exit_id" dataSource={health?.exits ?? []} loading={!!entry && !health && !error} pagination={false} scroll={{ x: 900 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={entry ? '尚无端点探测结果' : '请选择入口服务器查看链路健康'} /> }} columns={[
-      { title: '端点', render: (_, row) => <span className="node-name">{nodeName(row.exit_id)}</span> },
+    <TableCard<Health> title="健康观测" rowKey={row => memberKey(identity(row))} dataSource={health?.exits ?? []} loading={!!entry && !health && !error} pagination={false} scroll={{ x: 900 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={entry ? '尚无端点探测结果' : '请选择入口服务器查看链路健康'} /> }} columns={[
+      { title: '端点', render: (_, row) => <><span className="node-name">{options.find(option => option.id === memberKey(identity(row)))?.name ?? `${nodeName(row.exit_id)} · ${row.address_id || '公网'}`}</span><span className="cell-sub mono">{options.find(option => option.id === memberKey(identity(row)))?.address ?? row.address_id}</span></> },
       { title: '链路状态', render: (_, row) => { const status = healthStatus(fresh, row.state); return <StatusDot tone={status.tone}>{status.label}</StatusDot>; } },
       { title: '连续失败', render: (_, row) => <span className="mono">{row.consecutive_failures ?? 0}</span> },
       { title: '最近探测', render: (_, row) => ({ success: '成功', failure: '失败', incomplete: '未完成' } as Record<string, string>)[row.last_probe ?? ''] ?? '待探测' },
