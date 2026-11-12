@@ -1,6 +1,6 @@
 # 02 服务器专线地址、对外端口与公网换 IP 隔离
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 01
 Migration: 47（`ixAddressesMigration`）
 Parallel: 与 03 串行；04/05 从 03 完成后再分流，避免同时修改快照、端点类型及拨号代码。
@@ -38,12 +38,54 @@ Parallel: 与 03 串行；04/05 从 03 完成后再分流，避免同时修改�
 
 ## 验收标准
 
-- [ ] 公网与多条专线可保存、回读、编辑并在页面完整显示。
-- [ ] 域名在拨号节点解析且只使用 IPv4；WSS 证书仍按内部身份校验。
-- [ ] 对外端口覆盖仅影响拨号，未填保持现有监听端口行为。
-- [ ] 手动与自动换 IP 均不覆盖专线；旧节点获得逐端口升级提示。
-- [ ] 只宣告拨号能力，健康摘要随配置改变；外部端口同号可用、实际监听冲突拒绝。
+- [x] 公网与多条专线可保存、回读、编辑并在页面完整显示。
+- [x] 域名在拨号节点解析且只使用 IPv4；WSS 证书仍按内部身份校验。
+- [x] 对外端口覆盖仅影响拨号，未填保持现有监听端口行为。
+- [x] 手动与自动换 IP 均不覆盖专线；旧节点获得逐端口升级提示。
+- [x] 只宣告拨号能力，健康摘要随配置改变；外部端口同号可用、实际监听冲突拒绝。
 
 ## 不做的事
 
 不让专线地址脱离服务器独立存在；不实现端点组地址选择（03）、NAT 配置工具、监听绑定 IP、IPv6、UDP、管理连接经中转；不提交构建产物。
+
+## Comments
+
+### 交付内容与兼容取舍（2026-11-12）
+
+- 迁移 47 仅追加在 `recordTypeMigration`（46）之后。`tunnel_exits.public_port` 初始 NULL；新增 `tunnel_addresses`，以服务器内稳定随机 ID 和顺序保存多条专线，数据库约束保留 `public`、外键、ID/位置唯一性和端口范围。真实 46 结构升级保留原公网槽（含原手填内网地址）、监听、身份、私钥与地址版本；新安装从同一迁移链建表。
+- 地址 API 支持规范化 IPv4/域名、公网/专线对外端口、专线稳定 ID 归属检查及整表单保存。省略 `public_port`/`dedicated_addresses` 保留，`null` 清除公网端口，`[]` 清空专线；`dedicated_addresses:null` 保守拒绝，避免误清空。PUT 保留旧 `configured:true`，平铺返回保存后的公开配置，不返回私钥或节点对凭据。数据库与完整快照沿用 `mutateForwarding` 原子提交。
+- 前驱按 `LookupIPv4` 解析和过滤实际 IPv4，再将具体 IP:对外端口交给 `DialTunnel`；业务与探测共用逻辑，新会话/新探测重新解析。只尝试最多三个不同合法 IPv4，单候选最多 3 秒，沿用已有建流/握手总预算、取消和故障分类。不进行面板侧固定解析；TLS 继续使用随机内部 `server_name` 和固定证书校验。服务端始终监听本机 `listen_port`。
+- 复用票 01 的单一能力计划：域名或显式公网对外端口（即使等于监听端口）只要求前驱 `ix_address_dialing`。过滤同时覆盖入口规则/候选和远端 grants/peers；旧声明同节点的普通直连仍正常。只登记未选用的专线不触发门禁；本票只新增宣告拨号能力。
+- 按票据「普通 IPv4 且无覆盖端口保留旧快照形状」保留该路径空摘要；新域名/映射语义携带 281 摘要。摘要覆盖服务器、`public` 身份、地址、有效端口、传输和稳定 TLS 名称；证书材料/凭据轮换仍由原独立确认流程管理，不改变稳定身份。节点回显同一摘要，实际缓存/恢复保留它；面板在健康保存、地址握手确认、入口就绪及健康读取时核对当前期望，拒绝旧/空摘要冒认新的域名或映射配置。未改变授权代次、高水位或离线授权期限。
+- 手动与自动 changed 本来就汇入 `rotateExitAddress`；核对后保留其只更新 `address,address_version` 的 SQL，无需另改轮换协调流程。真实集成分别验证两种换公网 IP 后，两个专线及稳定 ID、全部对外端口、本机监听与证书身份均不变，面板重启后仍保留。`trackExitAddresses` 只登记实际下发公网版本的拨号者；无出站 IP 字段改动。
+- 对外端口未加入本机监听占用。API 集成验证外部端口与业务端口同号可保存，实际隧道监听与业务/检测端口冲突拒绝且回滚。中间节点/多跳尚未进入本票模型，其实际监听场景交 06c，现有所有服务器的监听冲突校验保留。
+- 前端按 DESIGN 使用现有表格/Modal/FormSection：明确公网地址、列出专线名称和有效对外端口、本机监听，支持增删及稳定 ID 回填；保留证书、轮换、被墙与健康入口，说明 NAT 映射和仅 IPv4。未修改 spec/ADR 已定决策。
+
+### 已执行的测试与审查
+
+- 按接缝执行红→绿：46 升级、API 新字段/省略保留、能力过滤/拨号与监听分离、域名真实业务/探测/缓存、解析失败和取消、旧摘要不能确认/显示新配置、表单数据。`make proto` 已执行，提交字段 281 的生成物；本票没有字段 280。
+- `go test ./internal/panel ./internal/forwarding ./internal/node -timeout=10m` 最终通过，墙钟 **53.51 秒**（panel 52.502 秒，另两包命中有效缓存）。
+- `go test ./internal/clusterharness -run 'Test.*(IXAddress|ExitBlocked|TunnelChanges)' -timeout=15m` 通过，墙钟 **40.20 秒**，包内 **38.383 秒**。新场景用真实 TCP 代理把公网对外端口转到 B 的真实 WSS 监听，A 禁止直拨隧道目标；同版本离线重启后仍转发。旧声明重连后收包断言不含新端点/孤立授权，普通直连仍传输。
+- `npm --prefix web run build` 最终通过，墙钟 **2.67 秒**；显式前端测试命令 `node --experimental-strip-types --test web/route.test.mjs web/server-groups.test.mjs web/src/*.test.mjs` **28/28**，墙钟 **0.11 秒**。保留已有 Vite 大 chunk 和 Node 颜色环境警告。
+- requesting-code-review 只读独立审查未发现 Critical/Important/Minor 问题；`git diff --check` 通过。
+- 首轮全量 `GOFLAGS=-timeout=30m make test` 墙钟 **436.14 秒**、clusterharness **412.837 秒**，两项失败：新增映射场景在离线恢复/重连后过早读取监听或收包（已按真实异步启动/控制重连等待修正，安全断言未削弱）；既有 `TestAllPublishSetWatchAndPerRecordStatusAudit` 报 DNS 写回结果未确认，原测试单独复测通过（包内 2.187 秒、墙钟 4.10 秒），未修改该无关功能。最终代码完整重跑退出码 **0**：墙钟 **392.46 秒**，clusterharness **379.855 秒**，panel **52.249 秒**；包含前端构建、节点临时构建、全仓库 `go vet` 与 `go test ./...`，没有跳过测试。
+
+### 后续票与浏览器交接
+
+- 03 继续实现端点组地址选择、成员地址身份以及同服务器多地址会话/健康隔离，并为被引用专线删除返回 409。本票专线接口预留稳定 ID，但没有提前实现专线拨号或宣告 `ix_member_identity`。
+- 03 必须运行真实「02 节点 × 03 面板」矩阵：纯公网域名/映射只需拨号能力；专线/多地址精确要求成员身份能力；备用升级重新持久应用确认再纳入。不得用新版节点仅删声明代替真实版本组合。02 固定源码/产物和声明见下节；01 的真实旧缓存回滚基线仍原样交接给 04/06/09。
+- 浏览器验收交编排者：在 1366–1440px 检查主列表全部列和长域名/专线名称换行，窄屏横向滚动/弹窗；新增、回读、编辑两条专线、删除中间项后保留剩余 ID/端口、清空全部再保存；公网/专线空端口显示本机监听且清空覆盖可回读；切换服务器时表单不残留上一个服务器的专线。核对 NAT/仅 IPv4 文案、证书查看/复制、轮换/被墙操作继续可用，旧能力逐端口升级提示及健康修改后待新证据。
+
+
+### 真实 02 节点兼容基线
+
+- 本票完整代码基线：`946783879ab679baba2299704e75fcf398a86d7e`（节点实现提交 `398a5eb`，面板/集成实现 `447b718`，界面 `9467838`）。源码从该提交重建，不依赖软件版本字符串判断能力；后续文档提交不改变代码。
+- 已保留本地实际节点产物（均在被忽略的 `bin/`，不提交、不发布）：`bin/nbpass-node-ix02-linux-amd64`，SHA256 **`ef3ad98e58b6ed50b048f5604e7ad351e8b6f2725e4e1babfa4f41f353551b81`**；`bin/nbpass-node-ix02`（本机 darwin/arm64 可运行），SHA256 **`bed243861b9d6a25657cbf1a016a7c85ed29cc334491464c5f76cacc1cb03058`**。Linux 构建为 `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false -ldflags='-s -w'`，工具链 `go1.26.3`；本机使用相同构建 flags。二进制关闭 VCS 注入，以上源码提交与哈希共同定位来源；03 勿覆盖这两个带 `ix02` 名称的产物。
+- 实际执行 `bin/nbpass-node-ix02 --update-check` 返回（真实程序输出，非手改声明）：
+
+```json
+{"compatibility":{"control_min":1,"control_max":2,"tunnel_min":1,"tunnel_max":1,"state_min":1,"state_max":2,"state_write":2,"capabilities":["upgrade","tunnel_authorization","exit_failover","tunnel_rotation","rotation_recheck","dns_watch","ix_address_dialing"]},"version":"0.1.0","platform":"darwin/arm64"}
+```
+
+- 03 的真实版本矩阵使用上述二进制，或使用固定提交真实源码构建对应平台节点。纯公网域名/映射无需 `ix_member_identity`，专线/多地址须拦截并给出准确 blocker；收包断言不能给 02 节点增加地址身份字段 280 的新语义。当前 clusterharness 的删声明场景只证明本票旧能力门禁，不声称已经完成尚未存在的 03 面板矩阵。
+- 已还原 `web/dist` 与 `internal/nodebundle/nbpass-node-linux-amd64.gz` 并移除本轮额外的 dist 文件；proto 生成物随代码提交。只在指定目录与 `feat/ix` 操作，未切分支、未建工作树、未推送。票据按要求标记 `resolved`；剩余浏览器验收及 03/06c/09 交接见上文。
