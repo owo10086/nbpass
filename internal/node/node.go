@@ -209,11 +209,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 	}
 	if deps.ConfigStore != nil {
 		deps.Forwarding.Persist = func(state forwarding.State) error {
-			data, err := json.Marshal(configCache{Version: int(compatibility.StateCurrent), NodeID: credential.NodeID, ControlURL: credential.ControlURL, State: state})
-			if err != nil {
-				return err
-			}
-			return deps.ConfigStore.SaveConfig(ctx, data)
+			return persistConfigCache(ctx, credential, deps.ConfigStore, state)
 		}
 	}
 	if deps.Forwarding.Clock == nil {

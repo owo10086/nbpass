@@ -37,10 +37,24 @@ func openConfigCache(ctx context.Context, credential Credentials, deps *Dependen
 		return errors.New("无法读取节点配置缓存")
 	}
 	var cache configCache
-	if err := json.Unmarshal(data, &cache); err != nil || cache.Version != int(compatibility.StateCurrent) || cache.NodeID != credential.NodeID || cache.ControlURL != credential.ControlURL {
+	if err := json.Unmarshal(data, &cache); err != nil || cache.NodeID != credential.NodeID || cache.ControlURL != credential.ControlURL {
+		return errors.New("节点配置缓存格式或身份不匹配")
+	}
+	switch cache.Version {
+	case 1: // Absent IX fields retain the original semantics and revocation boundary.
+	case 2:
+	default:
 		return errors.New("节点配置缓存格式或身份不匹配")
 	}
 	return engine.Restore(cache.State)
+}
+
+func persistConfigCache(ctx context.Context, credential Credentials, store ConfigStore, state forwarding.State) error {
+	data, err := json.Marshal(configCache{Version: int(compatibility.StateCurrent), NodeID: credential.NodeID, ControlURL: credential.ControlURL, State: state})
+	if err != nil {
+		return err
+	}
+	return store.SaveConfig(ctx, data)
 }
 
 // 换节点或换控制地址重装时，旧身份的配置、事件、流量、换 IP 与自测缓存不能带入新身份。

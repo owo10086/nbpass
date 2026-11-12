@@ -154,8 +154,8 @@ func TestCandidateIdentityAndMutationAreRejectedBeforeSwitch(t *testing.T) {
 					os.WriteFile(p, []byte("changed"), 0700)
 				}
 				if kind == "state_format" {
-					// A writer of state format 2 would break the rollback binary's format-1 reader.
-					raw, _ := json.Marshal(map[string]any{"version": m.Version, "platform": m.Platform, "compatibility": map[string]any{"control_min": 1, "control_max": 2, "tunnel_min": 1, "tunnel_max": 1, "state_min": 1, "state_max": 2, "state_write": 2}})
+					// A format-1 candidate cannot safely read this updater's format-2 state.
+					raw, _ := json.Marshal(map[string]any{"version": m.Version, "platform": m.Platform, "compatibility": map[string]any{"control_min": 1, "control_max": 2, "tunnel_min": 1, "tunnel_max": 1, "state_min": 1, "state_max": 1, "state_write": 1}})
 					json.Unmarshal(raw, &i)
 				}
 				return i, nil

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,7 +104,7 @@ func TestConfigCacheRejectsUnknownFormatAndDifferentIdentity(t *testing.T) {
 	snapshot.Digest = forwarding.SnapshotDigest(snapshot)
 	state := forwarding.State{HighestRevision: 7, HighestDigest: snapshot.Digest, AppliedRevision: 7, AppliedDigest: snapshot.Digest}
 	for _, cache := range []configCache{
-		{Version: 2, NodeID: credential.NodeID, ControlURL: credential.ControlURL, State: state},
+		{Version: 3, NodeID: credential.NodeID, ControlURL: credential.ControlURL, State: state},
 		{Version: 1, NodeID: "node-b", ControlURL: credential.ControlURL, State: state},
 		{Version: 1, NodeID: credential.NodeID, ControlURL: "https://other.example", State: state},
 	} {
@@ -120,6 +121,45 @@ func TestConfigCacheRejectsUnknownFormatAndDifferentIdentity(t *testing.T) {
 			t.Fatal("接受不兼容格式或其他节点/面板的配置")
 		}
 		engine.Close()
+	}
+}
+
+func TestConfigCacheReadsBothFormatsPreservingRevocationHighWater(t *testing.T) {
+	for _, version := range []int{1, 2} {
+		t.Run(fmt.Sprint(version), func(t *testing.T) {
+			ctx := context.Background()
+			store := FileStore{Dir: filepath.Join(t.TempDir(), "node"), Random: rand.Reader}
+			credential := Credentials{NodeID: "n", ControlURL: "https://panel.example"}
+			state := forwarding.State{HighestRevision: 9, HighestDigest: strings.Repeat("a", 64), AppliedRevision: 7, AppliedDigest: strings.Repeat("b", 64)}
+			data, err := json.Marshal(configCache{Version: version, NodeID: credential.NodeID, ControlURL: credential.ControlURL, State: state})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.SaveConfig(ctx, data); err != nil {
+				t.Fatal(err)
+			}
+			var writes []forwarding.State
+			engine := forwarding.NewEngine(forwarding.Dependencies{Persist: func(s forwarding.State) error {
+				writes = append(writes, s)
+				return persistConfigCache(ctx, credential, store, s)
+			}})
+			defer engine.Close()
+			if err := openConfigCache(ctx, credential, &Dependencies{ConfigStore: store}, engine); err != nil {
+				t.Fatal(err)
+			}
+			got := engine.State()
+			if got.HighestRevision != 9 || got.HighestDigest != state.HighestDigest || len(got.Rules) != 0 || len(writes) == 0 {
+				t.Fatalf("丢失撤销边界或未持久化: %+v", got)
+			}
+			data, err = store.LoadConfig(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var upgraded configCache
+			if err := json.Unmarshal(data, &upgraded); err != nil || upgraded.Version != 2 || upgraded.State.HighestRevision != 9 {
+				t.Fatal("读取旧缓存后未写格式 2 或丢失高水位", upgraded, err)
+			}
+		})
 	}
 }
 
