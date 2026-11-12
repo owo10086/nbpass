@@ -3,6 +3,7 @@ package panel
 import (
 	"context"
 	"encoding/json"
+	"net/netip"
 
 	"nbpass/internal/compatibility"
 	"nbpass/internal/forwarding"
@@ -147,7 +148,7 @@ func (p capabilityPlan) allows(nodeID string) bool {
 
 // ruleCapabilityRequirements is the only feature-to-executor mapping. Consumers
 // must use its evaluated plan rather than reimplementing requirements in views.
-func ruleCapabilityRequirements(r forwarding.Rule, entry string, group exitGroupView, legacy map[[3]string]bool) capabilityRequirements {
+func ruleCapabilityRequirements(r forwarding.Rule, entry string, group exitGroupView, legacy map[[3]string]bool, addresses map[string]tunnelExitView) capabilityRequirements {
 	required := capabilityRequirements{}
 	if r.Kind != forwarding.Tunnel {
 		return required
@@ -160,6 +161,10 @@ func ruleCapabilityRequirements(r forwarding.Rule, entry string, group exitGroup
 		candidate := capabilityCandidate{NodeID: exit}
 		if len(group.Members) != 1 || !legacy[[3]string{exit, entry, r.ID}] {
 			candidate.Required = []capabilityRequirement{{NodeID: entry, Capabilities: []string{"tunnel_authorization"}}, {NodeID: exit, Capabilities: []string{"tunnel_authorization"}}}
+		}
+		address := addresses[exit]
+		if _, err := netip.ParseAddr(address.Address); err != nil || address.PublicPort != nil {
+			candidate.Required = append(candidate.Required, capabilityRequirement{NodeID: entry, AddressID: "public", Capabilities: []string{compatibility.IXAddressDialing}})
 		}
 		hop = append(hop, candidate)
 	}
@@ -184,13 +189,21 @@ func (p *Panel) ruleCapabilityPlans(ctx context.Context, q queryer, rules []forw
 	if err != nil {
 		return nil, err
 	}
+	exits, err := loadTunnelExits(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	addresses := map[string]tunnelExitView{}
+	for _, v := range exits {
+		addresses[v.NodeID] = v
+	}
 	plans := map[[2]string]capabilityPlan{}
 	for _, r := range rules {
 		if !r.Enabled {
 			continue
 		}
 		for _, entry := range forwarding.RuleEntryNodes(r, members) {
-			plans[[2]string{entry, r.ID}] = caps.evaluate(ruleCapabilityRequirements(r, entry, byGroup[r.ExitGroupID], legacy))
+			plans[[2]string{entry, r.ID}] = caps.evaluate(ruleCapabilityRequirements(r, entry, byGroup[r.ExitGroupID], legacy, addresses))
 		}
 	}
 	return plans, nil

@@ -33,16 +33,18 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 		}
 		generations[r.ID] = generation
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT node_id,address,listen_port,transport,server_name,certificate_pem,private_key_ciphertext,address_version FROM tunnel_exits ORDER BY node_id")
+	rows, err := tx.QueryContext(ctx, "SELECT node_id,address,listen_port,transport,server_name,certificate_pem,private_key_ciphertext,address_version,public_port FROM tunnel_exits ORDER BY node_id")
 	if err != nil {
 		return err
 	}
 	endpoints := map[string]*controlpb.TunnelEndpoint{}
+	newDialing := map[string]bool{}
 	for rows.Next() {
 		var id, address, transport, name, addressVersion string
 		var port uint32
+		var publicPort *uint32
 		var cert, sealed []byte
-		if err := rows.Scan(&id, &address, &port, &transport, &name, &cert, &sealed, &addressVersion); err != nil {
+		if err := rows.Scan(&id, &address, &port, &transport, &name, &cert, &sealed, &addressVersion, &publicPort); err != nil {
 			rows.Close()
 			return err
 		}
@@ -52,6 +54,10 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 			return err
 		}
 		compiled[id].TunnelServer = &controlpb.TunnelServer{ListenPort: port, Transport: controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS, ServerName: name, CertificatePem: cert, PrivateKeyPem: key}
+		newDialing[id] = publicPort != nil || !isIPv4Address(address)
+		if publicPort != nil {
+			port = *publicPort
+		}
 		endpoints[id] = &controlpb.TunnelEndpoint{NodeId: id, Address: address, AddressVersion: addressVersion, Port: port, Transport: controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS, ServerName: name, CertificatePem: cert}
 	}
 	err = rows.Err()
@@ -95,6 +101,10 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 				}
 				ep := proto.Clone(endpoints[exit]).(*controlpb.TunnelEndpoint)
 				ep.EntryId, ep.Credential = entry, token
+				// Preserve the legacy IPv4 shape unless new dialing semantics are selected.
+				if newDialing[exit] {
+					ep.EndpointConfigDigest = forwarding.EndpointConfigDigest(ep)
+				}
 				cg.Exits = append(cg.Exits, ep)
 				server := compiled[exit].TunnelServer
 				if !pairs[pairKey] {

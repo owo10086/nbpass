@@ -123,6 +123,7 @@ var migrations = []string{
 	entryObservationMigration,
 	listOrderMigration,
 	recordTypeMigration,
+	ixAddressesMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

@@ -315,7 +315,7 @@ func (p *Panel) loadEntryReadinessInputs(ctx context.Context, id string, now tim
 	for _, h := range health {
 		// 探测最多5.5秒间隔+3秒握手+5秒采样，加上秒级时间戳取整；未完成和旧成功均不能当新握手。
 		age := now.Sub(time.Unix(h.GetCheckedAtUnix(), 0))
-		if h.GetLastProbe() == "success" && age >= 0 && age < 15*time.Second {
+		if matchesEndpointHealth(v.snapshot, h) && h.GetLastProbe() == "success" && age >= 0 && age < 15*time.Second {
 			v.health[h.ExitId] = true
 		}
 	}

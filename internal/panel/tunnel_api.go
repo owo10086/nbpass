@@ -9,23 +9,25 @@ import (
 	"crypto/x509/pkix"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"io"
 	"math/big"
 	"net/http"
-	"net/netip"
 	"strings"
 
 	"nbpass/internal/forwarding"
 )
 
 type tunnelExitView struct {
-	NodeID         string                     `json:"node_id"`
-	Address        string                     `json:"address"`
-	ListenPort     int                        `json:"listen_port"`
-	Transport      forwarding.TunnelTransport `json:"transport"`
-	ServerName     string                     `json:"server_name"`
-	CertificatePEM string                     `json:"certificate_pem"`
+	NodeID             string                     `json:"node_id"`
+	Address            string                     `json:"address"`
+	PublicPort         *int                       `json:"public_port"`
+	DedicatedAddresses []dedicatedAddress         `json:"dedicated_addresses"`
+	ListenPort         int                        `json:"listen_port"`
+	Transport          forwarding.TunnelTransport `json:"transport"`
+	ServerName         string                     `json:"server_name"`
+	CertificatePEM     string                     `json:"certificate_pem"`
 }
 type exitGroupView struct {
 	ID       string                  `json:"id"`
@@ -47,22 +49,10 @@ func (p *Panel) tunnelRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/exit-groups/{id}", p.deleteExitGroup)
 }
 func (p *Panel) listTunnelExits(w http.ResponseWriter, r *http.Request) {
-	rows, err := p.db.QueryContext(r.Context(), "SELECT node_id,address,listen_port,transport,server_name,certificate_pem FROM tunnel_exits ORDER BY node_id")
+	p.controlMu.Lock()
+	exits, err := loadTunnelExits(r.Context(), p.db)
+	p.controlMu.Unlock()
 	if err != nil {
-		problem(w, 503, "存储暂不可用")
-		return
-	}
-	defer rows.Close()
-	exits := []tunnelExitView{}
-	for rows.Next() {
-		var v tunnelExitView
-		if err := rows.Scan(&v.NodeID, &v.Address, &v.ListenPort, &v.Transport, &v.ServerName, &v.CertificatePEM); err != nil {
-			problem(w, 503, "存储暂不可用")
-			return
-		}
-		exits = append(exits, v)
-	}
-	if rows.Err() != nil {
 		problem(w, 503, "存储暂不可用")
 		return
 	}
@@ -70,19 +60,45 @@ func (p *Panel) listTunnelExits(w http.ResponseWriter, r *http.Request) {
 }
 func (p *Panel) saveTunnelExit(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Address    string                     `json:"address"`
-		ListenPort int                        `json:"listen_port"`
-		Transport  forwarding.TunnelTransport `json:"transport"`
+		Address            string                     `json:"address"`
+		ListenPort         int                        `json:"listen_port"`
+		Transport          forwarding.TunnelTransport `json:"transport"`
+		PublicPort         json.RawMessage            `json:"public_port"`
+		DedicatedAddresses json.RawMessage            `json:"dedicated_addresses"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
-	ip, err := netip.ParseAddr(body.Address)
-	if err != nil || !ip.Is4() || !forwarding.AllowedIP(ip, true) || body.ListenPort < 1 || body.ListenPort > 65535 || body.Transport != forwarding.WSS {
-		problem(w, 400, "出口须指定可连接 IPv4、1–65535 监听端口和 WSS 传输")
+	body.Address = normalizeTunnelAddress(body.Address)
+	if forwarding.ValidateTarget(body.Address, true) != nil || body.ListenPort < 1 || body.ListenPort > 65535 || body.Transport != forwarding.WSS {
+		problem(w, 400, "出口须指定可连接 IPv4 或域名、1–65535 本机监听端口和 WSS 传输")
 		return
 	}
+	var publicPort *int
+	if len(body.PublicPort) > 0 {
+		if json.Unmarshal(body.PublicPort, &publicPort) != nil || !validPublicPort(publicPort) {
+			problem(w, 400, "对外端口须为空或 1–65535")
+			return
+		}
+	}
+	var dedicated []dedicatedAddress
+	if len(body.DedicatedAddresses) > 0 {
+		if string(body.DedicatedAddresses) == "null" || json.Unmarshal(body.DedicatedAddresses, &dedicated) != nil {
+			problem(w, 400, "专线地址须为列表，清空请传空列表")
+			return
+		}
+		for i := range dedicated {
+			d := &dedicated[i]
+			d.Name = strings.TrimSpace(d.Name)
+			d.Address = normalizeTunnelAddress(d.Address)
+			if d.Name == "" || len(d.Name) > 200 || forwarding.ValidateTarget(d.Address, true) != nil || !validPublicPort(d.PublicPort) {
+				problem(w, 400, "专线须有 1–200 字节名称、IPv4 或域名和有效对外端口")
+				return
+			}
+		}
+	}
 	id := r.PathValue("id")
+	var saved tunnelExitView
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
 		var n int
 		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM nodes WHERE id=?", id).Scan(&n); err != nil {
@@ -91,11 +107,43 @@ func (p *Panel) saveTunnelExit(w http.ResponseWriter, r *http.Request) {
 		if n != 1 {
 			return &forwardingError{404, "节点不存在"}
 		}
-		var exists int
-		if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM tunnel_exits WHERE node_id=?", id).Scan(&exists); err != nil {
+		existing, err := loadTunnelExits(r.Context(), tx)
+		if err != nil {
 			return err
 		}
-		if exists == 0 {
+		var old *tunnelExitView
+		for i := range existing {
+			if existing[i].NodeID == id {
+				old = &existing[i]
+				break
+			}
+		}
+		if old != nil && len(body.PublicPort) == 0 {
+			publicPort = old.PublicPort
+		}
+		if len(body.DedicatedAddresses) > 0 {
+			owned := map[string]bool{}
+			if old != nil {
+				for _, d := range old.DedicatedAddresses {
+					owned[d.ID] = true
+				}
+			}
+			seen := map[string]bool{}
+			for i := range dedicated {
+				d := &dedicated[i]
+				if d.ID != "" && (!owned[d.ID] || seen[d.ID]) {
+					return &forwardingError{400, "专线 ID 重复或不属于该服务器"}
+				}
+				if d.ID == "" {
+					d.ID, _, err = p.randomCredential()
+					if err != nil {
+						return err
+					}
+				}
+				seen[d.ID] = true
+			}
+		}
+		if old == nil {
 			name, cert, key, err := p.newExitIdentity()
 			if err != nil {
 				return err
@@ -104,15 +152,44 @@ func (p *Panel) saveTunnelExit(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return err
 			}
-			_, err = tx.ExecContext(r.Context(), "INSERT INTO tunnel_exits(node_id,address,listen_port,transport,server_name,certificate_pem,private_key_ciphertext) VALUES(?,?,?,?,?,?,?)", id, ip.String(), body.ListenPort, body.Transport, name, cert, key)
+			_, err = tx.ExecContext(r.Context(), "INSERT INTO tunnel_exits(node_id,address,listen_port,transport,server_name,certificate_pem,private_key_ciphertext,public_port) VALUES(?,?,?,?,?,?,?,?)", id, body.Address, body.ListenPort, body.Transport, name, cert, key, publicPort)
+			if err != nil {
+				return err
+			}
+		} else {
+			_, err = tx.ExecContext(r.Context(), "UPDATE tunnel_exits SET address_version=CASE WHEN address!=? OR listen_port!=? OR public_port IS NOT ? THEN '' ELSE address_version END,address=?,listen_port=?,transport=?,public_port=? WHERE node_id=?", body.Address, body.ListenPort, publicPort, body.Address, body.ListenPort, body.Transport, publicPort, id)
+			if err != nil {
+				return err
+			}
+		}
+		if len(body.DedicatedAddresses) > 0 {
+			if _, err = tx.ExecContext(r.Context(), "DELETE FROM tunnel_addresses WHERE node_id=?", id); err != nil {
+				return err
+			}
+			for position, d := range dedicated {
+				if _, err = tx.ExecContext(r.Context(), "INSERT INTO tunnel_addresses(node_id,id,name,address,public_port,position) VALUES(?,?,?,?,?,?)", id, d.ID, d.Name, d.Address, d.PublicPort, position); err != nil {
+					return err
+				}
+			}
+		}
+		all, err := loadTunnelExits(r.Context(), tx)
+		if err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(r.Context(), "UPDATE tunnel_exits SET address_version=CASE WHEN address!=? OR listen_port!=? THEN '' ELSE address_version END,address=?,listen_port=?,transport=? WHERE node_id=?", ip.String(), body.ListenPort, ip.String(), body.ListenPort, body.Transport, id)
-		return err
+		for _, v := range all {
+			if v.NodeID == id {
+				saved = v
+				break
+			}
+		}
+		return nil
 	}) {
 		return
 	}
-	respond(w, 200, map[string]bool{"configured": true})
+	respond(w, 200, struct {
+		tunnelExitView
+		Configured bool `json:"configured"`
+	}{saved, true})
 }
 
 // 独立于 IP 的随机 DNS SAN；每出口自签，私钥只下发该出口。

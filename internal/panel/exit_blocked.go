@@ -215,11 +215,18 @@ func (p *Panel) confirmExitAddressHandshake(ctx context.Context, tx *sql.Tx, ent
 	if h.AddressVersion == "" || h.LastProbe != "success" || h.CheckedAtUnix == 0 {
 		return nil
 	}
+	snapshot, err := p.exitHealthSnapshot(ctx, tx, entry)
+	if err != nil {
+		return err
+	}
+	if !matchesEndpointHealth(snapshot, h) {
+		return nil
+	}
 	now := p.deps.Clock.Now()
 	at := time.Unix(h.CheckedAtUnix, 0)
 	if at.After(now) || now.Sub(at) >= 10*time.Second {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx, `UPDATE exit_address_progress SET handshaken_at=MAX(handshaken_at,?) WHERE action_id=? AND entry_id=? AND EXISTS(SELECT 1 FROM tunnel_exits e WHERE e.node_id=? AND e.address_version=action_id)`, at.UnixNano(), h.AddressVersion, entry, h.ExitId)
+	_, err = tx.ExecContext(ctx, `UPDATE exit_address_progress SET handshaken_at=MAX(handshaken_at,?) WHERE action_id=? AND entry_id=? AND EXISTS(SELECT 1 FROM tunnel_exits e WHERE e.node_id=? AND e.address_version=action_id)`, at.UnixNano(), h.AddressVersion, entry, h.ExitId)
 	return err
 }

@@ -17,10 +17,14 @@ ALTER TABLE probe_realtime ADD COLUMN exit_health_json BLOB NOT NULL DEFAULT '[]
 
 // 与探针进程/序号去重共用事务；不会推进活性或授权确认。
 func (p *Panel) storeExitHealth(ctx context.Context, tx *sql.Tx, id string, health []*controlpb.ExitHealth) error {
+	snapshot, err := p.exitHealthSnapshot(ctx, tx, id)
+	if err != nil {
+		return err
+	}
 	valid := make([]*controlpb.ExitHealth, 0, len(health))
 	seen := map[string]bool{}
 	for _, h := range health {
-		if h == nil || h.ExitId == "" || seen[h.ExitId] {
+		if h == nil || h.ExitId == "" || seen[h.ExitId] || !matchesEndpointHealth(snapshot, h) {
 			continue
 		}
 		if h.State != "unknown" && h.State != "healthy" && h.State != "unhealthy" && h.State != "recovering" {
@@ -66,12 +70,13 @@ func (p *Panel) getExitHealth(w http.ResponseWriter, r *http.Request) {
 	var received int64
 	var raw []byte
 	sampleErr := p.db.QueryRowContext(r.Context(), "SELECT process_instance,received_at,exit_health_json FROM probe_realtime WHERE node_id=?", id).Scan(&sampleInstance, &received, &raw)
+	snapshot, snapshotErr := p.exitHealthSnapshot(r.Context(), p.db, id)
 	p.controlMu.Unlock()
 	if errors.Is(err, sql.ErrNoRows) {
 		problem(w, 404, "节点不存在")
 		return
 	}
-	if err != nil || sampleErr != nil && !errors.Is(sampleErr, sql.ErrNoRows) {
+	if err != nil || snapshotErr != nil || sampleErr != nil && !errors.Is(sampleErr, sql.ErrNoRows) {
 		problem(w, 503, "存储暂不可用")
 		return
 	}
@@ -83,6 +88,13 @@ func (p *Panel) getExitHealth(w http.ResponseWriter, r *http.Request) {
 			problem(w, 503, "存储暂不可用")
 			return
 		}
+		matching := make([]*controlpb.ExitHealth, 0, len(health))
+		for _, h := range health {
+			if matchesEndpointHealth(snapshot, h) {
+				matching = append(matching, h)
+			}
+		}
+		health = matching
 		at := time.Unix(0, received).UTC()
 		sampled = &at
 		fresh = connected && sampleInstance == instance && p.deps.Clock.Now().Sub(at) < 10*time.Second
@@ -104,4 +116,38 @@ func (p *Panel) admitExitFailover(ctx context.Context, tx *sql.Tx, id string, ve
 	}
 	_, err := tx.ExecContext(ctx, "DELETE FROM tunnel_authorization_confirmations WHERE entry_id=?", id)
 	return true, err
+}
+
+// Health is evidence for the endpoint in the current desired snapshot, not for a
+// server ID alone. Empty digests retain only the unchanged legacy IPv4 contract.
+func matchesEndpointHealth(snapshot *controlpb.ConfigSnapshot, h *controlpb.ExitHealth) bool {
+	for _, g := range snapshot.GetExitGroups() {
+		for _, ep := range g.Exits {
+			if ep.NodeId == h.GetExitId() && ep.EndpointConfigDigest == h.GetEndpointConfigDigest() {
+				return true
+			}
+		}
+	}
+	return false
+}
+func (p *Panel) exitHealthSnapshot(ctx context.Context, q queryer, id string) (*controlpb.ConfigSnapshot, error) {
+	var data []byte
+	var encrypted bool
+	rows, err := q.QueryContext(ctx, "SELECT snapshot,encrypted FROM node_snapshots WHERE node_id=?", id)
+	snapshot := &controlpb.ConfigSnapshot{}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return snapshot, rows.Err()
+	}
+	err = rows.Scan(&data, &encrypted)
+	if err != nil {
+		return nil, err
+	}
+	if err = p.decodeSnapshot(id, data, encrypted, snapshot); err != nil {
+		return nil, err
+	}
+	return snapshot, nil
 }
