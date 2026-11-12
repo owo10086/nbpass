@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"sync"
 	"time"
@@ -190,7 +191,45 @@ func (c *tunnelClient) openSessionEndpoint(ctx context.Context, ep *controlpb.Tu
 		stop := context.AfterFunc(handshakeCtx, cancel)
 		defer stop()
 		defer cancel()
-		return c.engine.deps.DialTunnel(dialCtx, address)
+		// Resolve at the predecessor and hand only a validated concrete IPv4 to
+		// the dialer; TLS continues using the pinned internal server name.
+		var ips []netip.Addr
+		if ip, err := netip.ParseAddr(ep.Address); err == nil {
+			ips = []netip.Addr{ip}
+		} else {
+			var err error
+			ips, err = c.engine.deps.LookupIPv4(dialCtx, ep.Address)
+			if err != nil {
+				return nil, err
+			}
+		}
+		seen := map[netip.Addr]bool{}
+		var last error
+		attempts := 0
+		for _, ip := range ips {
+			if seen[ip] || !AllowedIP(ip, true) {
+				continue
+			}
+			seen[ip] = true
+			if attempts == 3 || dialCtx.Err() != nil {
+				break
+			}
+			attempts++
+			attempt, cancel := context.WithTimeout(dialCtx, 3*time.Second)
+			conn, err := c.engine.deps.DialTunnel(attempt, net.JoinHostPort(ip.String(), strconv.Itoa(int(ep.Port))))
+			cancel()
+			if err == nil {
+				return conn, nil
+			}
+			last = err
+		}
+		if dialCtx.Err() != nil {
+			return nil, dialCtx.Err()
+		}
+		if last == nil {
+			last = errors.New("没有可连接的 IPv4 端点地址")
+		}
+		return nil, last
 	}}
 	// 不继承环境代理，不允许重定向或 WSS 降级。
 	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("隧道不允许重定向") }}

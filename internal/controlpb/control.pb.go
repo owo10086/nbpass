@@ -1536,6 +1536,7 @@ func (x *ForwardRule) GetExitGroupId() string {
 // 票 08 使用字段号 40–59；授权代次与确认由票 09 扩展。
 type TunnelEndpoint struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
+	EndpointConfigDigest   string                 `protobuf:"bytes,281,opt,name=endpoint_config_digest,json=endpointConfigDigest,proto3" json:"endpoint_config_digest,omitempty"`
 	AddressVersion         string                 `protobuf:"bytes,220,opt,name=address_version,json=addressVersion,proto3" json:"address_version,omitempty"`
 	RotationId             string                 `protobuf:"bytes,160,opt,name=rotation_id,json=rotationId,proto3" json:"rotation_id,omitempty"`
 	TrustedCertificatesPem [][]byte               `protobuf:"bytes,161,rep,name=trusted_certificates_pem,json=trustedCertificatesPem,proto3" json:"trusted_certificates_pem,omitempty"`
@@ -1579,6 +1580,13 @@ func (x *TunnelEndpoint) ProtoReflect() protoreflect.Message {
 // Deprecated: Use TunnelEndpoint.ProtoReflect.Descriptor instead.
 func (*TunnelEndpoint) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *TunnelEndpoint) GetEndpointConfigDigest() string {
+	if x != nil {
+		return x.EndpointConfigDigest
+	}
+	return ""
 }
 
 func (x *TunnelEndpoint) GetAddressVersion() string {
@@ -2343,17 +2351,18 @@ func (x *DNSWatchResult) GetFailed() bool {
 
 // 入口观测的出口链路状态，不代表出口到所有目标的可达性。
 type ExitHealth struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	AddressVersion      string                 `protobuf:"bytes,220,opt,name=address_version,json=addressVersion,proto3" json:"address_version,omitempty"`
-	ExitId              string                 `protobuf:"bytes,150,opt,name=exit_id,json=exitId,proto3" json:"exit_id,omitempty"`
-	State               string                 `protobuf:"bytes,151,opt,name=state,proto3" json:"state,omitempty"`
-	ConsecutiveFailures uint32                 `protobuf:"varint,152,opt,name=consecutive_failures,json=consecutiveFailures,proto3" json:"consecutive_failures,omitempty"`
-	LastProbe           string                 `protobuf:"bytes,153,opt,name=last_probe,json=lastProbe,proto3" json:"last_probe,omitempty"`
-	FailureClass        string                 `protobuf:"bytes,154,opt,name=failure_class,json=failureClass,proto3" json:"failure_class,omitempty"`
-	RecoverySinceUnix   int64                  `protobuf:"varint,155,opt,name=recovery_since_unix,json=recoverySinceUnix,proto3" json:"recovery_since_unix,omitempty"`
-	CheckedAtUnix       int64                  `protobuf:"varint,156,opt,name=checked_at_unix,json=checkedAtUnix,proto3" json:"checked_at_unix,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	EndpointConfigDigest string                 `protobuf:"bytes,281,opt,name=endpoint_config_digest,json=endpointConfigDigest,proto3" json:"endpoint_config_digest,omitempty"`
+	AddressVersion       string                 `protobuf:"bytes,220,opt,name=address_version,json=addressVersion,proto3" json:"address_version,omitempty"`
+	ExitId               string                 `protobuf:"bytes,150,opt,name=exit_id,json=exitId,proto3" json:"exit_id,omitempty"`
+	State                string                 `protobuf:"bytes,151,opt,name=state,proto3" json:"state,omitempty"`
+	ConsecutiveFailures  uint32                 `protobuf:"varint,152,opt,name=consecutive_failures,json=consecutiveFailures,proto3" json:"consecutive_failures,omitempty"`
+	LastProbe            string                 `protobuf:"bytes,153,opt,name=last_probe,json=lastProbe,proto3" json:"last_probe,omitempty"`
+	FailureClass         string                 `protobuf:"bytes,154,opt,name=failure_class,json=failureClass,proto3" json:"failure_class,omitempty"`
+	RecoverySinceUnix    int64                  `protobuf:"varint,155,opt,name=recovery_since_unix,json=recoverySinceUnix,proto3" json:"recovery_since_unix,omitempty"`
+	CheckedAtUnix        int64                  `protobuf:"varint,156,opt,name=checked_at_unix,json=checkedAtUnix,proto3" json:"checked_at_unix,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ExitHealth) Reset() {
@@ -2384,6 +2393,13 @@ func (x *ExitHealth) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ExitHealth.ProtoReflect.Descriptor instead.
 func (*ExitHealth) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *ExitHealth) GetEndpointConfigDigest() string {
+	if x != nil {
+		return x.EndpointConfigDigest
+	}
+	return ""
 }
 
 func (x *ExitHealth) GetAddressVersion() string {
@@ -2732,8 +2748,9 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"targetPort\x12#\n" +
 	"\rallow_private\x18\a \x01(\bR\fallowPrivate\x12/\n" +
 	"\x04kind\x18\b \x01(\x0e2\x1b.nbpass.control.v1.RuleKindR\x04kind\x12\"\n" +
-	"\rexit_group_id\x18( \x01(\tR\vexitGroupId\"\xa5\x03\n" +
-	"\x0eTunnelEndpoint\x12(\n" +
+	"\rexit_group_id\x18( \x01(\tR\vexitGroupId\"\xdc\x03\n" +
+	"\x0eTunnelEndpoint\x125\n" +
+	"\x16endpoint_config_digest\x18\x99\x02 \x01(\tR\x14endpointConfigDigest\x12(\n" +
 	"\x0faddress_version\x18\xdc\x01 \x01(\tR\x0eaddressVersion\x12 \n" +
 	"\vrotation_id\x18\xa0\x01 \x01(\tR\n" +
 	"rotationId\x129\n" +
@@ -2814,9 +2831,10 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x0eDNSWatchResult\x12\x17\n" +
 	"\atask_id\x18d \x01(\tR\x06taskId\x12\x10\n" +
 	"\x03ips\x18e \x03(\tR\x03ips\x12\x16\n" +
-	"\x06failed\x18f \x01(\bR\x06failed\"\xbb\x02\n" +
+	"\x06failed\x18f \x01(\bR\x06failed\"\xf2\x02\n" +
 	"\n" +
-	"ExitHealth\x12(\n" +
+	"ExitHealth\x125\n" +
+	"\x16endpoint_config_digest\x18\x99\x02 \x01(\tR\x14endpointConfigDigest\x12(\n" +
 	"\x0faddress_version\x18\xdc\x01 \x01(\tR\x0eaddressVersion\x12\x18\n" +
 	"\aexit_id\x18\x96\x01 \x01(\tR\x06exitId\x12\x15\n" +
 	"\x05state\x18\x97\x01 \x01(\tR\x05state\x122\n" +

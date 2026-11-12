@@ -5,7 +5,6 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
-	"net/netip"
 
 	"google.golang.org/protobuf/proto"
 	"nbpass/internal/controlpb"
@@ -40,8 +39,7 @@ func validateTunnelSnapshot(s *controlpb.ConfigSnapshot) error {
 				return invalid
 			}
 			seen[ep.NodeId] = true
-			ip, err := netip.ParseAddr(ep.Address)
-			if err != nil || !AllowedIP(ip, true) {
+			if ValidateTarget(ep.Address, true) != nil {
 				return invalid
 			}
 			if len(ep.TrustedCertificatesPem) > 1 {
