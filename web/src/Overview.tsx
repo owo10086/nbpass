@@ -1,4 +1,7 @@
-import { Alert, Button, Empty, Skeleton, Space } from 'antd';
+import { useState } from 'react';
+import { affectedOperations } from './RulePathData';
+import { ChainSyncDetails, ConfigurationBlockers } from './ConfigSync';
+import { Alert, Select, Button, Empty, Skeleton, Space } from 'antd';
 import { ExclamationCircleOutlined, QuestionCircleOutlined, ClusterOutlined, ToolOutlined } from '@ant-design/icons';
 import { go } from './route';
 import { displaySystemText, handlingLabels, impactLabels, type Incident } from './Incidents';
@@ -12,6 +15,7 @@ import './OtherPages.css';
 
 export function Overview({ state }: { state: OperationsState }) {
   const { data, error } = state;
+  const [nodeFilter, setNodeFilter] = useState<string>();
   const counts = data?.counts;
   const name = (id: string) => data?.nodes.find(n => n.id === id)?.name || id || '待确认';
   return <div className="zf-other-page">
@@ -39,10 +43,11 @@ export function Overview({ state }: { state: OperationsState }) {
           { title: '最近更新', render: (_, r) => <span className="num">{new Date(r.updated_at).toLocaleString()}</span> },
         ]} />)}
       </div>
-      <TableCard<OperationRule> title="端口影响与证据" rowKey="id" dataSource={data.rules} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 900 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无端口，请先添加服务器并创建端口" /> }} columns={[
+      <TableCard<OperationRule> title="端口影响与证据" actions={<Select aria-label="按路径服务器筛选受影响端口" allowClear showSearch optionFilterProp="label" placeholder="全部路径服务器" value={nodeFilter} onChange={setNodeFilter} style={{ minWidth: 220 }} options={data.nodes.map(node => ({ value: node.id, label: node.name }))} />} rowKey="id" dataSource={nodeFilter ? affectedOperations(data.rules, nodeFilter) : data.rules}
+        expandable={{ expandedRowRender: rule => <Space orientation="vertical" style={{ width: '100%' }}><p>入口及全部路径候选：{(rule.path_nodes?.length ? rule.path_nodes : rule.members).map(name).join(' / ')}</p><ConfigurationBlockers blockers={rule.configuration_blockers} />{rule.chain_id && <><Button type="link" onClick={() => go('chains', rule.chain_id)}>查看共享链</Button><ChainSyncDetails edges={rule.chain_edges ?? []} nodeName={name} /></>}</Space> }} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 900 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无端口，请先添加服务器并创建端口" /> }} columns={[
           { title: '端口', render: (_, r) => <><strong>{r.name}</strong><div className="muted">{r.group_id ? data.groups.find(g => g.id === r.group_id)?.name : name(r.node_id || '')}</div></> },
           { title: '当前判断', render: (_, r) => <StatusDot tone={r.status === 'abnormal' ? 'danger' : r.status === 'unknown' ? 'warn' : 'muted'}>{operationLabels[r.status] || r.status}</StatusDot> },
-          { title: '原因 / 证据', render: (_, r) => <Space orientation="vertical" size={2}>{r.reasons.map((reason, i) => <span key={i}>{reason.node_id && `${name(reason.node_id)}：`}{displaySystemText(reason.message)}<span className="cell-sub">{displaySystemText(reason.source)} · {reason.observed_at ? new Date(reason.observed_at).toLocaleString() : '时间待确认'}</span></span>)}{r.reasons.length === 0 && <span className="muted">{r.enabled ? '当前端口应用及所需单跳转发证据未显示异常' : '停用端口不计入异常统计'}</span>}</Space> },
+          { title: '原因 / 证据', render: (_, r) => <Space orientation="vertical" size={2}>{r.reasons.map((reason, i) => <span key={i}>{reason.node_id && `${name(reason.node_id)}：`}{displaySystemText(reason.message)}{reason.failure && <span className="cell-sub mono" style={{ overflowWrap: 'anywhere' }}>实际失败归属：{reason.failure.Class} · 第 {reason.failure.Edge.hop_index} 跳 · {name(reason.failure.Edge.from_node_id)} → {reason.failure.Edge.to_node_id ? name(reason.failure.Edge.to_node_id) : '最终目标 / 本地资源'} · 地址 {reason.failure.Edge.address_id || '—'} · 端口 / grant 代次 {reason.failure.Edge.rule_generation} / {reason.failure.Edge.grant_generation} · 摘要 {reason.failure.Edge.endpoint_config_digest || '—'} · 指纹 {reason.failure.Edge.chain_fingerprint}</span>}<span className="cell-sub">{displaySystemText(reason.source)} · {reason.observed_at ? new Date(reason.observed_at).toLocaleString() : '时间待确认'}</span></span>)}{r.reasons.length === 0 && <span className="muted">{r.enabled ? '当前端口应用及所需转发证据未显示异常' : '停用端口不计入异常统计'}</span>}</Space> },
           { title: '操作', render: (_, r) => <Space wrap><Button size="small" type="link" onClick={() => go('ports', r.id)}>查看端口</Button>{r.incident_id && <Button size="small" type="link" onClick={() => go('incidents', r.incident_id)}>追查故障</Button>}</Space> },
         ]} />
         <TableCard title="服务器组发布与冗余" rowKey="id" dataSource={data.groups} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 900 }} columns={[

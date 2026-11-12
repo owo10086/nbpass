@@ -24,3 +24,11 @@ test('嵌入名称及换 IP 通知只转换可识别正文，名称中的旧词�
   assert.equal(display.displaySystemText('入口组 入口组旧名称，策略 rotate_ip，决策 waiting', '', true), '服务器组 入口组旧名称，策略 rotate_ip，决策 waiting');
   assert.equal(display.displayRotationNotice('节点：旧名称：节点不支持新 IP 复检，自动许可已取消且未投递，动作 action-1'), '节点：旧名称：服务器不支持新 IP 复检，自动许可已取消且未投递，动作 action-1');
 });
+
+test('链历史结构化原因显示实际失败边、代次和指纹，保留未知JSON与原始错误', () => {
+  const reason = { code: 'chain_flow_failed', message: '末跳拨号失败：connection refused', source: '链式建流', failure: { Class: 'exit_target', Edge: { from_node_id: 'c', hop_index: 2, rule_generation: 7, grant_generation: 7, chain_fingerprint: 'fp', endpoint_config_digest: '' }, ObservedAt: '2026-11-12T12:00:00Z' } };
+  const text = display.displaySystemText(JSON.stringify(reason));
+  assert.match(text, /末跳拨号失败：connection refused/);
+  assert.match(text, /exit_target.*第 2 跳.*c.*最终目标.*7.*fp/);
+  assert.equal(display.displaySystemText('{"message":"用户保存的JSON"}'), '{"message":"用户保存的JSON"}');
+});

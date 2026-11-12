@@ -5,6 +5,19 @@ export function displayIncidentTitle(incident: { kind: string; title: string }):
 
 // 后端与历史记录沿用旧术语；只转换已知系统文案，保留资源名称和原始错误。
 export function displaySystemText(value: string, namePrefix = '', groupTemplate = false): string {
+  // Historical chain reasons are persisted as public JSON evidence. Recognize
+  // only that contract; arbitrary user text/JSON keeps its original meaning.
+  if (value.startsWith('{')) {
+    try {
+      const reason = JSON.parse(value);
+      if (['chain_flow_failed', 'chain_grant_failed', 'chain_edge_unknown'].includes(reason?.code) && typeof reason.message === 'string') {
+        const edge = reason.chain ?? reason.failure?.Edge;
+        if (edge && typeof edge.from_node_id === 'string' && typeof edge.hop_index === 'number') {
+          return `${reason.message}；${reason.failure?.Class ?? edge.state ?? '待确认'} · 第 ${edge.hop_index} 跳 · ${edge.from_node_id} → ${edge.to_node_id || '最终目标 / 本地资源'} · 地址 ${edge.address_id || '—'} · 端口 / grant 代次 ${edge.rule_generation} / ${edge.grant_generation} · 摘要 ${edge.endpoint_config_digest || '—'} · 指纹 ${edge.chain_fingerprint}；历史记录，当前状态另行核对；原始证据：${value}`;
+        }
+      }
+    } catch { /* Preserve unknown or malformed evidence verbatim. */ }
+  }
   if (namePrefix && value.startsWith(namePrefix)) return namePrefix + displaySystemText(value.slice(namePrefix.length), '', groupTemplate);
   const labels: Record<string, string> = {
     '配置、监听或隧道': '配置、监听或转发',

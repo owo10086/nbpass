@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, APIError } from './api';
+import type { ChainEdge, ChainFailure } from './RulePathData';
+import type { ConfigurationBlocker } from './RulesData';
 import type { Incident } from './Incidents';
 
-export type OperationReason = { code: string; message: string; source: string; node_id?: string; observed_at: string | null };
-export type OperationRule = { id: string; incident_id?: string; name: string; group_id?: string; node_id?: string; enabled: boolean; revision: number; status: string; reasons: OperationReason[]; members: string[] };
+export type OperationReason = { code: string; message: string; source: string; chain?: ChainEdge; failure?: { Class: string; Edge: ChainFailure; ObservedAt: string }; node_id?: string; observed_at: string | null };
+export type OperationRule = { chain_id?: string; chain_fingerprint?: string; path_nodes?: string[]; chain_edges?: ChainEdge[]; configuration_blockers?: ConfigurationBlocker[]; id: string; incident_id?: string; name: string; group_id?: string; node_id?: string; enabled: boolean; revision: number; status: string; reasons: OperationReason[]; members: string[] };
 export type OperationGroup = { id: string; name: string; members: string[]; desired_node: string; desired_version: number; expected_ip: string; confirmed_ip: string; confirmed_node: string; confirmed_at: string | null; stage: string; propagation: string; watch_id: string; redundancy: string; reasons: OperationReason[]; bound: boolean };
 export type OperationNode = { id: string; name: string; status: string; connected: boolean; last_seen: string | null; blocked: string; revision: number };
 export type OperationsView = {

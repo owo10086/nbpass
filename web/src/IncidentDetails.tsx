@@ -14,8 +14,8 @@ import './OtherPages.css';
 
 type Entry = { sequence: number; stage: string; message: string; source: string; version: number; occurred_at: string | null; observed_at: string };
 type Timeline = { entries: Entry[]; next_before: number | null };
-const routes: Record<string, Page> = { node: 'servers', group: 'server-groups', rule: 'ports', watch: 'dns-watch' };
-const kinds: Record<string, string> = { node: '服务器', group: '服务器组', rule: '端口', watch: '解析监控' };
+const routes: Record<string, Page> = { node: 'servers', group: 'server-groups', rule: 'ports', watch: 'dns-watch', chain: 'chains' };
+const kinds: Record<string, string> = { node: '服务器', group: '服务器组', rule: '端口', watch: '解析监控', chain: '转发链' };
 
 export function IncidentDetails({ id, onSessionExpired }: { id: string; onSessionExpired: () => void }) {
   const [incident, setIncident] = useState<Incident>();
