@@ -1,12 +1,15 @@
 package panel
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"nbpass/internal/compatibility"
 	"nbpass/internal/controlpb"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -304,5 +307,198 @@ func TestIXAddressHealthRequiresCurrentEndpointDigest(t *testing.T) {
 		if inputs.health[[3]string{exit, "public", digest}] != (sampleDigest == digest) {
 			t.Fatal("就绪复用旧配置成功", sampleDigest, inputs.health)
 		}
+	}
+}
+
+// Exercise the production starting point in one migration transaction. Keep the
+// original columns, including nullable values and encrypted bytes, in comparison
+// so a later ALTER cannot hide data loss behind a handful of selected fields.
+func TestIXFinalMigration46To51AndFreshInstallation(t *testing.T) {
+	for _, initial := range []int{46, 0} {
+		t.Run(fmt.Sprintf("from_%d", initial), func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			deps := diskDependencies(dir)
+			key, err := deps.KeyFile.LoadOrCreate(ctx, deps.Random)
+			if err != nil {
+				t.Fatal(err)
+			}
+			db, err := deps.Persistence.Open(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			p := &Panel{db: db}
+			if initial == 0 {
+				if err := p.migrate(ctx); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				for i, migration := range migrations[:46] {
+					if _, err := db.Exec(migration); err != nil {
+						t.Fatalf("migration %d: %v", i+1, err)
+					}
+				}
+				if _, err := db.Exec("PRAGMA user_version=46"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for _, statement := range []string{
+				`INSERT INTO nodes(id,name,created_at,token_hash,desired_revision,applied_revision,attempted_revision,applied_digest,process_instance,sort_order) VALUES('a','入口',1,X'0102',987,985,986,'旧摘要','旧进程',2),('b','末跳',2,X'0304',777,776,777,'出口摘要','出口进程',1)`,
+				`INSERT INTO secrets VALUES('旧密钥材料',X'9876543210')`,
+				`INSERT INTO entry_groups(id,name) VALUES('eg','入口组')`,
+				`INSERT INTO entry_group_members VALUES('eg','a',1)`,
+				`INSERT INTO tunnel_exits(node_id,address,listen_port,transport,server_name,certificate_pem,private_key_ciphertext,address_version) VALUES('b','10.1.2.3',22001,'wss','stable-identity',X'30313233',X'11223344','old-address-version')`,
+				`INSERT INTO exit_groups(id,name,strategy) VALUES('xg','出口组','primary_backup')`,
+				`INSERT INTO exit_group_members(group_id,node_id,position) VALUES('xg','b',1)`,
+				`INSERT INTO tunnel_pairs VALUES('a','b',X'55667788')`,
+				`INSERT INTO forward_rules(id,name,entry_group_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled,exit_group_id,sort_order) VALUES('t','旧单跳','eg','tunnel',24001,'example.test','ipv4',443,0,1,'xg',5)`,
+				`INSERT INTO forward_rules(id,name,entry_node_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled,sort_order) VALUES('d','停用直连','a','direct',24002,'127.0.0.1','ipv4',8080,1,0,NULL)`,
+				`INSERT INTO node_snapshots VALUES('a',X'8899aabb','旧快照摘要',1)`,
+				`INSERT INTO node_rule_reports VALUES('a',986,'旧摘要',1)`,
+				`INSERT INTO node_rule_results VALUES('a','t','eg',24001,985,'旧应用错误')`,
+				`INSERT INTO retired_control_instances VALUES('a','已退休进程')`,
+				`INSERT INTO rule_authorizations VALUES('t',910,'旧隧道授权指纹'),('d',911,'停用仍保留授权高水位')`,
+				`INSERT INTO tunnel_authorization_confirmations VALUES('b','a','t',910)`,
+				`INSERT INTO rule_traffic_totals VALUES('t',123456789,987654321),('d',11,22)`,
+				`INSERT INTO rule_traffic_cursors VALUES('a','旧进程','t',120,23,123,456),('a','更旧进程','d',60,19,11,22)`,
+				`INSERT INTO rule_traffic_realtime VALUES('a','t','旧进程',23,4,1234,1235),('a','d','更旧进程',19,0,1000,1001)`,
+				`INSERT INTO rule_traffic_sources VALUES('a','t'),('a','d')`,
+				`INSERT INTO recovery_nodes VALUES('a',999,123,456,0)`,
+			} {
+				if _, err := db.Exec(statement); err != nil {
+					t.Fatalf("%s: %v", statement, err)
+				}
+			}
+			tables := []string{"nodes", "secrets", "entry_groups", "entry_group_members", "tunnel_exits", "exit_groups", "exit_group_members", "tunnel_pairs", "forward_rules", "node_snapshots", "node_rule_reports", "node_rule_results", "retired_control_instances", "rule_authorizations", "tunnel_authorization_confirmations", "rule_traffic_totals", "rule_traffic_cursors", "rule_traffic_realtime", "rule_traffic_sources", "recovery_nodes"}
+			columns := map[string][]string{}
+			before := map[string]string{}
+			dump := func(table string) string {
+				t.Helper()
+				selected := "*"
+				if cols := columns[table]; len(cols) > 0 {
+					selected = strings.Join(cols, ",")
+				}
+				rows, err := db.Query("SELECT " + selected + " FROM " + table + " ORDER BY 1,2")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer rows.Close()
+				cols, err := rows.Columns()
+				if err != nil {
+					t.Fatal(err)
+				}
+				columns[table] = cols
+				values := [][]any{}
+				for rows.Next() {
+					row := make([]any, len(cols))
+					args := make([]any, len(cols))
+					for i := range row {
+						args[i] = &row[i]
+					}
+					if err := rows.Scan(args...); err != nil {
+						t.Fatal(err)
+					}
+					values = append(values, row)
+				}
+				if err := rows.Err(); err != nil {
+					t.Fatal(err)
+				}
+				raw, err := json.Marshal(values)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(raw)
+			}
+			for _, table := range tables {
+				before[table] = dump(table)
+			}
+			if err := p.migrate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			// Close/reopen the actual SQLite file; no background reconcile can rewrite
+			// the fixture and conceal the migration's own effects.
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			db, err = deps.Persistence.Open(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			for _, table := range tables {
+				if after := dump(table); after != before[table] {
+					t.Fatalf("%s data changed: %s -> %s", table, before[table], after)
+				}
+			}
+			var version, enabled int
+			if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 51 {
+				t.Fatal(version, err)
+			}
+			if err := db.QueryRow("PRAGMA foreign_keys").Scan(&enabled); err != nil || enabled != 1 {
+				t.Fatal(enabled, err)
+			}
+			var outbound, addressID string
+			var public sql.NullInt64
+			var chain sql.NullString
+			if err := db.QueryRow("SELECT n.outbound_ipv4,e.public_port,m.address_id,r.chain_id FROM nodes n JOIN tunnel_exits e ON e.node_id=n.id JOIN exit_group_members m ON m.node_id=n.id JOIN forward_rules r ON r.exit_group_id=m.group_id WHERE r.id='t'").Scan(&outbound, &public, &addressID, &chain); err != nil || outbound != "" || public.Valid || addressID != "public" || chain.Valid {
+				t.Fatal(outbound, public, addressID, chain, err)
+			}
+			currentKey, err := os.ReadFile(filepath.Join(dir, "panel.key"))
+			if err != nil || !bytes.Equal(key, currentKey) {
+				t.Fatal("panel key changed", err)
+			}
+			for _, table := range []string{"tunnel_addresses", "forward_chains", "forward_chain_hops", "node_tunnel_grant_results"} {
+				var count int
+				if err := db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+					t.Fatal(table, count, err)
+				}
+			}
+			for _, statement := range []string{
+				`INSERT INTO tunnel_addresses VALUES('b','ix','专线','ix.example.test',3443,0)`,
+				`UPDATE exit_group_members SET address_id='ix' WHERE node_id='b'`,
+				`INSERT INTO forward_chains VALUES('chain','新链')`,
+				`INSERT INTO forward_chain_hops VALUES('chain',1,'xg')`,
+				`UPDATE forward_rules SET chain_id='chain',exit_group_id='' WHERE id='t'`,
+				`INSERT INTO node_tunnel_grant_results VALUES('b','a','t',910,777,'')`,
+			} {
+				if _, err := db.Exec(statement); err != nil {
+					t.Fatal(statement, err)
+				}
+			}
+			for _, statement := range []string{
+				`DELETE FROM forward_chains WHERE id='chain'`,
+				`DELETE FROM exit_groups WHERE id='xg'`,
+				`DELETE FROM tunnel_addresses WHERE node_id='b' AND id='ix'`,
+				`INSERT INTO node_tunnel_grant_results VALUES('missing','a','t',910,777,'')`,
+				`INSERT INTO node_tunnel_grant_results VALUES('b','missing','t',910,777,'')`,
+				`INSERT INTO node_tunnel_grant_results VALUES('b','a','missing',910,777,'')`,
+			} {
+				if _, err := db.Exec(statement); err == nil {
+					t.Fatal("reference protection missing", statement)
+				}
+			}
+			rows, err := db.Query("PRAGMA foreign_key_check")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rows.Next() {
+				t.Fatal("foreign key corruption")
+			}
+			if err := rows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			rows.Close()
+			if _, err := db.Exec("DELETE FROM forward_rules"); err != nil {
+				t.Fatal(err)
+			}
+			for _, table := range []string{"rule_authorizations", "tunnel_authorization_confirmations", "rule_traffic_totals", "rule_traffic_cursors", "rule_traffic_realtime", "rule_traffic_sources", "node_tunnel_grant_results"} {
+				var count int
+				if err := db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
+					t.Fatal("cascade", table, count, err)
+				}
+			}
+			t.Logf("schema 51; %d original tables/columns preserved; public defaults, IX references and all rule child cascades verified", len(tables))
+		})
 	}
 }

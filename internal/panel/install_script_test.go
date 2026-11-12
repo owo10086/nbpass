@@ -175,11 +175,38 @@ func TestNodeInstallerRepeatPreservesCacheAndInstallsUpdater(t *testing.T) {
 	s.run(true, args...)
 	s.write("/var/lib/nbpass-node/config.enc", "applied-cache", 0600)
 	s.write("/var/lib/nbpass-node/rotation.enc", "dedup-journal", 0600)
+	s.write("/var/lib/nbpass-node/events.enc", "same-identity-events", 0600)
+	s.write("/var/lib/nbpass-node/traffic.enc", "same-identity-traffic", 0600)
 	s.write("/var/lib/nbpass-update/progress.json", "update-progress", 0600)
 	s.write("/etc/systemd/system/nbpass-node.service.d/limits.conf", "[Service]\nLimitNOFILE=70000\n", 0644)
 	key := s.contents("/var/lib/nbpass-node/node.key")
 	args[3] = strings.Repeat("b", 43) // A fresh ticket is required for reinstallation.
+	// IX's manual precondition: no unresolved install transaction, then stop
+	// both components. Only Linux ownership/systemd are replaced in this sandbox;
+	// actual cross-format TLS enrollment is exercised by the cluster harness.
+	if _, err := os.Stat(s.root + "/usr/local/bin/.nbpass-update/pending.json"); !os.IsNotExist(err) {
+		t.Fatal("unrecovered transaction", err)
+	}
+	stop := exec.Command("sh", "-c", "systemctl stop nbpass-node.service nbpass-update.service")
+	stop.Env = s.env
+	if out, err := stop.CombinedOutput(); err != nil {
+		t.Fatal(string(out), err)
+	}
+	previousImage := s.contents("/usr/local/bin/nbpass-node")
+	s.write("/download", s.contents("/download")+"# complete IX release image\n", 0700)
 	s.run(true, args...)
+	currentImage := s.contents("/download")
+	if currentImage == previousImage || s.contents("/usr/local/bin/nbpass-node") != currentImage || s.contents("/usr/local/libexec/nbpass-update") != currentImage {
+		t.Fatal("complete release did not replace both component images")
+	}
+	if s.contents("/var/lib/nbpass-node/events.enc") != "same-identity-events" || s.contents("/var/lib/nbpass-node/traffic.enc") != "same-identity-traffic" {
+		t.Fatal("same identity records lost")
+	}
+	calls := s.contents("/systemctl.calls")
+	stopped := strings.Index(calls, "stop nbpass-node.service nbpass-update.service")
+	if stopped < 0 || !strings.Contains(calls[stopped:], "restart nbpass-update.service\nrestart nbpass-node.service") {
+		t.Fatal("both stopped components were not restarted in order", calls)
+	}
 	if s.contents("/var/lib/nbpass-node/config.enc") != "applied-cache" || s.contents("/var/lib/nbpass-node/rotation.enc") != "dedup-journal" || s.contents("/var/lib/nbpass-node/node.key") != key || s.contents("/var/lib/nbpass-update/progress.json") != "update-progress" {
 		t.Fatal("repeat installation changed persistent node state")
 	}

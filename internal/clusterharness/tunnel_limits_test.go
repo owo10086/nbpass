@@ -19,27 +19,21 @@ import (
 )
 
 type tunnelLimitsFixture struct {
-	h                                              *clusterharness.Harness
-	c                                              *clusterharness.Client
-	entry, exit, group, entryGroup, exitEntryGroup string
-	port                                           func() int
+	h                                                               *clusterharness.Harness
+	c                                                               *clusterharness.Client
+	entry, exit, terminal, group, chain, entryGroup, exitEntryGroup string
+	port                                                            func() int
 }
 
 func tunnelLimitsSetup(t *testing.T, combined bool, entryLimits, exitLimits forwarding.ResourceLimits, options ...func(*node.Config, *node.Dependencies)) *tunnelLimitsFixture {
 	t.Helper()
 	h, c := nodeBrowser(t)
 	entry := addNode(c, "资源入口")
-	exit := entry
-	if !combined {
-		exit = addNode(c, "资源出口")
-	}
+	exit := addNode(c, "资源出口")
 	port, listen := directPorts(t)
 	entryOptions := []func(*node.Config, *node.Dependencies){listen, func(_ *node.Config, d *node.Dependencies) { d.Forwarding.Limits = entryLimits }}
-	if combined {
-		entryOptions = append(entryOptions, options...)
-	}
 	h.StartNode(entry["installation_ticket"].(string), entryOptions...)
-	if !combined {
+	{
 		exitOptions := []func(*node.Config, *node.Dependencies){listen, func(_ *node.Config, d *node.Dependencies) { d.Forwarding.Limits = exitLimits }}
 		h.StartNode(exit["installation_ticket"].(string), append(exitOptions, options...)...)
 	}
@@ -51,11 +45,21 @@ func tunnelLimitsSetup(t *testing.T, combined bool, entryLimits, exitLimits forw
 	c.Do("PUT", "/api/nodes/"+xid+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": port(), "transport": "wss"}, 200)
 	g := c.Do("POST", "/api/exit-groups", map[string]any{"name": "容量出口组", "members": []string{xid}, "strategy": "primary_backup"}, 201)
 	egroup := entryGroup(c, eid)["id"].(string)
-	xgroup := egroup
-	if !combined {
-		xgroup = entryGroup(c, xid)["id"].(string)
+	xgroup := entryGroup(c, xid)["id"].(string)
+	f := &tunnelLimitsFixture{h: h, c: c, entry: eid, exit: xid, group: g["id"].(string), entryGroup: egroup, exitEntryGroup: xgroup, port: port}
+	if combined {
+		// A -> B -> C keeps B's inbound/outbound roles on one physical node
+		// without constructing a newly forbidden A -> A path. A relayed flow
+		// must still consume exactly one B slot, sharing capacity with B direct.
+		terminal := addNode(c, "资源末跳")
+		f.terminal = terminal["id"].(string)
+		h.StartNode(terminal["installation_ticket"].(string), listen)
+		awaitNode(t, c, f.terminal, connected)
+		c.Do("PUT", "/api/nodes/"+f.terminal+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": port(), "transport": "wss"}, 200)
+		last := c.Do("POST", "/api/exit-groups", map[string]any{"name": "资源末跳组", "members": []string{f.terminal}, "strategy": "primary_backup"}, 201)["id"].(string)
+		f.chain = c.Do("POST", "/api/forward-chains", map[string]any{"name": "资源双角色链", "exit_group_ids": []string{f.group, last}}, 201)["id"].(string)
 	}
-	return &tunnelLimitsFixture{h: h, c: c, entry: eid, exit: xid, group: g["id"].(string), entryGroup: egroup, exitEntryGroup: xgroup, port: port}
+	return f
 }
 
 func (f *tunnelLimitsFixture) rule(t *testing.T, target int) (int, string) {
@@ -63,9 +67,14 @@ func (f *tunnelLimitsFixture) rule(t *testing.T, target int) (int, string) {
 	p := f.port()
 	body := directBody(f.entryGroup, p, "127.0.0.1", target)
 	body["kind"], body["exit_group_id"] = "tunnel", f.group
+	if f.chain != "" {
+		delete(body, "exit_group_id")
+		body["chain_id"] = f.chain
+	}
 	r := f.c.Do("POST", "/api/rules", body, 201)
 	awaitRevision(t, f.c, f.exit, 0)
 	awaitRevision(t, f.c, f.entry, 0)
+	awaitRule(t, f.c, r["id"].(string), "正常")
 	return p, r["id"].(string)
 }
 
@@ -91,7 +100,7 @@ func TestTunnelNodeAndRuleBudgetsShareDirectCapacityAndKeepControlResponsive(t *
 		t.Run(side, func(t *testing.T) {
 			limits := forwarding.ResourceLimits{MaxConnections: 3, MaxConnectionsPerRule: 2}
 			var el, xl forwarding.ResourceLimits
-			if side == "exit" {
+			if side == "exit" || side == "combined" {
 				xl = limits
 			} else {
 				el = limits
@@ -103,7 +112,7 @@ func TestTunnelNodeAndRuleBudgetsShareDirectCapacityAndKeepControlResponsive(t *
 			a1, a2 := tcpExchange(t, pa, "L:"), tcpExchange(t, pa, "L:")
 			requireClosed(t, directClient(t, pa))
 			id, gid := f.entry, f.entryGroup
-			if side == "exit" {
+			if side == "exit" || side == "combined" {
 				id, gid = f.exit, f.exitEntryGroup
 			}
 			pd := f.port()
@@ -111,6 +120,9 @@ func TestTunnelNodeAndRuleBudgetsShareDirectCapacityAndKeepControlResponsive(t *
 			awaitRevision(t, f.c, id, 0)
 			direct := tcpExchange(t, pd, "L:")
 			sampleTunnelBusiness(t, f, id, 3)
+			if f.terminal != "" {
+				sampleTunnelBusiness(t, f, f.terminal, 2)
+			}
 			requireClosed(t, directClient(t, pb))
 			f.h.Clock.Advance(10 * time.Second)
 			awaitNode(t, f.c, id, func(row map[string]any) bool { return row["last_seen_at"] == f.h.Clock.Now().Format(time.RFC3339Nano) })
@@ -139,6 +151,9 @@ func TestTunnelNodeAndRuleBudgetsShareDirectCapacityAndKeepControlResponsive(t *
 			direct.Close()
 			sampleTunnelBusiness(t, f, f.entry, 0)
 			sampleTunnelBusiness(t, f, f.exit, 0)
+			if f.terminal != "" {
+				sampleTunnelBusiness(t, f, f.terminal, 0)
+			}
 		})
 	}
 }

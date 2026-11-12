@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"nbpass/internal/compatibility"
 	"nbpass/internal/controlpb"
+	"nbpass/internal/forwarding"
 	"nbpass/internal/node"
 	"net"
 	"net/netip"
@@ -547,4 +549,257 @@ func TestOutboundIPv4SameSnapshotRevalidationFailureIsVisible(t *testing.T) {
 	awaitRule(t, c, tunnel, "正常")
 	outboundExchange(t, directPort, seen, "127.0.0.1")
 	outboundExchange(t, tunnelPort, seen, "127.0.0.1")
+}
+
+// A is a single release: obtain format 1 from the unchanged actual old process,
+// re-enroll the same identity using the actual current executable, then restore
+// while control is unavailable. No cache version or State is synthesized.
+func TestIXSameIdentityActualV1ToV2Reinstallation(t *testing.T) {
+	const commit = "3899928362a75b58ac74ff6844652d319760b656"
+	ctx := context.Background()
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := exec.Command("git", "archive", commit, "api", "internal", "cmd", "go.mod", "go.sum")
+	archive.Dir = root
+	data, err := archive.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	extract := exec.Command("tar", "-xf", "-", "-C", source)
+	extract.Stdin = bytes.NewReader(data)
+	if out, err := extract.CombinedOutput(); err != nil {
+		t.Fatal(string(out), err)
+	}
+	oldBinary, newBinary := filepath.Join(source, "old-node"), filepath.Join(t.TempDir(), "new-node")
+	for _, build := range []struct{ dir, path string }{{source, oldBinary}, {root, newBinary}} {
+		command := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-o", build.path, "./cmd/nbpass-node")
+		command.Dir = build.dir
+		if out, err := command.CombinedOutput(); err != nil {
+			t.Fatal(string(out), err)
+		}
+	}
+	oldBytes, err := os.ReadFile(oldBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("actual historical executable source=%s sha256=%x", commit, sha256.Sum256(oldBytes))
+	h, c := nodeBrowser(t)
+	created := addNode(c, "跨格式同身份")
+	id := created["id"].(string)
+	dir := filepath.Join(t.TempDir(), "node")
+	store := node.FileStore{Dir: dir, Random: rand.Reader}
+	ca := filepath.Join(t.TempDir(), "ca.pem")
+	if err := os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: h.Control.Certificate().Raw}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// The control address/identity stays unchanged. A physical TCP proxy is
+	// closed only after both the old process and enrollment have terminated.
+	proxy, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close()
+	var denied atomic.Bool
+	var deniedConnections atomic.Int32
+	go func() {
+		for {
+			incoming, err := proxy.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer incoming.Close()
+				if denied.Load() {
+					deniedConnections.Add(1)
+					return
+				}
+				outgoing, err := net.Dial("tcp4", h.Control.Listener.Addr().String())
+				if err != nil {
+					return
+				}
+				defer outgoing.Close()
+				done := make(chan struct{})
+				go func() { io.Copy(outgoing, incoming); close(done) }()
+				io.Copy(incoming, outgoing)
+				incoming.Close()
+				outgoing.Close()
+				<-done
+			}()
+		}
+	}()
+	controlURL := "https://" + proxy.Addr().String()
+	command := func(binary string, extra ...string) *exec.Cmd {
+		return exec.Command(binary, append([]string{"--control-url", controlURL, "--data-dir", dir, "--ca-file", ca}, extra...)...)
+	}
+	enroll := func(binary, ticket string) {
+		t.Helper()
+		if out, err := command(binary, "--ticket", ticket, "--enroll-only").CombinedOutput(); err != nil {
+			t.Fatal("enrollment", string(out), err)
+		}
+	}
+	start := func(binary string) func() {
+		t.Helper()
+		cmd := command(binary)
+		var output bytes.Buffer
+		cmd.Stdout, cmd.Stderr = &output, &output
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		var once sync.Once
+		stop := func() {
+			once.Do(func() {
+				cmd.Process.Signal(os.Interrupt)
+				err := cmd.Wait()
+				if err != nil {
+					t.Errorf("process stop: %v %s", err, output.String())
+				}
+			})
+		}
+		t.Cleanup(stop)
+		return stop
+	}
+	enroll(oldBinary, created["installation_ticket"].(string))
+	stopOld := start(oldBinary)
+	awaitNode(t, c, id, connected)
+	reserve := func() int {
+		t.Helper()
+		listener, err := net.Listen("tcp4", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := listener.Addr().(*net.TCPAddr).Port
+		if err := listener.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return port
+	}
+	target, seen := observedSourceTarget(t)
+	port, revokedPort := reserve(), reserve()
+	body := directBody("", port, "127.0.0.1", target)
+	body["entry_node_id"] = id
+	rule := c.Do("POST", "/api/rules", body, 201)["id"].(string)
+	body = directBody("", revokedPort, "127.0.0.1", target)
+	body["entry_node_id"] = id
+	revoked := c.Do("POST", "/api/rules", body, 201)["id"].(string)
+	awaitRule(t, c, rule, "正常")
+	awaitRule(t, c, revoked, "正常")
+	outboundExchange(t, port, seen, "127.0.0.1")
+	outboundExchange(t, revokedPort, seen, "127.0.0.1")
+	c.Do("DELETE", "/api/rules/"+revoked, nil, 204)
+	awaitNode(t, c, id, func(row map[string]any) bool { return row["desired_revision"] == row["applied_revision"] })
+	stopOld()
+	type cache struct {
+		Version    int              `json:"version"`
+		NodeID     string           `json:"node_id"`
+		ControlURL string           `json:"control_url"`
+		State      forwarding.State `json:"state"`
+	}
+	readCache := func() cache {
+		t.Helper()
+		raw, err := store.LoadConfig(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var v cache
+		if err = json.Unmarshal(raw, &v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	before := readCache()
+	if before.Version != 1 || before.NodeID != id || before.ControlURL != controlURL || len(before.State.Rules) != 1 || before.State.Rules[0].Id != rule || before.State.HighestRevision == 0 {
+		t.Fatal("old actual cache/revocation boundary", before.Version, before.State.HighestRevision)
+	}
+	oldCredentials, err := store.Load(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue, err := node.OpenEventQueue(ctx, store, h.Clock, rand.Reader, node.EventLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = queue.Record(ctx, "sync_failed", "同身份重装必须保留的事件", before.State.HighestRevision); err != nil {
+		t.Fatal(err)
+	}
+	preserved := map[string][]byte{}
+	for _, name := range []string{"node.key", "config.enc", "events.enc", "traffic.enc", "rotation.enc", "self-check.enc"} {
+		raw, err := os.ReadFile(filepath.Join(dir, name))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		preserved[name] = raw
+	}
+	reset := c.Do("POST", "/api/nodes/"+id+"/token/reset", nil, 200)
+	enroll(newBinary, reset["installation_ticket"].(string))
+	for name, raw := range preserved {
+		after, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil || !bytes.Equal(raw, after) {
+			t.Fatal("same identity enrollment altered", name, err)
+		}
+	}
+	newCredentials, err := store.Load(ctx)
+	if err != nil || newCredentials.NodeID != oldCredentials.NodeID || newCredentials.ControlURL != oldCredentials.ControlURL || newCredentials.Token == oldCredentials.Token {
+		t.Fatal("fresh same-identity credential missing", err)
+	}
+	if out, err := command(newBinary, "--ticket", reset["installation_ticket"].(string), "--enroll-only").CombinedOutput(); err == nil {
+		t.Fatal("consumed ticket reused", string(out))
+	}
+	denied.Store(true)
+	stopNew := start(newBinary)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		raw, err := store.LoadConfig(ctx)
+		var v cache
+		if err == nil && json.Unmarshal(raw, &v) == nil && v.Version == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("actual new offline restore did not write format 2")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// A denied control dial proves Run passed rotation/self-check/traffic
+	// startup; cache persistence alone is earlier and cannot be a stop barrier.
+	for deniedConnections.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("offline process did not finish local initialization")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	outboundExchange(t, port, seen, "127.0.0.1")
+	assertTCPFailure(t, revokedPort)
+	stopNew()
+	after := readCache()
+	if after.State.HighestRevision != before.State.HighestRevision || after.State.HighestDigest != before.State.HighestDigest || after.State.AppliedRevision != before.State.AppliedRevision || len(after.State.Rules) != 1 || after.State.Rules[0].Id != rule {
+		t.Fatal("format migration changed high-water/applied/revocation state")
+	}
+	key, err := os.ReadFile(filepath.Join(dir, "node.key"))
+	if err != nil || !bytes.Equal(key, preserved["node.key"]) {
+		t.Fatal("key changed", err)
+	}
+	events, err := store.LoadEvents(ctx)
+	if err != nil || !bytes.Contains(events, []byte("同身份重装必须保留的事件")) {
+		t.Fatal("same identity event lost", err)
+	}
+	if out, err := command(oldBinary).CombinedOutput(); err == nil || !bytes.Contains(out, []byte("节点配置缓存格式或身份不匹配")) {
+		t.Fatal("actual old executable accepted converted cache", string(out), err)
+	}
+	assertTCPFailure(t, port)
+	assertTCPFailure(t, revokedPort)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".config-") || strings.HasPrefix(entry.Name(), "config-v1") {
+			t.Fatal("left fallback/temporary configuration", entry.Name())
+		}
+	}
+	t.Logf("actual old SHA256=%x; same identity reset/enroll preserved %d state files; offline 1->2 retained revision %d and only current rule; revoked listener absent and actual old rejects 2", sha256.Sum256(oldBytes), len(preserved), after.State.HighestRevision)
 }

@@ -11,6 +11,7 @@ import (
 	"nbpass/internal/dnswatch"
 	"nbpass/internal/node"
 	"nbpass/internal/panel"
+	"nbpass/internal/platform"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -384,7 +385,18 @@ func TestAllPublishSetWatchAndPerRecordStatusAudit(t *testing.T) {
 	resolver.Set(entryDomain, entryDoH, "8.8.8.8")
 	const otherDoH = "https://other.example/dns-query"
 	resolver.Set(entryDomain, otherDoH, "1.1.1.1")
-	h, c, fake, g, a, b := allHTTPRigWith(t, nil, true, func(d *panel.Dependencies) { d.DNSWatchLookup = resolver.Lookup })
+	// 审计写回故意慢于假钟推进间隔，确保真实 HTTP 不会被测试时钟误取消。
+	var slowAuditWrite atomic.Bool
+	h, c, fake, g, a, b := allHTTPRigWith(t, func(w http.ResponseWriter, req *http.Request, _ *clusterharness.DNSPod) bool {
+		if slowAuditWrite.Load() && req.Form.Get("Action") == "ModifyRecord" {
+			select {
+			case <-req.Context().Done():
+				return true
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+		return false
+	}, true, func(d *panel.Dependencies) { d.DNSWatchLookup = resolver.Lookup })
 	c.Do("PUT", "/api/settings/dns-watch", map[string]any{"resolvers": []map[string]string{{"kind": "doh", "address": entryDoH}, {"kind": "doh", "address": otherDoH}}}, 200)
 	publishAll(c, g, map[string]string{a: "8.8.8.8", b: "1.1.1.1"}, 202)
 	awaitDNSStage(t, c, g, panel.EntryWritten)
@@ -420,18 +432,57 @@ func TestAllPublishSetWatchAndPerRecordStatusAudit(t *testing.T) {
 	r.Value = "4.2.2.2"
 	r.Enabled = false
 	fake.Set("example.com", r)
-	for i := 0; i < 35; i++ {
-		h.Clock.Advance(10 * time.Second)
+	slowAuditWrite.Store(true)
+	// 仅推进到已持久化的下一轮审计；审计开始后冻结假钟，让真实
+	// DB/HTTP 写入和读回完成，不能用连续 10 秒跳跃取消其 10 秒期限。
+	db, err := (platform.SQLite{Path: filepath.Join(h.Dir, "panel.db")}).Open(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var nextAudit int64
+	if err := db.QueryRow("SELECT next_check_at FROM entry_dns_audits WHERE group_id=?", g).Scan(&nextAudit); err != nil {
+		t.Fatal(err)
+	}
+	previousAction := publication(c, g)["action"].(map[string]any)["id"]
+	due := time.Unix(0, max(nextAudit, h.Clock.Now().UnixNano())).Add(time.Second)
+	for h.Clock.Now().Before(due) {
+		h.Clock.Advance(min(10*time.Second, due.Sub(h.Clock.Now())))
 		time.Sleep(3 * time.Millisecond)
 	}
-	awaitDNSStage(t, c, g, panel.EntryWritten)
+	// 审计循环可能刚完成上一轮并在最后一次 tick 之后才注册一秒定时器。
+	// 只在持久化截止点尚未前移（本轮尚未开始）时继续唤醒；一旦开始即停钟。
 	deadline := time.Now().Add(5 * time.Second)
-	for fake.Record("example.com", "100").Value != "8.8.8.8" || !fake.Record("example.com", "100").Enabled {
+	for {
+		var scheduled int64
+		if err := db.QueryRow("SELECT next_check_at FROM entry_dns_audits WHERE group_id=?", g).Scan(&scheduled); err != nil {
+			t.Fatal(err)
+		}
+		if scheduled > h.Clock.Now().UnixNano() {
+			break
+		}
 		if time.Now().After(deadline) {
-			t.Fatal("未按记录期望核对地址和启用状态")
+			t.Fatal("到期记录审计没有开始")
 		}
 		h.Clock.Advance(time.Second)
-		time.Sleep(5 * time.Millisecond)
+		time.Sleep(time.Millisecond)
+	}
+	for {
+		action := publication(c, g)["action"].(map[string]any)
+		if action["id"] != previousAction && action["kind"] == "writeback" {
+			break
+		}
+		if time.Now().After(deadline) {
+			var afterAudit int64
+			var auditError string
+			_ = db.QueryRow("SELECT next_check_at,last_error FROM entry_dns_audits WHERE group_id=?", g).Scan(&afterAudit, &auditError)
+			t.Fatalf("到期审计未提交新的记录恢复动作: now=%v due=%v after=%v error=%s action=%v", h.Clock.Now(), due, time.Unix(0, afterAudit), auditError, action)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	awaitDNSStage(t, c, g, panel.EntryWritten)
+	if fake.Record("example.com", "100").Value != "8.8.8.8" || !fake.Record("example.com", "100").Enabled {
+		t.Fatal("未按记录期望核对地址和启用状态")
 	}
 	c.Do("DELETE", "/api/entry-groups/"+g+"/members/"+b, nil, 202)
 	awaitDNSStage(t, c, g, panel.EntryWritten)

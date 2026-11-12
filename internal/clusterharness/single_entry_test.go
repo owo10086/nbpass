@@ -138,12 +138,12 @@ func TestSingleEntryJSONFormatsRoundTripAndAtomicRejection(t *testing.T) {
 	awaitRule(t, c, rid, "正常")
 	tcpExchange(t, one["listen_port"].(int), "J:")
 	exported := c.Do("GET", "/api/rules/export?id="+rid, nil, 200)
-	if exported["format_version"] != float64(2) {
-		t.Fatalf("未导出格式2: %v", exported)
+	if exported["format_version"] != float64(3) {
+		t.Fatalf("格式2导入后未导出当前格式3: %v", exported)
 	}
 	importRules(c, "", "overwrite", exported, 200)
 	if again := c.Do("GET", "/api/rules/export?id="+rid, nil, 200); !reflect.DeepEqual(exported, again) {
-		t.Fatal("格式2往返不一致")
+		t.Fatal("旧格式2导入、当前格式3导出再往返不一致")
 	}
 	for _, both := range []bool{false, true} {
 		bad := singleEntryBody(id, h.ReserveTCPPort(), "example.com", 443)

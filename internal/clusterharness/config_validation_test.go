@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,7 +12,6 @@ import (
 	"nbpass/internal/clusterharness"
 	"nbpass/internal/node"
 	"nbpass/internal/panel"
-	"nbpass/internal/platform"
 )
 
 func requireErrorContains(t *testing.T, result map[string]any, parts ...string) {
@@ -214,38 +212,23 @@ replay:
 }
 
 func TestNodeDeletionRecognizesFutureExitGroupRelations(t *testing.T) {
-	h, c := nodeBrowser(t)
+	_, c := nodeBrowser(t)
 	id := addNode(c, "出口引用节点")["id"].(string)
 	source := addNode(c, "隧道入口夹具")["id"].(string)
 	g := entryGroup(c, source)["id"].(string)
+	c.Do("PUT", "/api/nodes/"+id+"/tunnel", map[string]any{"address": "203.0.113.5", "listen_port": 18443, "transport": "wss"}, 200)
+	exitGroup := c.Do("POST", "/api/exit-groups", map[string]any{"name": "出口组夹具", "strategy": "primary_backup", "members": []string{id}}, 201)["id"].(string)
 	body := directBody(g, 27002, "example.com", 443)
-	body["enabled"] = false
-	rule := c.Do("POST", "/api/rules", body, 201)
-	db, err := (platform.SQLite{Path: filepath.Join(h.Dir, "panel.db")}).Open(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if _, err := db.Exec(`INSERT INTO exit_groups(id, name, strategy) VALUES('exit-fixture', '出口组夹具', 'single')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec("INSERT INTO tunnel_exits(node_id,address,listen_port,transport,server_name,certificate_pem,private_key_ciphertext) VALUES(?,?,?,?,?,?,?)", id, "203.0.113.5", 18443, "wss", "exit.fixture", []byte("x"), []byte("x")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec("INSERT INTO exit_group_members(group_id, node_id, position) VALUES('exit-fixture', ?, 0)", id); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec("UPDATE forward_rules SET exit_group_id='exit-fixture' WHERE id=?", rule["id"]); err != nil {
-		t.Fatal(err)
-	}
+	body["enabled"], body["kind"], body["exit_group_id"] = false, "tunnel", exitGroup
+	c.Do("POST", "/api/rules", body, 201)
 	result := c.Do("DELETE", "/api/nodes/"+id, nil, 409)
 	requireErrorContains(t, result, "出口组夹具")
 	ref := result["references"].([]any)[0].(map[string]any)
-	if ref["kind"] != "exit_group" || ref["id"] != "exit-fixture" {
+	if ref["kind"] != "exit_group" || ref["id"] != exitGroup {
 		t.Fatalf("出口组引用不明确: %v", ref)
 	}
 	if len(result["references"].([]any)) != 2 {
-		t.Fatalf("未列出经出口组引用节点的规则: %v", result)
+		t.Fatalf("未列出经出口组引用节点的停用规则: %v", result)
 	}
 }
 

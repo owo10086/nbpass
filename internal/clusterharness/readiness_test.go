@@ -164,8 +164,48 @@ func TestEntryReadinessRequiresAnAuthorizedSuccessfulExitForEveryTunnelRule(t *t
 	if row["ready"] != false || !hasEntryReason(row, "readiness_reasons", "tunnel_handshake_missing") {
 		t.Fatalf("全部出口握手失败仍就绪: %v", row)
 	}
+	// 先走满失败门槛，再验证恢复成功不能绕过连续 60 秒恢复期。
+	var health map[string]any
+	for range 6 {
+		health = advanceExitProbe(t, r, r.exitIDs[1])
+		if health["state"] == "unhealthy" {
+			break
+		}
+	}
+	if health["state"] != "unhealthy" {
+		t.Fatalf("恢复前未进入不可用状态: %v", health)
+	}
 	r.links[1].recover()
-	advanceExitProbe(t, r, r.exitIDs[1])
+	for range 3 {
+		health = advanceExitProbe(t, r, r.exitIDs[1])
+		if health["state"] == "recovering" {
+			break
+		}
+	}
+	if health["state"] != "recovering" || health["last_probe"] != "success" {
+		t.Fatalf("成功握手未进入恢复期: %v", health)
+	}
+	start := health["recovery_since_unix"].(float64)
+	row = sampleTunnelEntryState(t, r, group)
+	if float64(r.h.Clock.Now().Unix())-start >= 60 || row["ready"] != false || !hasEntryReason(row, "readiness_reasons", "tunnel_handshake_missing") {
+		t.Fatalf("恢复期成功握手不应提前使入口就绪: 入口=%v 健康=%v", row, exitHealthRow(t, r, r.exitIDs[1]))
+	}
+	for range 16 {
+		health = advanceExitProbe(t, r, r.exitIDs[1])
+		elapsed := health["checked_at_unix"].(float64) - start
+		if health["last_probe"] != "success" || health["state"] == "recovering" && health["recovery_since_unix"] != start {
+			t.Fatalf("恢复期没有保持连续成功: %v", health)
+		}
+		if elapsed < 60 && health["state"] != "recovering" {
+			t.Fatalf("未满 60 秒提前恢复: %v", health)
+		}
+		if health["state"] == "healthy" {
+			break
+		}
+	}
+	if health["state"] != "healthy" {
+		t.Fatalf("连续成功满 60 秒仍未健康: %v", health)
+	}
 	row = awaitTunnelEntryReady(t, r, group, true)
 	if row["ready"] != true {
 		t.Fatalf("一个获授权出口恢复后仍不就绪: %v", row)
