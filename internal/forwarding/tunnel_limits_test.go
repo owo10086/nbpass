@@ -740,3 +740,71 @@ func TestTunnelCanceledLockWaitDoesNotBlockReadiness(t *testing.T) {
 		})
 	}
 }
+
+func TestTunnelNodeResourceRefusalDoesNotReadRequest(t *testing.T) {
+	for _, limit := range []string{"connections", "pending"} {
+		t.Run(limit, func(t *testing.T) {
+			limits := ResourceLimits{}
+			if limit == "connections" {
+				limits.MaxConnections = 1
+			} else {
+				limits.MaxPendingDials = 1
+			}
+			engine, client, _ := limitedTunnelPair(t, limits)
+			engine.deps.ProcessInstance = "owner-process"
+			lease := engine.resources.reserveTunnel()
+			if lease == nil {
+				t.Fatal("quota not reserved")
+			}
+			defer lease.release()
+			session, err := client.getSession(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			stream, err := session.OpenStream(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Reset()
+			stream.SetReadDeadline(time.Now().Add(time.Second))
+			// Send no request at all. The gate must return before parsing a rule.
+			var result tunnelResult
+			if err := readTunnelMessage(stream, &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Failure != failureLocal || result.Edge != nil || result.ResourceOrder == nil || result.ResourceOrder.Instance != "owner-process" || result.ResourceOrder.Sequence != 1 {
+				t.Fatal("unscoped refusal lacks bounded owner order", result)
+			}
+			if len(engine.ChainFailures()) != 0 {
+				t.Fatal("unparsed request manufactured a rule failure")
+			}
+			engine.resources.mu.Lock()
+			connections, pending := engine.resources.connections, engine.resources.pending
+			rules := len(engine.resources.rules)
+			engine.resources.mu.Unlock()
+			if connections != 1 || pending != 1 || rules != 0 {
+				t.Fatal("refusal changed resource budgets", connections, pending, rules)
+			}
+		})
+	}
+}
+
+func TestTunnelNodeResourceOrderRequiresAuthenticatedCarrier(t *testing.T) {
+	engine, client, _ := limitedTunnelPair(t, ResourceLimits{MaxConnections: 1})
+	engine.deps.ProcessInstance = "owner-process"
+	lease := engine.resources.reserveTunnel()
+	if lease == nil {
+		t.Fatal("quota not reserved")
+	}
+	defer lease.release()
+	client.endpoint.Credential = strings.Repeat("b", 43)
+	if _, err := client.getSession(context.Background()); err == nil {
+		t.Fatal("unauthenticated carrier accepted")
+	}
+	engine.chainFailuresMu.Lock()
+	sequence := engine.chainObservationSequence
+	engine.chainFailuresMu.Unlock()
+	if sequence != 0 || len(engine.ChainFailures()) != 0 {
+		t.Fatal("unauthenticated request produced resource provenance", sequence)
+	}
+}

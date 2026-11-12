@@ -38,6 +38,23 @@ func (e *Engine) UpgradeReady(ctx context.Context) error {
 			pending[client] = append(pending[client], selection.rule)
 		}
 	}
+
+	// Relay-only processes have no business listeners, but their own suffix
+	// must still pass a fresh authorized check before upgrade confirmation.
+	if e.tunnelServer != nil {
+		e.tunnelServer.mu.Lock()
+		grants := append([]*controlpb.TunnelGrant{}, e.tunnelServer.config.Grants...)
+		e.tunnelServer.mu.Unlock()
+		for _, g := range grants {
+			if g.NextExitGroupId != "" {
+				selection := e.relaySelection(g, nil)
+				ready[g.Rule.Id] = false
+				for _, client := range selection.clients {
+					pending[client] = append(pending[client], selection.rule)
+				}
+			}
+		}
+	}
 	results := make(chan []string, len(pending))
 	for client, rules := range pending {
 		go func() {

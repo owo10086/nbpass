@@ -23,9 +23,10 @@ type Dependencies struct {
 	Limits           ResourceLimits
 	Clock            timing.Clock
 	// NodeID 用于兼任入口和出口时去重本机业务流；由认证后的节点核心赋值。
-	NodeID     string
-	LookupIPv4 func(context.Context, string) ([]netip.Addr, error)
-	DialTarget func(context.Context, string) (net.Conn, error)
+	NodeID          string
+	ProcessInstance string
+	LookupIPv4      func(context.Context, string) ([]netip.Addr, error)
+	DialTarget      func(context.Context, string) (net.Conn, error)
 	// DialTargetFrom 仅用于有源地址的最终目标拨号，不能回退到 DialTarget。
 	DialTargetFrom func(context.Context, string, string) (net.Conn, error)
 	// LocalIPv4 枚举本机接口地址，应用和缓存恢复均重新读取。
@@ -37,33 +38,39 @@ type Dependencies struct {
 }
 
 type Engine struct {
-	outbound            atomic.Pointer[outboundBinding]
-	traffic             trafficMeter
-	checkConfigured     bool
-	checkListener       net.Listener
-	checkPort           uint32
-	checkError          string
-	resources           *resourceLimiter
-	businessConnections atomic.Uint64
-	tunnelConnections   atomic.Uint64
-	tunnelServer        *tunnelServer
-	healthMu            sync.Mutex
-	probeSlots          chan struct{}
-	tunnelClients       map[[2]string]*tunnelClient
-	deps                Dependencies
-	rules               map[string]*listenerRule
-	revision            uint64
-	digest              string
-	highest             uint64
-	highestDigest       string
-	results             []*controlpb.RuleApplyResult
-	tunnelError         string
-	exitGroups          map[string]*controlpb.ExitGroup
-	grantResults        []*controlpb.TunnelGrantApplyResult
-	grantResultsMu      sync.Mutex
-	chainRules          map[string]*controlpb.ForwardRule
-	chainFailuresMu     sync.Mutex
-	chainFailures       map[string]ChainFailureObservation
+	outbound                 atomic.Pointer[outboundBinding]
+	traffic                  trafficMeter
+	checkConfigured          bool
+	checkListener            net.Listener
+	checkPort                uint32
+	checkError               string
+	resources                *resourceLimiter
+	businessConnections      atomic.Uint64
+	tunnelConnections        atomic.Uint64
+	tunnelServer             *tunnelServer
+	healthMu                 sync.Mutex
+	probeSlots               chan struct{}
+	tunnelClients            map[[2]string]*tunnelClient
+	deps                     Dependencies
+	rules                    map[string]*listenerRule
+	revision                 uint64
+	digest                   string
+	highest                  uint64
+	highestDigest            string
+	results                  []*controlpb.RuleApplyResult
+	tunnelError              string
+	exitGroups               map[string]*controlpb.ExitGroup
+	grantResults             []*controlpb.TunnelGrantApplyResult
+	grantResultsMu           sync.Mutex
+	chainRules               map[string]*controlpb.ForwardRule
+	chainObservationSequence uint64
+	chainSuccesses           map[string]ChainFailureObservation
+	chainResourceFlushMu     sync.Mutex
+	chainResources           map[string]ChainFailureObservation
+	chainResourceBytes       int
+	chainResourceGap         ChainResourceGaps
+	chainFailuresMu          sync.Mutex
+	chainFailures            map[string]ChainFailureObservation
 }
 
 func NewEngine(deps Dependencies) *Engine {

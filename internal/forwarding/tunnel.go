@@ -54,10 +54,11 @@ type tunnelRequest struct {
 	Check *controlpb.ForwardRule `json:"check,omitempty"`
 }
 type tunnelResult struct {
-	Edge    *ChainFailure `json:"edge,omitempty"`
-	Failure failureClass  `json:"failure,omitempty"`
-	OK      bool          `json:"ok"`
-	Ready   bool          `json:"ready,omitempty"`
+	ResourceOrder *ChainResourceOrder `json:"resource_order,omitempty"`
+	Edge          *ChainFailure       `json:"edge,omitempty"`
+	Failure       failureClass        `json:"failure,omitempty"`
+	OK            bool                `json:"ok"`
+	Ready         bool                `json:"ready,omitempty"`
 	// 仅认证响应声明预检能力；旧节点缺省不支持。
 	CheckSupported bool `json:"check_supported,omitempty"`
 }
@@ -324,16 +325,18 @@ func (c *tunnelClient) dial(ctx context.Context, rule *controlpb.ForwardRule, cl
 	return c.open(ctx, request, cleanup...)
 }
 
-func (c *tunnelClient) ready(ctx context.Context, rule *controlpb.ForwardRule) error {
+func (c *tunnelClient) ready(ctx context.Context, rule *controlpb.ForwardRule, alreadyReserved ...bool) error {
 	ctx, cancel := c.engine.tunnelTimeout(ctx, c.engine.resources.limits.TunnelHandshakeTimeout)
 	defer cancel()
 	// 预检也预占入口的节点/规则/待拨号预算；同机出口沿用已认证身份去重。
-	lease := c.engine.resources.acquire(rule.Id)
-	if lease == nil {
-		return errTunnelCapacity
-	}
 	cleanup := &tunnelAttemptCleanup{}
-	defer cleanup.after(lease.release)
+	if len(alreadyReserved) == 0 || !alreadyReserved[0] {
+		lease := c.engine.resources.acquire(rule.Id)
+		if lease == nil {
+			return errTunnelCapacity
+		}
+		defer cleanup.after(lease.release)
+	}
 	request := streamAuthorization(c.currentEndpoint().EntryId, rule)
 	request.Check = &controlpb.ForwardRule{Id: rule.Id, AuthorizationGeneration: rule.AuthorizationGeneration, TargetAddress: rule.TargetAddress, TargetPort: rule.TargetPort, TargetFamily: rule.TargetFamily, ChainId: rule.ChainId, HopIndex: rule.HopIndex}
 	if rule.ChainId != "" {
@@ -422,10 +425,10 @@ func (c *tunnelClient) openOnce(ctx context.Context, request tunnelRequest, clea
 			if result.Edge == nil && (class == failureLocal || class == failureConfig) {
 				result.Edge = &ChainFailure{FromNodeID: c.currentEndpoint().NodeId, HopIndex: request.HopIndex, RuleGeneration: request.Generation, GrantGeneration: request.Generation, ChainFingerprint: request.ChainFingerprint}
 			}
-			if class == failureLink || !ValidateChainFailureFromNext(request.rule, c.currentEndpoint(), string(class), result.Edge) {
+			if !ValidChainResourceOrder(result.ResourceOrder, string(class), result.Edge) || class == failureLink || !ValidateChainFailureFromNext(request.rule, c.currentEndpoint(), string(class), result.Edge) {
 				return nil, failTunnel(failureConfig, errors.New("下游失败证据无效"))
 			}
-			return nil, &tunnelFailure{class: class, cause: errors.New("链式建流失败"), edge: result.Edge}
+			return nil, &tunnelFailure{class: class, cause: errors.New("链式建流失败"), edge: result.Edge, resourceOrder: result.ResourceOrder}
 		}
 		if class != failureTarget && class != failureLocal && class != failureConfig {
 			class = failureConfig
@@ -641,7 +644,7 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if auth.EntryID != s.engine.deps.NodeID {
 			lease = s.engine.resources.reserveTunnel()
 			if lease == nil {
-				s.finishStream(stream, tunnelResult{Failure: failureLocal})
+				s.finishStream(stream, tunnelResult{Failure: failureLocal, ResourceOrder: s.engine.nextChainResourceOrder()})
 				(&tunnelStream{Stream: stream, engine: s.engine}).Close()
 				continue
 			}

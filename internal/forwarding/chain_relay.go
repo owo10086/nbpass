@@ -125,39 +125,61 @@ func (e *Engine) TunnelGrantResults() []*controlpb.TunnelGrantApplyResult {
 // ChainFailureObservation is a stream-establishment observation, separate from
 // next-edge handshake health. Evidence remains bound to its exact generation.
 type ChainFailureObservation struct {
-	RuleID     string
-	ChainID    string
-	Class      string
-	Edge       ChainFailure
-	ObservedAt time.Time
+	ResourceOrder *ChainResourceOrder `json:",omitempty"`
+	Sequence      uint64
+	RuleID        string
+	ChainID       string
+	Class         string
+	Edge          ChainFailure
+	ObservedAt    time.Time
 }
 
-func (e *Engine) recordChainFailure(rule *controlpb.ForwardRule, err error) {
+func (e *Engine) recordChainFailure(rule *controlpb.ForwardRule, err error) *ChainResourceOrder {
 	var failure *tunnelFailure
 	if !errors.As(err, &failure) || failure.edge == nil {
-		return
+		return nil
 	}
 	e.chainFailuresMu.Lock()
 	defer e.chainFailuresMu.Unlock()
 	current := e.chainRules[rule.Id]
 	if current == nil || current.AuthorizationGeneration != rule.AuthorizationGeneration || current.GetChainAuthorization().GetFingerprint() != rule.GetChainAuthorization().GetFingerprint() {
-		return
+		return nil
 	}
 	if e.chainFailures == nil {
 		e.chainFailures = map[string]ChainFailureObservation{}
 	}
 	// One latest outcome per local rule; delayed old generations never replace new.
-	previous := e.chainFailures[rule.Id]
-	if previous.Edge.RuleGeneration > rule.AuthorizationGeneration {
-		return
+	e.chainObservationSequence++
+	observation := ChainFailureObservation{Sequence: e.chainObservationSequence, RuleID: rule.Id, ChainID: rule.ChainId, Class: string(failure.class), Edge: *failure.edge, ObservedAt: e.deps.Now()}
+	observation.ResourceOrder = failure.resourceOrder
+	if failure.class == failureLocal && failure.edge.FromNodeID == e.deps.NodeID && failure.edge.ToNodeID == "" {
+		observation.ResourceOrder = e.chainResourceOrder(observation.Sequence)
 	}
-	e.chainFailures[rule.Id] = ChainFailureObservation{RuleID: rule.Id, ChainID: rule.ChainId, Class: string(failure.class), Edge: *failure.edge, ObservedAt: e.deps.Now()}
+	if observation.ResourceOrder != nil && observation.Edge.FromNodeID != e.deps.NodeID {
+		e.recordResourceCandidate(observation)
+		return observation.ResourceOrder
+	}
+	key := ChainObservationKey(observation)
+	previous := e.chainFailures[key]
+	if previous.Edge.RuleGeneration > rule.AuthorizationGeneration {
+		return nil
+	}
+	// Concurrent downstream responses may arrive out of order before the
+	// heartbeat coalesces them. Preserve the newest actual owner's refusal.
+	if previous.ResourceOrder != nil && observation.ResourceOrder != nil && previous.ResourceOrder.Instance == observation.ResourceOrder.Instance && previous.ResourceOrder.Sequence >= observation.ResourceOrder.Sequence {
+		return observation.ResourceOrder
+	}
+	e.chainFailures[key] = observation
+	return observation.ResourceOrder
 }
 func (e *Engine) ChainFailures() []ChainFailureObservation {
 	e.chainFailuresMu.Lock()
 	defer e.chainFailuresMu.Unlock()
 	out := make([]ChainFailureObservation, 0, len(e.chainFailures))
 	for _, f := range e.chainFailures {
+		out = append(out, f)
+	}
+	for _, f := range e.chainResources {
 		out = append(out, f)
 	}
 	return out
@@ -282,10 +304,59 @@ func (e *Engine) setChainRules(snapshot *controlpb.ConfigSnapshot) {
 			e.chainRules[r.Id] = proto.Clone(r).(*controlpb.ForwardRule)
 		}
 	}
+	for id, old := range e.chainSuccesses {
+		r := e.chainRules[old.RuleID]
+		if r == nil || r.AuthorizationGeneration != old.Edge.RuleGeneration || r.GetChainAuthorization().GetFingerprint() != old.Edge.ChainFingerprint {
+			delete(e.chainSuccesses, id)
+		}
+	}
+	for id, old := range e.chainResources {
+		r := e.chainRules[old.RuleID]
+		if r == nil || r.AuthorizationGeneration != old.Edge.RuleGeneration || r.GetChainAuthorization().GetFingerprint() != old.Edge.ChainFingerprint {
+			delete(e.chainResources, id)
+			e.chainResourceBytes -= resourceObservationBytes(old)
+		}
+	}
 	for id, old := range e.chainFailures {
-		r := e.chainRules[id]
+		r := e.chainRules[old.RuleID]
 		if r == nil || r.AuthorizationGeneration != old.Edge.RuleGeneration || r.GetChainAuthorization().GetFingerprint() != old.Edge.ChainFingerprint {
 			delete(e.chainFailures, id)
 		}
 	}
+}
+
+func (e *Engine) ChainEstablishments() []ChainFailureObservation {
+	e.chainFailuresMu.Lock()
+	defer e.chainFailuresMu.Unlock()
+	out := []ChainFailureObservation{}
+	for _, v := range e.chainSuccesses {
+		out = append(out, v)
+	}
+	return out
+}
+func (e *Engine) recordChainEstablishment(r *controlpb.ForwardRule, ep *controlpb.TunnelEndpoint) {
+	e.recordChainSuccess(r, chainEdgeFailure(r, ep))
+}
+func (e *Engine) recordChainSuccess(r *controlpb.ForwardRule, edge *ChainFailure) {
+	e.recordChainBusinessSuccess(r, edge, "established")
+}
+func (e *Engine) recordChainBusinessSuccess(r *controlpb.ForwardRule, edge *ChainFailure, class string) {
+	if r.GetChainId() == "" {
+		return
+	}
+	e.chainFailuresMu.Lock()
+	defer e.chainFailuresMu.Unlock()
+	current := e.chainRules[r.Id]
+	if current == nil || current.AuthorizationGeneration != r.AuthorizationGeneration || current.GetChainAuthorization().GetFingerprint() != r.GetChainAuthorization().GetFingerprint() {
+		return
+	}
+	if e.chainSuccesses == nil {
+		e.chainSuccesses = map[string]ChainFailureObservation{}
+	}
+	e.chainObservationSequence++
+	o := ChainFailureObservation{Sequence: e.chainObservationSequence, RuleID: r.Id, ChainID: r.ChainId, Class: class, Edge: *edge, ObservedAt: e.deps.Now()}
+	if class == "local_established" {
+		o.ResourceOrder = e.chainResourceOrder(o.Sequence)
+	}
+	e.chainSuccesses[ChainObservationKey(o)] = o
 }

@@ -146,7 +146,11 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 	request.nextGroup = grant.NextExitGroupId
 	request.selectedNext = &atomic.Pointer[controlpb.TunnelEndpoint]{}
 	if lease != nil && !lease.assignRule(rule.Id) {
-		s.finishStream(stream, s.chainLocalResult(rule, failureLocal))
+		result := s.chainLocalResult(rule, failureLocal)
+		if !check {
+			result.ResourceOrder = s.engine.recordChainFailure(rule, &tunnelFailure{class: result.Failure, edge: result.Edge, resourceOrder: result.ResourceOrder})
+		}
+		s.finishStream(stream, result)
 		return
 	}
 	binding := s.engine.outboundBinding()
@@ -155,7 +159,23 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 		return
 	}
 	if check {
-		// 预检只核验授权，不拨目标；FIN 保留响应，随后 RST 回收流槽。
+		// A chain readiness exchange traverses the authorized suffix without
+		// resolving or dialing the target. It shares the incoming budget.
+		if grant.NextExitGroupId != "" {
+			checkCtx, stopCheck := chainEstablishmentContext(ctx, s.engine, request, receivedAt)
+			err := s.engine.relaySelection(grant, nil).checkReady(checkCtx, true)
+			stopCheck()
+			if err != nil {
+				result := s.chainLocalResult(rule, classifyTunnel(err))
+				var failure *tunnelFailure
+				if errors.As(err, &failure) && failure.edge != nil {
+					result.Edge = failure.edge
+					result.ResourceOrder = failure.resourceOrder
+				}
+				s.finishStream(stream, upstreamChainResult(result))
+				return
+			}
+		}
 		s.finishStream(stream, tunnelResult{OK: true, Ready: true})
 		return
 	}
@@ -187,8 +207,10 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 		var failure *tunnelFailure
 		if grant.NextExitGroupId != "" && errors.As(err, &failure) && failure.edge != nil && !revoked {
 			result.Edge = failure.edge
+			result.ResourceOrder = failure.resourceOrder
 			result = upstreamChainResult(result)
 		}
+		result.ResourceOrder = s.engine.recordChainFailure(rule, &tunnelFailure{class: result.Failure, edge: result.Edge, resourceOrder: result.ResourceOrder})
 		s.finishStream(stream, result)
 		return
 	}
@@ -204,6 +226,15 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 	}
 	if err := writeTunnelMessage(stream, tunnelResult{OK: true}); err != nil {
 		return
+	}
+	if rule.ChainId != "" {
+		// Only this actual business stream has passed local quota, current
+		// authorization and complete downstream/target establishment. Check
+		// requests return above and can never manufacture local recovery.
+		s.engine.recordChainBusinessSuccess(rule, s.chainLocalResult(rule, failureLocal).Edge, "local_established")
+		if grant.NextExitGroupId == "" {
+			s.engine.recordChainSuccess(rule, s.chainLocalResult(rule, failureTarget).Edge)
+		}
 	}
 	stopDial()
 	stream.SetWriteDeadline(time.Time{})

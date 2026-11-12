@@ -24,9 +24,10 @@ const (
 )
 
 type tunnelFailure struct {
-	class failureClass
-	cause error
-	edge  *ChainFailure
+	resourceOrder *ChainResourceOrder
+	class         failureClass
+	cause         error
+	edge          *ChainFailure
 }
 
 func (e *tunnelFailure) Error() string { return string(e.class) }
@@ -112,6 +113,7 @@ func (s *tunnelSelection) dial(ctx context.Context, cleanups ...*tunnelAttemptCl
 		}
 		conn, err := c.dial(ctx, s.rule, cleanup)
 		if err == nil {
+			c.engine.recordChainEstablishment(s.rule, ep)
 			return conn, nil
 		}
 		class := classifyTunnel(err)

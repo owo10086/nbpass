@@ -2,6 +2,7 @@ package forwarding
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -53,4 +54,38 @@ func (e *Engine) checkNewTunnelRules(ctx context.Context, rules []*controlpb.For
 		delete(failures, id)
 	}
 	return failures
+}
+
+// Each hop checks at most three authorized candidates under the caller's one
+// deadline. This observes grant readiness only and never records a business flow.
+func (s *tunnelSelection) checkReady(ctx context.Context, reserved bool) error {
+	seen := map[string]bool{}
+	last := failTunnel(failureConfig, errors.New("没有获授权的后续路径"))
+	for _, c := range s.clients {
+		if c == nil {
+			continue
+		}
+		ep := c.currentEndpoint()
+		if seen[ep.NodeId] {
+			continue
+		}
+		if len(seen) >= ChainMaxCandidates || ctx.Err() != nil {
+			break
+		}
+		seen[ep.NodeId] = true
+		err := c.ready(ctx, s.rule, reserved)
+		if err == nil {
+			return nil
+		}
+		class := classifyTunnel(err)
+		var failure *tunnelFailure
+		if !errors.As(err, &failure) || failure.edge == nil {
+			err = &tunnelFailure{class: class, cause: err, edge: chainEdgeFailure(s.rule, ep)}
+		}
+		last = err
+		if class == failureLocal || class == failureConfig {
+			break
+		}
+	}
+	return last
 }

@@ -16,6 +16,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 	"nbpass/internal/controlpb"
+	"nbpass/internal/eventlog"
 )
 
 // Real WSS/yamux/TCP fixture. Only target access is forbidden on non-terminal
@@ -396,14 +397,20 @@ func TestChainRelayInvalidSourceOnlyBlocksTerminal(t *testing.T) {
 }
 
 func TestChainRelaySharedBudgetCancellation(t *testing.T) {
+	var faults atomic.Bool
 	f := newRelayFixture(t, 3)
 	var entered atomic.Int32
-	f.deps[2].DialTunnel = func(ctx context.Context, _ string) (net.Conn, error) {
+	f.deps[2].DialTunnel = func(ctx context.Context, address string) (net.Conn, error) {
+		if !faults.Load() {
+			return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
+		}
 		entered.Add(1)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 	f.start(t)
+	f.disconnectSessions()
+	faults.Store(true)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Millisecond)
 	defer cancel()
 	begin := time.Now()
@@ -695,6 +702,7 @@ func TestChainReadinessProjectsLargeTrustedTopology(t *testing.T) {
 	relayExchange(t, c)
 }
 func TestChainRelayAtMostThreeDifferentCandidates(t *testing.T) {
+	var faults atomic.Bool
 	f := newRelayFixture(t, 2)
 	for i := 0; i < 3; i++ {
 		f.addBackup(t)
@@ -705,12 +713,17 @@ func TestChainRelayAtMostThreeDifferentCandidates(t *testing.T) {
 			continue
 		}
 		index := i
-		f.deps[i].DialTunnel = func(context.Context, string) (net.Conn, error) {
+		f.deps[i].DialTunnel = func(ctx context.Context, address string) (net.Conn, error) {
+			if !faults.Load() {
+				return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
+			}
 			counts[index].Add(1)
 			return nil, errors.New("actual next edge unavailable")
 		}
 	}
 	f.start(t)
+	f.disconnectSessions()
+	faults.Store(true)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	conn, err := f.engines[0].rules["r"].selection.Load().dial(ctx)
@@ -758,6 +771,7 @@ func TestChainGrantResultsConcurrentReadAndApply(t *testing.T) {
 }
 
 func TestChainRelayBudgetDecreasesAcrossSlowRetries(t *testing.T) {
+	var faults atomic.Bool
 	f := newRelayFixture(t, 2)
 	backup := f.addBackup(t)
 	f.deps[0].Limits.DialTimeout = 320 * time.Millisecond
@@ -774,25 +788,36 @@ func TestChainRelayBudgetDecreasesAcrossSlowRetries(t *testing.T) {
 			return nil
 		}
 	}
-	f.deps[1].DialTunnel = func(ctx context.Context, _ string) (net.Conn, error) {
+	f.deps[1].DialTunnel = func(ctx context.Context, address string) (net.Conn, error) {
+		if !faults.Load() {
+			return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
+		}
 		if err := pause(ctx, 110*time.Millisecond); err != nil {
 			return nil, err
 		}
 		return nil, errors.New("first suffix unavailable")
 	}
 	f.deps[backup].DialTunnel = func(ctx context.Context, address string) (net.Conn, error) {
+		if !faults.Load() {
+			return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
+		}
 		if err := pause(ctx, 70*time.Millisecond); err != nil {
 			return nil, err
 		}
 		return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
 	}
-	f.deps[2].DialTarget = func(ctx context.Context, _ string) (net.Conn, error) {
+	f.deps[2].DialTarget = func(ctx context.Context, address string) (net.Conn, error) {
+		if !faults.Load() {
+			return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
+		}
 		deadline, _ := ctx.Deadline()
 		budgets <- time.Until(deadline)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
 	f.start(t)
+	f.disconnectSessions()
+	faults.Store(true)
 	begin := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -906,6 +931,7 @@ func TestChainGrantBindFailureResultSurvivesRestore(t *testing.T) {
 }
 
 func TestChainRelayNestedBackupBudget(t *testing.T) {
+	var faults atomic.Bool
 	f := newRelayFixture(t, 3)
 	f.addRelaySibling(t, 1)
 	cBackup := f.addRelaySibling(t, 2)
@@ -925,25 +951,36 @@ func TestChainRelayNestedBackupBudget(t *testing.T) {
 		}
 	}
 	f.deps[1].DialTunnel = func(ctx context.Context, address string) (net.Conn, error) {
+		if !faults.Load() {
+			return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
+		}
 		firstAddresses <- address
 		if err := delay(ctx); err != nil {
 			return nil, err
 		}
 		return nil, errors.New("B1 suffix unavailable")
 	}
-	f.deps[2].DialTunnel = func(ctx context.Context, _ string) (net.Conn, error) {
+	f.deps[2].DialTunnel = func(ctx context.Context, address string) (net.Conn, error) {
+		if !faults.Load() {
+			return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
+		}
 		if err := delay(ctx); err != nil {
 			return nil, err
 		}
 		return nil, errors.New("C1 suffix unavailable")
 	}
 	f.deps[cBackup].DialTunnel = func(ctx context.Context, address string) (net.Conn, error) {
+		if !faults.Load() {
+			return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
+		}
 		if err := delay(ctx); err != nil {
 			return nil, err
 		}
 		return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
 	}
 	f.start(t)
+	f.disconnectSessions()
+	faults.Store(true)
 	start := time.Now()
 	c := f.connect(t)
 	defer c.Close()
@@ -987,5 +1024,385 @@ func TestChainRestoreRejectsStaleFailedGrantResult(t *testing.T) {
 	defer restored.Close()
 	if err := restored.Restore(state); err == nil {
 		t.Fatal("stale failed result accepted for actual current grant")
+	}
+}
+
+func TestChainEstablishmentEvidenceIsRealAndKeepsFailureHistory(t *testing.T) {
+	f := newRelayFixture(t, 2)
+	f.start(t)
+	if len(f.engines[0].ChainEstablishments()) != 0 {
+		t.Fatal("probe fabricated business establishment")
+	}
+	c := f.connect(t)
+	defer c.Close()
+	relayExchange(t, c)
+	successes := f.engines[0].ChainEstablishments()
+	if len(successes) != 1 || successes[0].Class != "established" || successes[0].Edge.HopIndex != 1 {
+		t.Fatal("missing real complete-path evidence", successes)
+	}
+}
+
+func TestChainTerminalBusinessSuccessHasTargetEvidence(t *testing.T) {
+	f := newRelayFixture(t, 2)
+	f.start(t)
+	c := f.connect(t)
+	defer c.Close()
+	relayExchange(t, c)
+	outcomes := f.engines[2].ChainEstablishments()
+	found := false
+	for _, outcome := range outcomes {
+		if outcome.Class == "established" && outcome.Edge.ToNodeID == "" && outcome.Edge.HopIndex == 2 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("terminal target success evidence missing", outcomes)
+	}
+}
+
+func TestChainReadinessAndUpgradeCheckCompleteSuffixWithoutTarget(t *testing.T) {
+	f := newRelayFixture(t, 2)
+	f.start(t)
+	for _, e := range f.engines {
+		if err := e.ListenCheckPort(0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, i := range []int{0, 1} {
+		if err := f.engines[i].UpgradeReady(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if f.accepted.Load() != 0 || f.resolved.Load() != 0 {
+		t.Fatal("readiness dialed/resolved final target")
+	}
+	f.engines[2].Close()
+	for _, i := range []int{0, 1} {
+		if err := f.engines[i].UpgradeReady(context.Background()); err == nil {
+			t.Fatal("local next-hop handshake hid broken complete suffix", i)
+		}
+	}
+	if f.accepted.Load() != 0 {
+		t.Fatal("failed readiness dialed target")
+	}
+}
+
+// Faults begin after the real authorized preflight. Closing the established
+// carriers forces the measured business attempt to exercise actual dial paths.
+func (f *relayFixture) disconnectSessions() {
+	for _, e := range f.engines {
+		for _, c := range e.tunnelClients {
+			c.mu.Lock()
+			if c.session != nil {
+				c.session.Close()
+			}
+			c.mu.Unlock()
+		}
+	}
+}
+
+func TestChainRelayLocalResourceRecoveryHasOwnBusinessEvidence(t *testing.T) {
+	f := newRelayFixture(t, 2)
+	f.deps[1].Limits.MaxConnectionsPerRule = 1
+	f.start(t)
+	if len(f.engines[1].ChainEstablishments()) != 0 {
+		t.Fatal("preflight fabricated local recovery")
+	}
+	first := f.connect(t)
+	relayExchange(t, first)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := f.engines[0].rules["r"].selection.Load().dial(ctx)
+	var failure *tunnelFailure
+	if !errors.As(err, &failure) || failure.class != failureLocal || failure.edge == nil || failure.edge.FromNodeID != "1" || failure.edge.ToNodeID != "" {
+		t.Fatal("missing exact relay-local capacity failure", err)
+	}
+	first.Close()
+	deadline := time.Now().Add(time.Second)
+	for {
+		f.engines[1].resources.mu.Lock()
+		n := f.engines[1].resources.rules["r"]
+		f.engines[1].resources.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("relay did not return rule quota")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	recovered := f.connect(t)
+	defer recovered.Close()
+	relayExchange(t, recovered)
+	found := false
+	for _, o := range f.engines[1].ChainEstablishments() {
+		if o.Class == "local_established" && o.Edge.FromNodeID == "1" && o.Edge.ToNodeID == "" && o.Edge.HopIndex == 1 && o.Edge.RuleGeneration == 7 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("real relay recovery lacks local resource identity", f.engines[1].ChainEstablishments())
+	}
+}
+
+func TestChainResourceOriginOrderPreservedAcrossRelays(t *testing.T) {
+	for _, limit := range []string{"node", "rule", "pending"} {
+		t.Run(limit, func(t *testing.T) {
+			f := newRelayFixture(t, 2)
+			for i := range f.deps {
+				f.deps[i].ProcessInstance = fmt.Sprint("process-", i)
+			}
+			switch limit {
+			case "node":
+				f.deps[2].Limits.MaxConnections = 1
+			case "rule":
+				f.deps[2].Limits.MaxConnectionsPerRule = 1
+			case "pending":
+				f.deps[2].Limits.MaxPendingDials = 1
+			}
+			f.start(t)
+			first := f.connect(t)
+			relayExchange(t, first)
+			first.Close()
+			waitTunnelResourcesReleased(t, f.engines[2])
+			owner := f.engines[2]
+			var before uint64
+			for _, o := range owner.ChainEstablishments() {
+				if o.Class == "local_established" {
+					before = o.ResourceOrder.Sequence
+				}
+			}
+			if before == 0 {
+				t.Fatal("real local success has no origin sequence")
+			}
+			// Occupy the exact shared resource pool without admitting another target.
+			lease := owner.resources.acquire("r")
+			if lease == nil {
+				t.Fatal("cannot occupy quota")
+			}
+			defer lease.release()
+			if limit != "pending" {
+				lease.dialDone()
+			}
+			calls := f.resolved.Load()
+			// Deliberately make the relays' counters unrelated to the owner's sequence.
+			for _, e := range f.engines[:2] {
+				e.chainFailuresMu.Lock()
+				e.chainObservationSequence += 100
+				e.chainFailuresMu.Unlock()
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := f.engines[0].rules["r"].selection.Load().dial(ctx)
+			var failure *tunnelFailure
+			if !errors.As(err, &failure) || failure.class != failureLocal || failure.edge == nil || failure.edge.FromNodeID != "2" || failure.edge.ToNodeID != "" || failure.resourceOrder == nil {
+				t.Fatal("missing actual resource owner", err)
+			}
+			order := *failure.resourceOrder
+			if order.Instance != "process-2" || order.Sequence <= before || order.Sequence >= 100 {
+				t.Fatal("relay replaced owner order", order)
+			}
+			for _, e := range f.engines[:2] {
+				found := false
+				for _, o := range e.ChainFailures() {
+					if o.Class == "local_resource" && o.Edge.FromNodeID == "2" {
+						found = true
+						if o.ResourceOrder == nil || *o.ResourceOrder != order || o.Sequence <= order.Sequence {
+							t.Fatal("origin lost at relay", o)
+						}
+					}
+				}
+				if !found {
+					t.Fatal("relay did not preserve resource failure")
+				}
+			}
+			if f.resolved.Load() != calls {
+				t.Fatal("quota rejection resolved/dialed target")
+			}
+			lease.release()
+			recovered := f.connect(t)
+			defer recovered.Close()
+			relayExchange(t, recovered)
+			for _, o := range owner.ChainEstablishments() {
+				if o.Class == "local_established" && (o.ResourceOrder.Instance != order.Instance || o.ResourceOrder.Sequence <= order.Sequence) {
+					t.Fatal("recovery did not share owner sequence domain", o)
+				}
+			}
+		})
+	}
+}
+
+func TestChainResourceOrderRejectsInvalidScope(t *testing.T) {
+	for _, scenario := range []string{"valid", "empty", "long", "zero", "target", "network", "no_edge"} {
+		t.Run(scenario, func(t *testing.T) {
+			order := &ChainResourceOrder{Instance: "owner", Sequence: 1}
+			edge := &ChainFailure{FromNodeID: "b"}
+			class := "local_resource"
+			switch scenario {
+			case "empty":
+				order.Instance = ""
+			case "long":
+				order.Instance = strings.Repeat("x", 129)
+			case "zero":
+				order.Sequence = 0
+			case "target":
+				class = "exit_target"
+			case "network":
+				edge.ToNodeID = "c"
+			case "no_edge":
+				edge = nil
+			}
+			if ValidChainResourceOrder(order, class, edge) != (scenario == "valid") {
+				t.Fatal("invalid resource provenance accepted")
+			}
+		})
+	}
+}
+
+func TestChainResourceOriginCoalescingKeepsNewestOwnerRefusal(t *testing.T) {
+	r := &controlpb.ForwardRule{Id: "r", ChainId: "chain", AuthorizationGeneration: 7, ChainAuthorization: &controlpb.ChainAuthorization{Fingerprint: "fp"}}
+	e := NewEngine(Dependencies{NodeID: "relay", ProcessInstance: "relay-process"})
+	e.chainRules = map[string]*controlpb.ForwardRule{"r": r}
+	edge := &ChainFailure{FromNodeID: "owner", RuleGeneration: 7, ChainFingerprint: "fp"}
+	for _, sequence := range []uint64{5, 2} {
+		e.recordChainFailure(r, &tunnelFailure{class: failureLocal, edge: edge, resourceOrder: &ChainResourceOrder{Instance: "owner-process", Sequence: sequence}})
+	}
+	got := e.ChainFailures()
+	if len(got) != 1 || got[0].ResourceOrder.Sequence != 5 {
+		t.Fatal("late older response erased newer owner refusal before heartbeat", got)
+	}
+}
+
+func TestChainResourceOriginsSurviveOldInstanceArrivingLast(t *testing.T) {
+	r := &controlpb.ForwardRule{Id: "r", ChainId: "chain", AuthorizationGeneration: 7, ChainAuthorization: &controlpb.ChainAuthorization{Fingerprint: "fp"}}
+	e := NewEngine(Dependencies{NodeID: "relay", ProcessInstance: "relay-process"})
+	e.chainRules = map[string]*controlpb.ForwardRule{"r": r}
+	edge := &ChainFailure{FromNodeID: "owner", RuleGeneration: 7, ChainFingerprint: "fp"}
+	for _, instance := range []string{"current", "old-1", "old-2", "old-3"} {
+		e.recordChainFailure(r, &tunnelFailure{class: failureLocal, edge: edge, resourceOrder: &ChainResourceOrder{Instance: instance, Sequence: 1}})
+	}
+	got := e.ChainFailures()
+	if len(got) != 4 {
+		t.Fatal("cross-instance arrival order lost unverified evidence", got)
+	}
+	found := false
+	for _, o := range got {
+		found = found || o.ResourceOrder.Instance == "current"
+	}
+	if !found {
+		t.Fatal("current instance disappeared before node could queue it")
+	}
+}
+
+func TestChainResourceCandidateBudgetDeliveryAndWriteFailure(t *testing.T) {
+	now := time.Now()
+	r := &controlpb.ForwardRule{Id: "r", ChainId: "chain", AuthorizationGeneration: 7, ChainAuthorization: &controlpb.ChainAuthorization{Fingerprint: "fp"}}
+	e := NewEngine(Dependencies{NodeID: "relay", Now: func() time.Time { return now }})
+	e.chainRules = map[string]*controlpb.ForwardRule{"r": r}
+	edge := &ChainFailure{FromNodeID: "owner", RuleGeneration: 7, ChainFingerprint: "fp"}
+	for i := 0; i < chainResourceCandidateCount+2; i++ {
+		e.recordChainFailure(r, &tunnelFailure{class: failureLocal, edge: edge, resourceOrder: &ChainResourceOrder{Instance: fmt.Sprint("instance-", i), Sequence: 1}})
+	}
+	if len(e.chainResources) != chainResourceCandidateCount || e.chainResourceBytes > chainResourceCandidateBytes || e.chainResourceGap.Count != 2 {
+		t.Fatal("pending origin budget not enforced", len(e.chainResources), e.chainResourceBytes, e.chainResourceGap)
+	}
+	rejected := errors.New("durable write failed")
+	if err := e.FlushChainResourceEvidence(func(outcomes []ChainFailureObservation, gap *ChainResourceGaps) error {
+		if len(outcomes) != chainResourceCandidateCount || gap == nil || gap.Count != 2 || !gap.From.Equal(now) || !gap.To.Equal(now) {
+			t.Fatal("wrong loss snapshot", len(outcomes), gap)
+		}
+		// An additional loss during the failing write must merge back exactly once.
+		now = now.Add(time.Second)
+		e.recordChainFailure(r, &tunnelFailure{class: failureLocal, edge: edge, resourceOrder: &ChainResourceOrder{Instance: "another", Sequence: 1}})
+		return rejected
+	}); !errors.Is(err, rejected) {
+		t.Fatal(err)
+	}
+	if len(e.chainResources) != chainResourceCandidateCount || e.chainResourceGap.Count != 3 {
+		t.Fatal("failed write acknowledged candidates or lost gap", len(e.chainResources), e.chainResourceGap)
+	}
+	if err := e.FlushChainResourceEvidence(func(outcomes []ChainFailureObservation, gap *ChainResourceGaps) error {
+		if gap == nil || gap.Count != 3 || !gap.To.Equal(now) {
+			t.Fatal("retry lost exact gap", gap)
+		}
+		// A newer same-instance observation must survive acknowledgement of this snapshot.
+		e.recordChainFailure(r, &tunnelFailure{class: failureLocal, edge: edge, resourceOrder: &ChainResourceOrder{Instance: "instance-0", Sequence: 2}})
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.chainResources) != 1 || e.chainResourceGap.Count != 0 {
+		t.Fatal("delivery did not reclaim or erased newer result", len(e.chainResources), e.chainResourceGap)
+	}
+	if err := e.FlushChainResourceEvidence(func([]ChainFailureObservation, *ChainResourceGaps) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(e.chainResources) != 0 || e.chainResourceBytes != 0 {
+		t.Fatal("delivered histories accumulated")
+	}
+}
+
+func TestChainResourceCandidateByteBudget(t *testing.T) {
+	e := NewEngine(Dependencies{})
+	for i := 0; i < chainResourceCandidateCount; i++ {
+		o := ChainFailureObservation{Sequence: uint64(i + 1), RuleID: "r", ChainID: strings.Repeat("x", 1400), Class: "local_resource", ObservedAt: time.Now(), Edge: ChainFailure{FromNodeID: "owner"}, ResourceOrder: &ChainResourceOrder{Instance: fmt.Sprint(i), Sequence: 1}}
+		if resourceObservationBytes(o) > 2048 {
+			t.Fatal("fixture exceeded one event before total byte budget")
+		}
+		e.recordResourceCandidate(o)
+	}
+	if e.chainResourceBytes > chainResourceCandidateBytes || e.chainResourceGap.Count == 0 || len(e.chainResources) >= chainResourceCandidateCount {
+		t.Fatal("byte budget not independent of count", e.chainResourceBytes, len(e.chainResources), e.chainResourceGap)
+	}
+}
+
+func TestChainResourceGapScopesRetainLossConfigurationAndBoundMemory(t *testing.T) {
+	now := time.Now()
+	e := NewEngine(Dependencies{})
+	// Force loss at the existing byte limit; changing the rule cannot rewrite it.
+	e.chainResourceBytes = chainResourceCandidateBytes
+	for i := 1; i <= 2; i++ {
+		o := ChainFailureObservation{RuleID: "r", ChainID: "chain", Class: "local_resource", ObservedAt: now, ResourceOrder: &ChainResourceOrder{Instance: "owner", Sequence: uint64(i)}, Edge: ChainFailure{FromNodeID: "b", RuleGeneration: uint64(i), ChainFingerprint: fmt.Sprint("fp", i)}}
+		e.recordResourceCandidate(o)
+	}
+	fail := errors.New("disk")
+	if err := e.FlushChainResourceEvidence(func(_ []ChainFailureObservation, g *ChainResourceGaps) error {
+		if g == nil || len(g.Scopes) != 2 || g.Count != 2 {
+			t.Fatal("configuration boundary lost before delivery", g)
+		}
+		for scope, loss := range g.Scopes {
+			if scope.RuleID != "r" || scope.Fingerprint != fmt.Sprint("fp", scope.Generation) || loss.Count != 1 {
+				t.Fatal(scope, loss)
+			}
+		}
+		return fail
+	}); !errors.Is(err, fail) {
+		t.Fatal(err)
+	}
+	if len(e.chainResourceGap.Scopes) != 2 || e.chainResourceGap.Count != 2 {
+		t.Fatal("failed delivery discarded scopes", e.chainResourceGap)
+	}
+	g := ChainResourceGaps{}
+	for i := 0; i < ChainResourceScopeCount+2; i++ {
+		g.Add(ChainResourceScope{RuleID: fmt.Sprint("r", i), Generation: 1, Fingerprint: "fp"}, eventlog.Gap{Count: 1, From: now, To: now, Reason: "overflow"})
+	}
+	if g.Count != ChainResourceScopeCount+2 || len(g.Scopes) != ChainResourceScopeCount || g.Unscoped.Count != 2 || g.bytes > ChainResourceScopeBytes {
+		t.Fatal("scope capacity lost count or exceeded budget", g.Count, len(g.Scopes), g.Unscoped, g.bytes)
+	}
+	// An already represented scope remains precise even when the budget is full.
+	g.Add(ChainResourceScope{RuleID: "r0", Generation: 1, Fingerprint: "fp"}, eventlog.Gap{Count: 1, From: now, To: now, Reason: "overflow"})
+	if g.Scopes[ChainResourceScope{RuleID: "r0", Generation: 1, Fingerprint: "fp"}].Count != 2 || g.Unscoped.Count != 2 {
+		t.Fatal("overflow erased known scope")
+	}
+}
+
+func TestChainResourceGapScopeByteBudget(t *testing.T) {
+	now := time.Now()
+	g := ChainResourceGaps{}
+	for i := 0; i < ChainResourceScopeCount; i++ {
+		g.Add(ChainResourceScope{RuleID: fmt.Sprintf("%04d", i) + strings.Repeat("\x01", 124), Generation: 1, Fingerprint: strings.Repeat("\x02", 64)}, eventlog.Gap{Count: 1, From: now, To: now, Reason: "overflow"})
+	}
+	if g.bytes > ChainResourceScopeBytes || g.Unscoped.Count == 0 || len(g.Scopes) >= ChainResourceScopeCount || g.Count != ChainResourceScopeCount {
+		t.Fatal("scope byte budget did not bound memory", g.bytes, len(g.Scopes), g.Count, g.Unscoped)
 	}
 }

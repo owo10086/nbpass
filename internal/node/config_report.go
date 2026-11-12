@@ -40,3 +40,20 @@ func limitConfigReport(report *controlpb.NodeReport) error {
 	}
 	return nil
 }
+
+// Always report the attempted snapshot's complete grant identities. Missing
+// engine results mean application/persistence failed, never an inferred success.
+func grantReportResults(s *controlpb.ConfigSnapshot, actual []*controlpb.TunnelGrantApplyResult) []*controlpb.TunnelGrantApplyResult {
+	results := []*controlpb.TunnelGrantApplyResult{}
+	for _, g := range s.GetTunnelServer().GetGrants() {
+		r := &controlpb.TunnelGrantApplyResult{EntryId: g.EntryId, RuleId: g.Rule.Id, Generation: g.Rule.AuthorizationGeneration, ApplyError: "授权未持久应用"}
+		for _, a := range actual {
+			if a.EntryId == r.EntryId && a.RuleId == r.RuleId && a.Generation == r.Generation && a.AppliedRevision == s.Revision {
+				r = proto.Clone(a).(*controlpb.TunnelGrantApplyResult)
+				break
+			}
+		}
+		results = append(results, r)
+	}
+	return results
+}

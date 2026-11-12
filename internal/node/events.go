@@ -7,9 +7,11 @@ import (
 	"errors"
 	"io"
 	"os"
+	"sort"
 	"sync"
 
 	"nbpass/internal/eventlog"
+	"nbpass/internal/forwarding"
 	"nbpass/internal/timing"
 )
 
@@ -21,10 +23,12 @@ type EventStore interface {
 type EventLimits struct{ Count, Bytes int }
 
 type eventState struct {
-	Events  []eventlog.Event          `json:"events"`
-	Sending []eventlog.Event          `json:"sending"`
-	Pending map[string]eventlog.Event `json:"pending"`
-	Frozen  []eventlog.Event          `json:"frozen"`
+	Events   []eventlog.Event          `json:"events"`
+	Sending  []eventlog.Event          `json:"sending"`
+	Pending  map[string]eventlog.Event `json:"pending"`
+	Frozen   []eventlog.Event          `json:"frozen"`
+	gapBytes int
+	gapCount int
 }
 
 // EventQueue 先持久化再发布内存状态。Frozen 缺口发出后保持不变，新缺口单独合并。
@@ -62,7 +66,7 @@ func OpenEventQueue(ctx context.Context, store EventStore, clock timing.Clock, r
 		if err := json.Unmarshal(data, &q.state); err != nil {
 			return nil, err
 		}
-		if len(q.state.Events) > 4096 || len(q.state.Sending) > eventlog.MaxBatch || len(q.state.Pending) > 2 || len(q.state.Frozen) > 2 {
+		if len(q.state.Events) > 4096 || len(q.state.Sending) > eventlog.MaxBatch || len(q.state.Pending) > forwarding.ChainResourceScopeCount+2 || len(q.state.Frozen) > eventlog.MaxBatch {
 			return nil, errors.New("事件队列损坏")
 		}
 		all := append(append(append([]eventlog.Event{}, q.state.Events...), q.state.Sending...), q.state.Frozen...)
@@ -72,10 +76,14 @@ func OpenEventQueue(ctx context.Context, store EventStore, clock timing.Clock, r
 			}
 		}
 		for reason, e := range q.state.Pending {
-			if err := e.Validate(); err != nil || e.Gap == nil || reason != e.Gap.Reason {
+			if err := e.Validate(); err != nil || e.Gap == nil || reason != gapKey(e.Gap.Reason, e.Message) {
 				return nil, errors.New("事件缺口损坏")
 			}
 		}
+	}
+	q.state = q.candidate()
+	if q.state.gapBytes > forwarding.ChainResourceScopeBytes || q.state.gapCount > forwarding.ChainResourceScopeCount {
+		return nil, errors.New("事件缺口容量无效")
 	}
 	return q, nil
 }
@@ -88,6 +96,19 @@ func (q *EventQueue) candidate() eventState {
 	s.Pending = make(map[string]eventlog.Event, 2)
 	for k, v := range q.state.Pending {
 		s.Pending[k] = v
+	}
+	s.gapBytes, s.gapCount = 0, 0
+	for _, e := range s.Pending {
+		if _, ok := forwarding.DecodeChainResourceScope(e.Message); ok {
+			s.gapBytes += resourceGapBytes(e)
+			s.gapCount++
+		}
+	}
+	for _, e := range s.Frozen {
+		if _, ok := forwarding.DecodeChainResourceScope(e.Message); ok {
+			s.gapBytes += resourceGapBytes(e)
+			s.gapCount++
+		}
 	}
 	return s
 }
@@ -112,25 +133,100 @@ func (q *EventQueue) id() (string, error) {
 }
 
 func (q *EventQueue) lost(s *eventState, e eventlog.Event, reason string) error {
-	g, ok := s.Pending[reason]
+	message := "节点本地事件存在缺口"
+	var chain forwarding.ChainEvent
+	if e.Type == "chain_flow" && json.Unmarshal([]byte(e.Message), &chain) == nil && chain.Observation.ResourceOrder != nil {
+		scope := forwarding.ResourceScope(chain.Observation)
+		if scope.Valid() {
+			message = scope.Message()
+		}
+	}
+	return q.mergeGap(s, eventlog.Gap{Count: 1, From: e.OccurredAt, To: e.OccurredAt, Reason: reason}, message)
+}
+
+// Reserve fixed space for ID/time/count fields, so a full budget never
+// prevents updating an already retained scope's newest loss boundary.
+func resourceGapBytes(e eventlog.Event) int { raw, _ := json.Marshal(e.Message); return len(raw) + 512 }
+func gapKey(reason, message string) string {
+	if scope, ok := forwarding.DecodeChainResourceScope(message); ok {
+		return reason + ":" + scope.Message()
+	}
+	return reason
+}
+func (q *EventQueue) mergeGap(s *eventState, gap eventlog.Gap, message string) error {
+	key := gapKey(gap.Reason, message)
+	_, scoped := forwarding.DecodeChainResourceScope(message)
+	g, ok := s.Pending[key]
+	oldSize := 0
+	if ok && scoped {
+		oldSize = resourceGapBytes(g)
+	}
 	if !ok {
 		id, err := q.id()
 		if err != nil {
 			return err
 		}
-		g = eventlog.Event{ID: id, Type: "event_gap", OccurredAt: q.clock.Now(), Message: "节点本地事件存在缺口", Gap: &eventlog.Gap{From: e.OccurredAt, To: e.OccurredAt, Reason: reason}}
+		g = eventlog.Event{ID: id, Type: "event_gap", OccurredAt: q.clock.Now(), Message: message, Gap: &eventlog.Gap{From: gap.From, To: gap.To, Reason: gap.Reason}}
 	}
-	gap := *g.Gap
-	gap.Count++
-	if e.OccurredAt.Before(gap.From) {
-		gap.From = e.OccurredAt
+	combined := *g.Gap
+	combined.Count += gap.Count
+	if gap.From.Before(combined.From) {
+		combined.From = gap.From
 	}
-	if e.OccurredAt.After(gap.To) {
-		gap.To = e.OccurredAt
+	if gap.To.After(combined.To) {
+		combined.To = gap.To
 	}
-	g.Gap = &gap
-	s.Pending[reason] = g
+	g.Gap = &combined
+	if scoped {
+		size := resourceGapBytes(g)
+		if (!ok && s.gapCount >= forwarding.ChainResourceScopeCount) || s.gapBytes-oldSize+size > forwarding.ChainResourceScopeBytes {
+			return q.mergeGap(s, gap, "节点本地事件存在缺口（精细配置归属容量已满）")
+		}
+		s.gapBytes += size - oldSize
+		if !ok {
+			s.gapCount++
+		}
+	}
+	s.Pending[key] = g
 	return nil
+}
+
+// One durable transaction publishes all distinct origin candidates and any
+// explicit upstream overflow. A failed save changes neither queue nor dedup.
+func (q *EventQueue) recordChainBatch(ctx context.Context, events []eventlog.Event, gap *forwarding.ChainResourceGaps) error {
+	if len(events) == 0 && gap == nil {
+		return nil
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	s := q.candidate()
+	for _, event := range events {
+		id, err := q.id()
+		if err != nil {
+			return err
+		}
+		event.ID = id
+		if err := event.Validate(); err != nil {
+			return err
+		}
+		s.Events = append(s.Events, event)
+	}
+	if gap != nil {
+		for scope, loss := range gap.Scopes {
+			if err := q.mergeGap(&s, loss, scope.Message()); err != nil {
+				return err
+			}
+		}
+		if gap.Unscoped.Count > 0 {
+			if err := q.mergeGap(&s, gap.Unscoped, "节点本地事件存在缺口（精细配置归属不可用）"); err != nil {
+				return err
+			}
+		}
+	}
+	if err := q.trim(&s); err != nil {
+		return err
+	}
+	return q.commit(ctx, s)
 }
 
 func (q *EventQueue) trim(s *eventState) error {
@@ -202,11 +298,17 @@ func (q *EventQueue) Batch(ctx context.Context) ([]eventlog.Event, error) {
 	}
 	s.Sending = kept
 	if len(s.Frozen) == 0 && len(s.Sending) == 0 {
-		for _, reason := range []string{"overflow", "expired"} {
-			if e, ok := s.Pending[reason]; ok {
-				s.Frozen = append(s.Frozen, e)
-				delete(s.Pending, reason)
+		keys := make([]string, 0, len(s.Pending))
+		for key := range s.Pending {
+			keys = append(keys, key)
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			if len(s.Frozen) >= eventlog.MaxBatch {
+				break
 			}
+			s.Frozen = append(s.Frozen, s.Pending[key])
+			delete(s.Pending, key)
 		}
 	}
 	if len(s.Sending) == 0 {

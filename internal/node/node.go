@@ -216,6 +216,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 		deps.Forwarding.Clock = deps.Clock
 	}
 	deps.Forwarding.DefaultCheckPort = 18080
+	deps.Forwarding.ProcessInstance = base64.RawURLEncoding.EncodeToString(instance)
 	engine := forwarding.NewEngine(deps.Forwarding)
 	deps.exitHealth = engine.ExitHealth
 	if deps.SoftwareVersion == "" {
@@ -300,6 +301,7 @@ func Run(ctx context.Context, config Config, deps Dependencies) (runErr error) {
 	}
 	state := engine.State()
 	report.AttemptedRevision, report.AttemptedDigest, report.RuleResults = state.HighestRevision, state.HighestDigest, state.Results
+	report.TunnelGrantResults = engine.TunnelGrantResults()
 	report.AppliedRevision, report.AppliedDigest = engine.Applied()
 	report.ApplyError = engine.ApplyError()
 	report.RevocationsApplied = state.HighestRevision > 0
@@ -436,6 +438,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		upgradeReport
 	)
 	var checkerResult []byte
+	chainEventState := map[string]string{}
 	send := func(kind reportKind, sample *controlpb.ProbeSample) error {
 		outgoing := proto.Clone(report).(*controlpb.NodeReport)
 		outgoing.Probe, outgoing.ProbeOnly, outgoing.EventsOnly = sample, kind == probeReport, kind == eventReport
@@ -507,6 +510,7 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 		if kind != configReport {
 			outgoing.AttemptedRevision, outgoing.ApplyError = 0, ""
 			outgoing.RuleResults, outgoing.AttemptedDigest = nil, ""
+			outgoing.TunnelGrantResults = nil
 			outgoing.RevocationsApplied = false
 		} else if err := limitConfigReport(outgoing); err != nil {
 			return err
@@ -515,6 +519,9 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			outgoing.AppliedRevision, outgoing.AppliedDigest = 0, ""
 		}
 		if kind == heartbeatReport {
+			if err := recordChainEvents(ctx, deps, engine, report.ProcessInstance, chainEventState); err != nil {
+				return err
+			}
 			outgoing.UpgradeCapable = deps.upgrades != nil && deps.upgrades.available.Load()
 			if deps.LocalHealth != nil && !deps.localReady.Load() {
 				deps.localReady.Store(engine.UpgradeReady(ctx) == nil)
@@ -557,6 +564,9 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			trafficAckC = trafficAck.C()
 		}
 		limitRecoveryReport(outgoing)
+		if proto.Size(outgoing) > 64<<10 {
+			return errors.New("控制报告超过消息上限")
+		}
 		// 发送串行，传输只持有本轮不可变副本；接收持续独立运行。
 		result := make(chan error, 1)
 		timer := clock.NewTimer(15 * time.Second)
@@ -839,12 +849,14 @@ func exchange(ctx context.Context, service controlpb.ControlServiceClient, token
 			if err == nil {
 				err = engine.ApplyContext(onlineCtx, snapshot)
 			}
+			report.TunnelGrantResults = engine.TunnelGrantResults()
 			report.AppliedRevision, report.AppliedDigest = engine.Applied()
 			if deps.localReady != nil && deps.LocalHealth != nil {
 				deps.localReady.Store(err == nil && engine.UpgradeReady(ctx) == nil)
 			}
 			state := engine.State()
 			report.RuleResults = state.Results
+			report.TunnelGrantResults = grantReportResults(snapshot, engine.TunnelGrantResults())
 			report.RevocationsApplied = state.HighestRevision == snapshot.Revision && state.HighestDigest == snapshot.Digest
 			if state.HighestRevision != snapshot.Revision || state.HighestDigest != snapshot.Digest {
 				report.RuleResults = nil
