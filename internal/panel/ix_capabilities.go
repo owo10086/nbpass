@@ -148,9 +148,16 @@ func (p capabilityPlan) allows(nodeID string) bool {
 
 // ruleCapabilityRequirements is the only feature-to-executor mapping. Consumers
 // must use its evaluated plan rather than reimplementing requirements in views.
-func ruleCapabilityRequirements(r forwarding.Rule, entry string, group exitGroupView, legacy map[[3]string]bool, addresses map[string]tunnelExitView) capabilityRequirements {
+func ruleCapabilityRequirements(r forwarding.Rule, entry string, group exitGroupView, legacy map[[3]string]bool, addresses map[string]tunnelExitView, outbound ...map[string]string) capabilityRequirements {
 	required := capabilityRequirements{}
+	sources := map[string]string{}
+	if len(outbound) > 0 {
+		sources = outbound[0]
+	}
 	if r.Kind != forwarding.Tunnel {
+		if sources[entry] != "" {
+			required.Required = append(required.Required, capabilityRequirement{NodeID: entry, Capabilities: []string{compatibility.OutboundIPv4}})
+		}
 		return required
 	}
 	if len(group.Members) > 1 {
@@ -162,6 +169,9 @@ func ruleCapabilityRequirements(r forwarding.Rule, entry string, group exitGroup
 		candidate := capabilityCandidate{NodeID: exit, AddressID: member.AddressID}
 		if len(group.Members) != 1 || !legacy[[3]string{exit, entry, r.ID}] {
 			candidate.Required = []capabilityRequirement{{NodeID: entry, Capabilities: []string{"tunnel_authorization"}}, {NodeID: exit, Capabilities: []string{"tunnel_authorization"}}}
+		}
+		if sources[exit] != "" {
+			candidate.Required = append(candidate.Required, capabilityRequirement{NodeID: exit, Capabilities: []string{compatibility.OutboundIPv4}})
 		}
 		address, port, _ := selectedTunnelAddress(addresses[exit], member.AddressID)
 		if member.AddressID != "public" {
@@ -201,13 +211,17 @@ func (p *Panel) ruleCapabilityPlans(ctx context.Context, q queryer, rules []forw
 	for _, v := range exits {
 		addresses[v.NodeID] = v
 	}
+	sources, err := loadOutboundIPv4(ctx, q)
+	if err != nil {
+		return nil, err
+	}
 	plans := map[[2]string]capabilityPlan{}
 	for _, r := range rules {
 		if !r.Enabled {
 			continue
 		}
 		for _, entry := range forwarding.RuleEntryNodes(r, members) {
-			plans[[2]string{entry, r.ID}] = caps.evaluate(ruleCapabilityRequirements(r, entry, byGroup[r.ExitGroupID], legacy, addresses))
+			plans[[2]string{entry, r.ID}] = caps.evaluate(ruleCapabilityRequirements(r, entry, byGroup[r.ExitGroupID], legacy, addresses, sources))
 		}
 	}
 	return plans, nil

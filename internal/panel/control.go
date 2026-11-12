@@ -507,8 +507,8 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, err
 	}
 	var desired, applied, attempted int64
-	var appliedDigest, applyError string
-	if err := p.db.QueryRowContext(ctx, "SELECT desired_revision,applied_revision,applied_digest,attempted_revision,apply_error FROM nodes WHERE id=?", id).Scan(&desired, &applied, &appliedDigest, &attempted, &applyError); err != nil {
+	var appliedDigest, applyError, outboundIPv4 string
+	if err := p.db.QueryRowContext(ctx, "SELECT desired_revision,applied_revision,applied_digest,attempted_revision,apply_error,outbound_ipv4 FROM nodes WHERE id=?", id).Scan(&desired, &applied, &appliedDigest, &attempted, &applyError, &outboundIPv4); err != nil {
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
 	response := &controlpb.PanelMessage{ProtocolVersion: 1, DesiredRevision: uint64(desired), AcknowledgedEventIds: acked}
@@ -537,6 +537,14 @@ func (p *Panel) acceptReport(ctx context.Context, id string, digest []byte, sess
 		return nil, status.Error(codes.Unavailable, "存储暂不可用")
 	}
 	alreadyConfirmed := applied == desired
+	revalidated, err := p.outboundRevalidationFailure(ctx, id, session, report, uint64(desired), expectedDigest, outboundIPv4)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, "无法核对出站 IP 应用结果")
+	}
+	if revalidated {
+		applied, appliedDigest = 0, ""
+		alreadyConfirmed = false
+	}
 	if desired > 0 && expectedDigest != "" {
 		if report.AppliedRevision == uint64(desired) && report.AppliedDigest == expectedDigest && report.ApplyError == "" {
 			applied, appliedDigest, attempted, applyError = desired, expectedDigest, desired, ""

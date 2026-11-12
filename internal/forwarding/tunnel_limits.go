@@ -126,6 +126,11 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 		s.finishStream(stream, tunnelResult{Failure: failureLocal})
 		return
 	}
+	binding := s.engine.outboundBinding()
+	if binding.err != nil {
+		s.rejectStream(stream)
+		return
+	}
 	if check {
 		// 预检只核验授权，不拨目标；FIN 保留响应，随后 RST 回收流槽。
 		s.finishStream(stream, tunnelResult{OK: true, Ready: true})
@@ -139,7 +144,7 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 	defer func() { cancel(); stream.Close(); <-input.done }()
 	dialCtx, stopDial := s.engine.tunnelTimeout(ctx, s.engine.resources.limits.DialTimeout)
 	// 目标始终取自出口授权配置，不接受入口自选的拨号地址。
-	target, err := s.engine.dialTargetWithin(dialCtx, rule, s.engine.resources.limits.DialTimeout)
+	target, err := s.engine.dialTargetWithin(dialCtx, rule, s.engine.resources.limits.DialTimeout, binding.source)
 	stopDial()
 	if lease != nil {
 		lease.dialDone()

@@ -138,6 +138,7 @@ message EventGap {
 }
 
 message ConfigSnapshot {
+  string outbound_ipv4 = 284;
   uint32 check_port = 140;
   bytes self_check_config = 90;
   uint64 revision = 1;

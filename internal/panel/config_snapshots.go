@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"google.golang.org/protobuf/proto"
+	"nbpass/internal/compatibility"
 	"nbpass/internal/controlpb"
 	"nbpass/internal/forwarding"
 )
@@ -24,19 +25,20 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 	if err := p.validateConfiguration(ctx, tx, rules, members); err != nil {
 		return nil, err
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT id,desired_revision,check_port FROM nodes ORDER BY id")
+	rows, err := tx.QueryContext(ctx, "SELECT id,desired_revision,check_port,outbound_ipv4 FROM nodes ORDER BY id")
 	if err != nil {
 		return nil, err
 	}
 	type nodeRevision struct {
-		id        string
-		revision  uint64
-		checkPort uint32
+		id           string
+		revision     uint64
+		checkPort    uint32
+		outboundIPv4 string
 	}
 	nodes := []nodeRevision{}
 	for rows.Next() {
 		var n nodeRevision
-		if err := rows.Scan(&n.id, &n.revision, &n.checkPort); err != nil {
+		if err := rows.Scan(&n.id, &n.revision, &n.checkPort, &n.outboundIPv4); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -47,9 +49,16 @@ func (p *Panel) compileSnapshots(ctx context.Context, tx *sql.Tx) ([]string, err
 	if err != nil {
 		return nil, err
 	}
+	caps, err := loadCapabilitySet(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	compiled := map[string]*controlpb.ConfigSnapshot{}
 	for _, n := range nodes {
 		compiled[n.id] = &controlpb.ConfigSnapshot{CheckPort: n.checkPort}
+		if caps[n.id].capabilities[compatibility.OutboundIPv4] {
+			compiled[n.id].OutboundIpv4 = n.outboundIPv4
+		}
 		if n.checkPort == 18080 {
 			compiled[n.id].CheckPort = 0
 		}

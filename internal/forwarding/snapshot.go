@@ -21,6 +21,9 @@ func ValidateSnapshot(s *controlpb.ConfigSnapshot) error {
 	if s == nil || s.Revision == 0 || s.Digest != SnapshotDigest(s) {
 		return errors.New("配置快照版本或摘要无效")
 	}
+	if err := ValidateOutboundIPv4(s.OutboundIpv4); err != nil {
+		return err
+	}
 	ids := map[string]bool{}
 	ports := map[uint32]bool{}
 	if s.CheckPort > 65535 {

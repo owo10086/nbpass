@@ -1318,6 +1318,7 @@ func (x *EventGap) GetReason() string {
 
 type ConfigSnapshot struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
+	OutboundIpv4    string                 `protobuf:"bytes,284,opt,name=outbound_ipv4,json=outboundIpv4,proto3" json:"outbound_ipv4,omitempty"`
 	CheckPort       uint32                 `protobuf:"varint,140,opt,name=check_port,json=checkPort,proto3" json:"check_port,omitempty"`
 	SelfCheckConfig []byte                 `protobuf:"bytes,90,opt,name=self_check_config,json=selfCheckConfig,proto3" json:"self_check_config,omitempty"`
 	Revision        uint64                 `protobuf:"varint,1,opt,name=revision,proto3" json:"revision,omitempty"`
@@ -1357,6 +1358,13 @@ func (x *ConfigSnapshot) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ConfigSnapshot.ProtoReflect.Descriptor instead.
 func (*ConfigSnapshot) Descriptor() ([]byte, []int) {
 	return file_control_v1_control_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ConfigSnapshot) GetOutboundIpv4() string {
+	if x != nil {
+		return x.OutboundIpv4
+	}
+	return ""
 }
 
 func (x *ConfigSnapshot) GetCheckPort() uint32 {
@@ -2740,8 +2748,9 @@ const file_control_v1_control_proto_rawDesc = "" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\x12\x12\n" +
 	"\x04from\x18\x02 \x01(\tR\x04from\x12\x0e\n" +
 	"\x02to\x18\x03 \x01(\tR\x02to\x12\x16\n" +
-	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xcb\x02\n" +
-	"\x0eConfigSnapshot\x12\x1e\n" +
+	"\x06reason\x18\x04 \x01(\tR\x06reason\"\xf1\x02\n" +
+	"\x0eConfigSnapshot\x12$\n" +
+	"\routbound_ipv4\x18\x9c\x02 \x01(\tR\foutboundIpv4\x12\x1e\n" +
 	"\n" +
 	"check_port\x18\x8c\x01 \x01(\rR\tcheckPort\x12*\n" +
 	"\x11self_check_config\x18Z \x01(\fR\x0fselfCheckConfig\x12\x1a\n" +

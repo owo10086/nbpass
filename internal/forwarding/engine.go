@@ -26,6 +26,10 @@ type Dependencies struct {
 	NodeID     string
 	LookupIPv4 func(context.Context, string) ([]netip.Addr, error)
 	DialTarget func(context.Context, string) (net.Conn, error)
+	// DialTargetFrom 仅用于有源地址的最终目标拨号，不能回退到 DialTarget。
+	DialTargetFrom func(context.Context, string, string) (net.Conn, error)
+	// LocalIPv4 枚举本机接口地址，应用和缓存恢复均重新读取。
+	LocalIPv4  func() ([]netip.Addr, error)
 	Listen     func(string, string) (net.Listener, error)
 	DialTunnel func(context.Context, string) (net.Conn, error)
 	Now        func() time.Time
@@ -33,6 +37,7 @@ type Dependencies struct {
 }
 
 type Engine struct {
+	outbound            atomic.Pointer[outboundBinding]
 	traffic             trafficMeter
 	checkConfigured     bool
 	checkListener       net.Listener
@@ -77,6 +82,14 @@ func NewEngine(deps Dependencies) *Engine {
 			return (&net.Dialer{}).DialContext(ctx, "tcp4", address)
 		}
 	}
+	if deps.LocalIPv4 == nil {
+		deps.LocalIPv4 = localIPv4Addresses
+	}
+	if deps.DialTargetFrom == nil {
+		deps.DialTargetFrom = func(ctx context.Context, address, source string) (net.Conn, error) {
+			return (&net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP(source)}}).DialContext(ctx, "tcp4", address)
+		}
+	}
 	if deps.Listen == nil {
 		deps.Listen = net.Listen
 	}
@@ -104,6 +117,8 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 	if s.Revision < e.highest || s.Revision == e.highest && s.Digest != e.highestDigest {
 		return errors.New("拒绝旧版本或同版本不同内容的快照")
 	}
+	binding := e.validateOutbound(s.OutboundIpv4)
+	sourceChanged := e.outboundBinding().source != binding.source
 	endpoints, groups := tunnelEndpoints(s.ExitGroups)
 	desired := map[string]*controlpb.ForwardRule{}
 	for _, r := range s.Rules {
@@ -111,6 +126,15 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 	}
 	checkpoint := e.State()
 	checkpoint.HighestRevision, checkpoint.HighestDigest = s.Revision, s.Digest
+	checkpoint.OutboundIPv4 = s.OutboundIpv4
+	sourceRequired := len(s.GetTunnelServer().GetGrants()) > 0
+	for _, r := range s.Rules {
+		sourceRequired = sourceRequired || r.Kind == controlpb.RuleKind_RULE_KIND_DIRECT
+	}
+	sourceFailed := binding.err != nil && sourceRequired
+	if sourceFailed {
+		checkpoint.AppliedRevision, checkpoint.AppliedDigest = 0, ""
+	}
 	checkpoint.Rules, checkpoint.Results = nil, nil
 	checkpoint.ExitGroups = s.ExitGroups
 	checkpoint.TunnelError = ""
@@ -129,7 +153,7 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 	}
 	for _, r := range s.Rules {
 		result := &controlpb.RuleApplyResult{RuleId: r.Id, ApplyError: "配置应用尚未完成"}
-		if current := e.rules[r.Id]; current != nil && sameListenerRule(current.config, r) && sameTunnelGroupRoutes(current.exit, groups[r.ExitGroupId]) {
+		if current := e.rules[r.Id]; current != nil && sameListenerRule(current.config, r) && sameTunnelGroupRoutes(current.exit, groups[r.ExitGroupId]) && (r.Kind != controlpb.RuleKind_RULE_KIND_DIRECT || !sourceChanged && binding.err == nil) {
 			checkpoint.Rules = append(checkpoint.Rules, r)
 			result.AppliedRevision, result.ApplyError = s.Revision, ""
 		}
@@ -139,9 +163,13 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 		return err
 	}
 	e.highest, e.highestDigest = s.Revision, s.Digest
+	e.outbound.Store(binding)
+	if sourceFailed {
+		e.revision, e.digest = 0, ""
+	}
 	for id, current := range e.rules {
 		next := desired[id]
-		if !sameListenerRule(current.config, next) {
+		if !sameListenerRule(current.config, next) || current.config.Kind == controlpb.RuleKind_RULE_KIND_DIRECT && (sourceChanged || binding.err != nil) {
 			current.stop()
 			delete(e.rules, id)
 		}
@@ -155,12 +183,19 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 		e.tunnelError = ErrorSummary(fmt.Sprintf("出口隧道监听失败: %v", err), 1024)
 		failures = append(failures, errors.New(e.tunnelError))
 	}
+	if binding.err != nil && len(s.GetTunnelServer().GetGrants()) > 0 {
+		e.tunnelError = ErrorSummary(binding.err.Error(), 1024)
+		failures = append(failures, binding.err)
+	}
 	e.applyTunnelClients(endpoints)
 	readiness := e.checkNewTunnelRules(ctx, s.Rules, groups)
 	e.results = nil
 	for _, r := range s.Rules {
 		result := &controlpb.RuleApplyResult{RuleId: r.Id}
 		err := readiness[r.Id]
+		if r.Kind == controlpb.RuleKind_RULE_KIND_DIRECT && binding.err != nil {
+			err = binding.err
+		}
 		if err == nil {
 			err = e.startRule(r, groups[r.ExitGroupId])
 		}
@@ -365,10 +400,10 @@ func (r *listenerRule) serve(client net.Conn) {
 
 // 每个新连接最多尝试三个不同 IPv4，总预算 10 秒；只在交付业务数据前重试。
 func (e *Engine) dialTarget(ctx context.Context, r *controlpb.ForwardRule) (net.Conn, error) {
-	return e.dialTargetWithin(ctx, r, 10*time.Second)
+	return e.dialTargetWithin(ctx, r, 10*time.Second, e.outboundBinding().source)
 }
 
-func (e *Engine) dialTargetWithin(ctx context.Context, r *controlpb.ForwardRule, budget time.Duration) (net.Conn, error) {
+func (e *Engine) dialTargetWithin(ctx context.Context, r *controlpb.ForwardRule, budget time.Duration, source string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	var ips []netip.Addr
@@ -395,7 +430,14 @@ func (e *Engine) dialTargetWithin(ctx context.Context, r *controlpb.ForwardRule,
 		attempts++
 		// 单候选最多 3 秒，为后续 A 记录保留总预算。
 		attempt, cancel := context.WithTimeout(ctx, 3*time.Second)
-		c, err := e.deps.DialTarget(attempt, net.JoinHostPort(ip.String(), strconv.Itoa(int(r.TargetPort))))
+		address := net.JoinHostPort(ip.String(), strconv.Itoa(int(r.TargetPort)))
+		var c net.Conn
+		var err error
+		if source != "" {
+			c, err = e.deps.DialTargetFrom(attempt, address, source)
+		} else {
+			c, err = e.deps.DialTarget(attempt, address)
+		}
 		cancel()
 		if err == nil {
 			return c, nil

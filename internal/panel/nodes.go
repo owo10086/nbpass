@@ -75,6 +75,7 @@ func (p *Panel) addNode(w http.ResponseWriter, r *http.Request) {
 }
 
 type nodeView struct {
+	OutboundIPv4  string         `json:"outbound_ipv4"`
 	ManagedRecord *managedRecord `json:"managed_record"`
 	RecordStatus  string         `json:"record_status"`
 	nodeUpgradeView
@@ -112,7 +113,7 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	p.controlMu.Lock()
 	defer p.controlMu.Unlock()
-	rows, err := p.db.QueryContext(r.Context(), `SELECT id, name, last_seen_at, disconnected_at, maintenance_until,
+	rows, err := p.db.QueryContext(r.Context(), `SELECT id, name, outbound_ipv4, last_seen_at, disconnected_at, maintenance_until,
 		desired_revision, applied_revision, software_version, process_instance, apply_error, applied_digest, COALESCE((SELECT digest FROM node_snapshots WHERE node_id=nodes.id),''),
 		COALESCE(public_ipv4, ''), COALESCE(confirmed_ipv4, ''), COALESCE(auto_name, '未知'), COALESCE(auto_mainland, 0),
 		override_name, COALESCE(override_mainland, 0), COALESCE(checker_disabled, 0)
@@ -129,7 +130,7 @@ func (p *Panel) listNodes(w http.ResponseWriter, r *http.Request) {
 		var last, disconnected, maintenance sql.NullInt64
 		var override sql.NullString
 		var mainland bool
-		if err := rows.Scan(&n.ID, &n.Name, &last, &disconnected, &maintenance, &n.DesiredRevision, &n.AppliedRevision, &n.SoftwareVersion, &n.ProcessInstance, &n.ApplyError, &n.AppliedDigest, &n.DesiredDigest,
+		if err := rows.Scan(&n.ID, &n.Name, &n.OutboundIPv4, &last, &disconnected, &maintenance, &n.DesiredRevision, &n.AppliedRevision, &n.SoftwareVersion, &n.ProcessInstance, &n.ApplyError, &n.AppliedDigest, &n.DesiredDigest,
 			&n.PublicIPv4, &n.ConfirmedIPv4, &n.AutomaticRegion.Name, &n.AutomaticRegion.MainlandChina, &override, &mainland, &n.CheckerDisabled); err != nil {
 			problem(w, 503, "存储暂不可用")
 			return

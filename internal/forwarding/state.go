@@ -14,6 +14,7 @@ import (
 // State 只缓存实际生效的规则；高水位独立于最后完整成功版本。
 // Persist 必须先原子保存撤销检查点，再保存实际应用结果。
 type State struct {
+	OutboundIPv4    string                       `json:"outbound_ipv4,omitempty"`
 	CheckConfigured bool                         `json:"check_configured,omitempty"`
 	CheckPort       uint32                       `json:"check_port,omitempty"`
 	CheckError      string                       `json:"check_error,omitempty"`
@@ -41,6 +42,7 @@ func ErrorSummary(message string, limit int) string {
 
 func (e *Engine) State() State {
 	s := State{HighestRevision: e.highest, HighestDigest: e.highestDigest, AppliedRevision: e.revision, AppliedDigest: e.digest}
+	s.OutboundIPv4 = e.outboundBinding().source
 	s.TunnelError = e.tunnelError
 	s.CheckPort, s.CheckError = e.checkPort, e.checkError
 	s.CheckConfigured = e.checkConfigured
@@ -80,7 +82,7 @@ func (e *Engine) Restore(s State) error {
 	if s.HighestRevision == 0 || len(s.HighestDigest) != 64 || s.AppliedRevision > s.HighestRevision || s.AppliedRevision > 0 && len(s.AppliedDigest) != 64 {
 		return errors.New("配置缓存版本无效")
 	}
-	snapshot := &controlpb.ConfigSnapshot{Revision: s.HighestRevision, Rules: s.Rules, ExitGroups: s.ExitGroups, TunnelServer: s.TunnelServer, CheckPort: s.CheckPort}
+	snapshot := &controlpb.ConfigSnapshot{Revision: s.HighestRevision, Rules: s.Rules, ExitGroups: s.ExitGroups, TunnelServer: s.TunnelServer, CheckPort: s.CheckPort, OutboundIpv4: s.OutboundIPv4}
 	snapshot.Digest = SnapshotDigest(snapshot)
 	if err := ValidateSnapshot(snapshot); err != nil {
 		return err
@@ -98,9 +100,14 @@ func (e *Engine) Restore(s State) error {
 			return errors.New("实际规则缺少缓存结果")
 		}
 	}
+	binding := e.validateOutbound(s.OutboundIPv4)
+	e.outbound.Store(binding)
 	e.highest, e.highestDigest = s.HighestRevision, s.HighestDigest
 	e.revision, e.digest = s.AppliedRevision, s.AppliedDigest
 	e.results, e.tunnelError = s.Results, s.TunnelError
+	if binding.err == nil && s.TunnelServer != nil && strings.HasPrefix(e.tunnelError, "出站 IP ") {
+		e.tunnelError = ""
+	}
 	port := s.CheckPort
 	if !s.CheckConfigured {
 		port = e.effectiveCheckPort(port)
@@ -125,11 +132,19 @@ func (e *Engine) Restore(s State) error {
 		e.tunnelError = ErrorSummary(fmt.Sprintf("出口隧道监听失败: %v", err), 1024)
 		e.revision, e.digest = 0, ""
 	}
+	if binding.err != nil && len(s.TunnelServer.GetGrants()) > 0 {
+		e.tunnelError = ErrorSummary(binding.err.Error(), 1024)
+		e.revision, e.digest = 0, ""
+	}
 	endpoints, groups := tunnelEndpoints(s.ExitGroups)
 	e.applyTunnelClients(endpoints)
 	for _, r := range s.Rules {
 		result := results[r.Id]
-		if err := e.startRule(r, groups[r.ExitGroupId]); err != nil {
+		err := binding.err
+		if r.Kind != controlpb.RuleKind_RULE_KIND_DIRECT || err == nil {
+			err = e.startRule(r, groups[r.ExitGroupId])
+		}
+		if err != nil {
 			result.AppliedRevision, result.ApplyError = 0, ErrorSummary(err.Error(), 1024)
 			e.revision, e.digest = 0, ""
 		}
