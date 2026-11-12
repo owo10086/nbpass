@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"time"
 
+	"google.golang.org/protobuf/proto"
 	"nbpass/internal/controlpb"
+	"nbpass/internal/forwarding"
 )
 
 // 迁移 21，追加于 main 的 entryManualSwitchMigration(20) 之后。
@@ -22,9 +24,10 @@ func (p *Panel) storeExitHealth(ctx context.Context, tx *sql.Tx, id string, heal
 		return err
 	}
 	valid := make([]*controlpb.ExitHealth, 0, len(health))
-	seen := map[string]bool{}
+	seen := map[[2]string]bool{}
 	for _, h := range health {
-		if h == nil || h.ExitId == "" || seen[h.ExitId] || !matchesEndpointHealth(snapshot, h) {
+		key := [2]string{h.GetExitId(), forwarding.NormalizeAddressID(h.GetAddressId())}
+		if h == nil || h.ExitId == "" || seen[key] || !matchesEndpointHealth(snapshot, h) {
 			continue
 		}
 		if h.State != "unknown" && h.State != "healthy" && h.State != "unhealthy" && h.State != "recovering" {
@@ -38,7 +41,7 @@ func (p *Panel) storeExitHealth(ctx context.Context, tx *sql.Tx, id string, heal
 		if n == 0 {
 			continue
 		}
-		seen[h.ExitId] = true
+		seen[key] = true
 		if err := p.confirmExitAddressHandshake(ctx, tx, id, h); err != nil {
 			return err
 		}
@@ -91,7 +94,9 @@ func (p *Panel) getExitHealth(w http.ResponseWriter, r *http.Request) {
 		matching := make([]*controlpb.ExitHealth, 0, len(health))
 		for _, h := range health {
 			if matchesEndpointHealth(snapshot, h) {
-				matching = append(matching, h)
+				view := proto.Clone(h).(*controlpb.ExitHealth)
+				view.AddressId = forwarding.NormalizeAddressID(view.AddressId)
+				matching = append(matching, view)
 			}
 		}
 		health = matching
@@ -123,7 +128,7 @@ func (p *Panel) admitExitFailover(ctx context.Context, tx *sql.Tx, id string, ve
 func matchesEndpointHealth(snapshot *controlpb.ConfigSnapshot, h *controlpb.ExitHealth) bool {
 	for _, g := range snapshot.GetExitGroups() {
 		for _, ep := range g.Exits {
-			if ep.NodeId == h.GetExitId() && ep.EndpointConfigDigest == h.GetEndpointConfigDigest() {
+			if ep.NodeId == h.GetExitId() && forwarding.NormalizeAddressID(ep.AddressId) == forwarding.NormalizeAddressID(h.GetAddressId()) && ep.EndpointConfigDigest == h.GetEndpointConfigDigest() {
 				return true
 			}
 		}

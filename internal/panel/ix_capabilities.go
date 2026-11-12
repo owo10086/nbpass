@@ -157,14 +157,18 @@ func ruleCapabilityRequirements(r forwarding.Rule, entry string, group exitGroup
 		required.Required = append(required.Required, capabilityRequirement{NodeID: entry, Capabilities: []string{"exit_failover"}})
 	}
 	hop := []capabilityCandidate{}
-	for _, exit := range group.Members {
-		candidate := capabilityCandidate{NodeID: exit}
+	for _, member := range group.MemberAddresses {
+		exit := member.NodeID
+		candidate := capabilityCandidate{NodeID: exit, AddressID: member.AddressID}
 		if len(group.Members) != 1 || !legacy[[3]string{exit, entry, r.ID}] {
 			candidate.Required = []capabilityRequirement{{NodeID: entry, Capabilities: []string{"tunnel_authorization"}}, {NodeID: exit, Capabilities: []string{"tunnel_authorization"}}}
 		}
-		address := addresses[exit]
-		if _, err := netip.ParseAddr(address.Address); err != nil || address.PublicPort != nil {
-			candidate.Required = append(candidate.Required, capabilityRequirement{NodeID: entry, AddressID: "public", Capabilities: []string{compatibility.IXAddressDialing}})
+		address, port, _ := selectedTunnelAddress(addresses[exit], member.AddressID)
+		if member.AddressID != "public" {
+			candidate.Required = append(candidate.Required, capabilityRequirement{NodeID: entry, AddressID: member.AddressID, Capabilities: []string{compatibility.IXMemberIdentity}})
+		}
+		if _, err := netip.ParseAddr(address); err != nil || port != nil {
+			candidate.Required = append(candidate.Required, capabilityRequirement{NodeID: entry, AddressID: member.AddressID, Capabilities: []string{compatibility.IXAddressDialing}})
 		}
 		hop = append(hop, candidate)
 	}

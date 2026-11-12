@@ -101,7 +101,7 @@ func (e *Engine) ExitHealth() []*controlpb.ExitHealth {
 	e.healthMu.Lock()
 	defer e.healthMu.Unlock()
 	result := make([]*controlpb.ExitHealth, 0, len(e.tunnelClients))
-	for id, c := range e.tunnelClients {
+	for _, c := range e.tunnelClients {
 		c.healthMu.Lock()
 		state := "healthy"
 		if c.lastProbe == "" {
@@ -113,7 +113,8 @@ func (e *Engine) ExitHealth() []*controlpb.ExitHealth {
 				state = "recovering"
 			}
 		}
-		h := &controlpb.ExitHealth{ExitId: id, AddressVersion: c.currentEndpoint().AddressVersion, EndpointConfigDigest: c.currentEndpoint().EndpointConfigDigest, State: state, ConsecutiveFailures: c.failures, LastProbe: c.lastProbe, FailureClass: string(c.failure)}
+		ep := c.currentEndpoint()
+		h := &controlpb.ExitHealth{ExitId: ep.NodeId, AddressId: ep.AddressId, AddressVersion: ep.AddressVersion, EndpointConfigDigest: ep.EndpointConfigDigest, State: state, ConsecutiveFailures: c.failures, LastProbe: c.lastProbe, FailureClass: string(c.failure)}
 		if !c.recoverySince.IsZero() {
 			h.RecoverySinceUnix = c.recoverySince.Unix()
 		}
@@ -123,6 +124,11 @@ func (e *Engine) ExitHealth() []*controlpb.ExitHealth {
 		c.healthMu.Unlock()
 		result = append(result, h)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ExitId < result[j].ExitId })
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].ExitId == result[j].ExitId {
+			return NormalizeAddressID(result[i].AddressId) < NormalizeAddressID(result[j].AddressId)
+		}
+		return result[i].ExitId < result[j].ExitId
+	})
 	return result
 }

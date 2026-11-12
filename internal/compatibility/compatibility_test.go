@@ -15,7 +15,10 @@ func TestCurrentStateWindowIsOneWayUpgrade(t *testing.T) {
 	if CompatibleState(old) {
 		t.Fatal("允许了不能读取当前格式的在线切换")
 	}
-	for _, cap := range []string{"ix_member_identity", "outbound_ipv4", "forward_chains", "ix_addresses"} {
+	if !Supports(c, IXMemberIdentity) {
+		t.Fatal("未宣告成员地址隔离能力")
+	}
+	for _, cap := range []string{"outbound_ipv4", "forward_chains", "ix_addresses"} {
 		if Supports(c, cap) {
 			t.Fatalf("提前宣告未实现能力 %s", cap)
 		}

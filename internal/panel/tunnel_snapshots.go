@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"google.golang.org/protobuf/proto"
+	"nbpass/internal/compatibility"
 	"nbpass/internal/controlpb"
 	"nbpass/internal/forwarding"
 )
@@ -25,6 +26,14 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 	if err != nil {
 		return err
 	}
+	caps, err := loadCapabilitySet(ctx, tx)
+	if err != nil {
+		return err
+	}
+	addresses, err := loadTunnelExits(ctx, tx)
+	if err != nil {
+		return err
+	}
 	generations := map[string]uint64{}
 	for _, r := range rules {
 		generation, err := updateAuthorizationGeneration(ctx, tx, r, forwarding.RuleEntryNodes(r, members), byGroup[r.ExitGroupID].Members)
@@ -37,8 +46,8 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 	if err != nil {
 		return err
 	}
-	endpoints := map[string]*controlpb.TunnelEndpoint{}
-	newDialing := map[string]bool{}
+	endpoints := map[[2]string]*controlpb.TunnelEndpoint{}
+	newDialing := map[[2]string]bool{}
 	for rows.Next() {
 		var id, address, transport, name, addressVersion string
 		var port uint32
@@ -54,16 +63,29 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 			return err
 		}
 		compiled[id].TunnelServer = &controlpb.TunnelServer{ListenPort: port, Transport: controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS, ServerName: name, CertificatePem: cert, PrivateKeyPem: key}
-		newDialing[id] = publicPort != nil || !isIPv4Address(address)
+		newDialing[[2]string{id, "public"}] = publicPort != nil || !isIPv4Address(address)
 		if publicPort != nil {
 			port = *publicPort
 		}
-		endpoints[id] = &controlpb.TunnelEndpoint{NodeId: id, Address: address, AddressVersion: addressVersion, Port: port, Transport: controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS, ServerName: name, CertificatePem: cert}
+		endpoints[[2]string{id, "public"}] = &controlpb.TunnelEndpoint{NodeId: id, Address: address, AddressVersion: addressVersion, Port: port, Transport: controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS, ServerName: name, CertificatePem: cert}
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
 		return err
+	}
+	for _, v := range addresses {
+		for _, a := range v.DedicatedAddresses {
+			ep := proto.Clone(endpoints[[2]string{v.NodeID, "public"}]).(*controlpb.TunnelEndpoint)
+			ep.AddressId, ep.Address, ep.AddressVersion = a.ID, a.Address, ""
+			ep.Port = uint32(v.ListenPort)
+			if a.PublicPort != nil {
+				ep.Port = uint32(*a.PublicPort)
+			}
+			key := [2]string{v.NodeID, a.ID}
+			endpoints[key] = ep
+			newDialing[key] = a.PublicPort != nil || !isIPv4Address(a.Address)
+		}
 	}
 	legacy := map[[3]string]bool{}
 	if len(endpoints) > 0 {
@@ -90,7 +112,8 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 			}
 			groupKey := entry + ":" + g.ID
 			cg := &controlpb.ExitGroup{Id: g.ID, Strategy: controlpb.ExitStrategy_EXIT_STRATEGY_PRIMARY_BACKUP}
-			for _, exit := range g.Members {
+			for _, member := range g.MemberAddresses {
+				exit := member.NodeID
 				if !plan.allows(exit) {
 					continue
 				}
@@ -99,10 +122,18 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 				if err != nil {
 					return err
 				}
-				ep := proto.Clone(endpoints[exit]).(*controlpb.TunnelEndpoint)
+				key := [2]string{exit, member.AddressID}
+				if endpoints[key] == nil {
+					return &forwardingError{400, "端点组地址不存在或不属于该服务器"}
+				}
+				ep := proto.Clone(endpoints[key]).(*controlpb.TunnelEndpoint)
 				ep.EntryId, ep.Credential = entry, token
-				// Preserve the legacy IPv4 shape unless new dialing semantics are selected.
-				if newDialing[exit] {
+				// Real 02 consumers keep their exact public shape and digest contract.
+				identity := caps[entry].capabilities[compatibility.IXMemberIdentity]
+				if identity {
+					ep.AddressId = member.AddressID
+				}
+				if identity || caps[entry].capabilities[compatibility.IXAddressDialing] || newDialing[key] {
 					ep.EndpointConfigDigest = forwarding.EndpointConfigDigest(ep)
 				}
 				cg.Exits = append(cg.Exits, ep)

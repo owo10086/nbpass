@@ -44,7 +44,7 @@ type Engine struct {
 	tunnelServer        *tunnelServer
 	healthMu            sync.Mutex
 	probeSlots          chan struct{}
-	tunnelClients       map[string]*tunnelClient
+	tunnelClients       map[[2]string]*tunnelClient
 	deps                Dependencies
 	rules               map[string]*listenerRule
 	revision            uint64
@@ -80,7 +80,7 @@ func NewEngine(deps Dependencies) *Engine {
 	if deps.Listen == nil {
 		deps.Listen = net.Listen
 	}
-	return &Engine{probeSlots: make(chan struct{}, 8), resources: &resourceLimiter{limits: deps.Limits.defaults(), rules: map[string]int{}}, deps: deps, rules: map[string]*listenerRule{}, tunnelClients: map[string]*tunnelClient{}}
+	return &Engine{probeSlots: make(chan struct{}, 8), resources: &resourceLimiter{limits: deps.Limits.defaults(), rules: map[string]int{}}, deps: deps, rules: map[string]*listenerRule{}, tunnelClients: map[[2]string]*tunnelClient{}}
 }
 
 // Connections 返回逻辑业务连接数；目标侧 TCP 和控制连接不重复计数。
@@ -188,19 +188,19 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 	return errors.Join(failures...)
 }
 
-func tunnelEndpoints(exitGroups []*controlpb.ExitGroup) (map[string]*controlpb.TunnelEndpoint, map[string]*controlpb.ExitGroup) {
-	endpoints := map[string]*controlpb.TunnelEndpoint{}
+func tunnelEndpoints(exitGroups []*controlpb.ExitGroup) (map[[2]string]*controlpb.TunnelEndpoint, map[string]*controlpb.ExitGroup) {
+	endpoints := map[[2]string]*controlpb.TunnelEndpoint{}
 	groups := map[string]*controlpb.ExitGroup{}
 	for _, g := range exitGroups {
 		groups[g.Id] = g
 		for _, ep := range g.Exits {
-			endpoints[ep.NodeId] = ep
+			endpoints[endpointKey(ep)] = ep
 		}
 	}
 	return endpoints, groups
 }
 
-func (e *Engine) applyTunnelClients(endpoints map[string]*controlpb.TunnelEndpoint) {
+func (e *Engine) applyTunnelClients(endpoints map[[2]string]*controlpb.TunnelEndpoint) {
 	e.healthMu.Lock()
 	defer e.healthMu.Unlock()
 	for id, client := range e.tunnelClients {
@@ -238,7 +238,7 @@ func (e *Engine) selectTunnel(r *controlpb.ForwardRule, ep *controlpb.ExitGroup)
 			allowed = allowed || id == endpoint.NodeId
 		}
 		if allowed {
-			selection.clients = append(selection.clients, e.tunnelClients[endpoint.NodeId])
+			selection.clients = append(selection.clients, e.tunnelClients[endpointKey(endpoint)])
 		}
 	}
 	return selection
@@ -279,7 +279,7 @@ func (e *Engine) Close() {
 			<-client.probeDone
 		}
 	}
-	e.tunnelClients = map[string]*tunnelClient{}
+	e.tunnelClients = map[[2]string]*tunnelClient{}
 	e.healthMu.Unlock()
 	if e.tunnelServer != nil {
 		e.tunnelServer.close()

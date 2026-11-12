@@ -10,13 +10,21 @@ import (
 	"nbpass/internal/controlpb"
 )
 
+func sameEndpointConfiguration(a, b *controlpb.TunnelEndpoint) bool {
+	a = proto.Clone(a).(*controlpb.TunnelEndpoint)
+	b = proto.Clone(b).(*controlpb.TunnelEndpoint)
+	a.AddressId = NormalizeAddressID(a.AddressId)
+	b.AddressId = NormalizeAddressID(b.AddressId)
+	return proto.Equal(a, b)
+}
+
 // 轮换只改变信任和凭据，不重启规则监听。地址、身份或成员变化仍按原语义撤销。
 func sameTunnelRoute(a, b *controlpb.TunnelEndpoint) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
 	if a.RotationId == "" && b.RotationId == "" {
-		return proto.Equal(a, b)
+		return sameEndpointConfiguration(a, b)
 	}
 	a = proto.Clone(a).(*controlpb.TunnelEndpoint)
 	b = proto.Clone(b).(*controlpb.TunnelEndpoint)
@@ -28,7 +36,7 @@ func sameTunnelRoute(a, b *controlpb.TunnelEndpoint) bool {
 	b.TrustedCertificatesPem = nil
 	b.Credential = ""
 	b.RotationId = ""
-	return proto.Equal(a, b)
+	return sameEndpointConfiguration(a, b)
 }
 
 func sameTunnelGroupRoutes(a, b *controlpb.ExitGroup) bool {

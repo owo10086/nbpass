@@ -246,11 +246,11 @@ type entryReadinessInputs struct {
 	maintenance, blocked, sessionLive bool
 	domestic                          *domesticEvidence
 	snapshot                          *controlpb.ConfigSnapshot
-	health                            map[string]bool
+	health                            map[[3]string]bool
 }
 
 func (p *Panel) loadEntryReadinessInputs(ctx context.Context, id string, now time.Time) (entryReadinessInputs, error) {
-	v := entryReadinessInputs{health: map[string]bool{}}
+	v := entryReadinessInputs{health: map[[3]string]bool{}}
 	var maintenance sql.NullInt64
 	var instance string
 	err := p.db.QueryRowContext(ctx, `SELECT n.maintenance_until,n.process_instance,COALESCE(s.state,'unknown')='blocked' FROM nodes n LEFT JOIN node_self_check s ON s.node_id=n.id WHERE n.id=?`, id).Scan(&maintenance, &instance, &v.blocked)
@@ -316,7 +316,7 @@ func (p *Panel) loadEntryReadinessInputs(ctx context.Context, id string, now tim
 		// 探测最多5.5秒间隔+3秒握手+5秒采样，加上秒级时间戳取整；未完成和旧成功均不能当新握手。
 		age := now.Sub(time.Unix(h.GetCheckedAtUnix(), 0))
 		if matchesEndpointHealth(v.snapshot, h) && h.GetLastProbe() == "success" && age >= 0 && age < 15*time.Second {
-			v.health[h.ExitId] = true
+			v.health[[3]string{h.ExitId, forwarding.NormalizeAddressID(h.AddressId), h.EndpointConfigDigest}] = true
 		}
 	}
 	return v, nil
@@ -326,15 +326,16 @@ func (v entryReadinessInputs) tunnelReady(rule string) bool {
 		if r.Id != rule {
 			continue
 		}
-		for _, exit := range r.AuthorizedExitIds {
-			if v.health[exit] {
-				return true
+		for _, g := range v.snapshot.ExitGroups {
+			if g.Id != r.ExitGroupId {
+				continue
 			}
-		}
-		// 仅兼容既有零代次单出口快照；新版规则必须使用逐规则确认的出口集合。
-		if r.AuthorizationGeneration == 0 && len(r.AuthorizedExitIds) == 0 {
-			for _, g := range v.snapshot.ExitGroups {
-				if g.Id == r.ExitGroupId && len(g.Exits) == 1 && v.health[g.Exits[0].NodeId] {
+			for _, ep := range g.Exits {
+				allowed := r.AuthorizationGeneration == 0 && len(r.AuthorizedExitIds) == 0 && len(g.Exits) == 1
+				for _, exit := range r.AuthorizedExitIds {
+					allowed = allowed || exit == ep.NodeId
+				}
+				if allowed && v.health[[3]string{ep.NodeId, forwarding.NormalizeAddressID(ep.AddressId), ep.EndpointConfigDigest}] {
 					return true
 				}
 			}

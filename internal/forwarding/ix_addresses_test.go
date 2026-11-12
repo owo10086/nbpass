@@ -56,7 +56,7 @@ func TestIXAddressDomainRestoresCacheAndResolvesEachSessionAndProbe(t *testing.T
 	if _, err = io.ReadFull(c, out); err != nil || string(out) != "IX" {
 		t.Fatal("域名业务转发失败", err)
 	}
-	client := e.tunnelClients[ep.NodeId]
+	client := e.tunnelClients[endpointKey(ep)]
 	client.probeOnce(context.Background())
 	health := e.ExitHealth()
 	if lookups.Load() != 2 || len(health) != 1 || health[0].LastProbe != "success" || health[0].EndpointConfigDigest != "configuration-one" {
@@ -75,7 +75,7 @@ func TestIXAddressDomainRestoresCacheAndResolvesEachSessionAndProbe(t *testing.T
 	if err := restored.Restore(state); err != nil {
 		t.Fatal(err)
 	}
-	restored.tunnelClients[ep.NodeId].probeOnce(context.Background())
+	restored.tunnelClients[endpointKey(ep)].probeOnce(context.Background())
 	if lookups.Load() != 3 || restored.ExitHealth()[0].LastProbe != "success" {
 		t.Fatal("恢复后探测未重新解析", restored.ExitHealth())
 	}

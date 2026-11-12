@@ -6,7 +6,6 @@ import (
 	"encoding/pem"
 	"errors"
 
-	"google.golang.org/protobuf/proto"
 	"nbpass/internal/controlpb"
 )
 
@@ -27,7 +26,7 @@ func tunnelCertificate(data []byte, name string) (*x509.Certificate, error) {
 func validateTunnelSnapshot(s *controlpb.ConfigSnapshot) error {
 	invalid := errors.New("隧道配置无效")
 	groups := map[string]bool{}
-	endpoints := map[string]*controlpb.TunnelEndpoint{}
+	endpoints := map[[2]string]*controlpb.TunnelEndpoint{}
 	for _, g := range s.ExitGroups {
 		if g == nil || g.Id == "" || groups[g.Id] || g.Strategy != controlpb.ExitStrategy_EXIT_STRATEGY_PRIMARY_BACKUP || len(g.Exits) == 0 {
 			return invalid
@@ -53,10 +52,10 @@ func validateTunnelSnapshot(s *controlpb.ConfigSnapshot) error {
 			if _, err := tunnelCertificate(ep.CertificatePem, ep.ServerName); err != nil {
 				return err
 			}
-			if previous := endpoints[ep.NodeId]; previous != nil && !proto.Equal(previous, ep) {
+			if previous := endpoints[endpointKey(ep)]; previous != nil && !sameEndpointConfiguration(previous, ep) {
 				return invalid
 			}
-			endpoints[ep.NodeId] = ep
+			endpoints[endpointKey(ep)] = ep
 		}
 	}
 	for _, r := range s.Rules {

@@ -177,14 +177,14 @@ func TestTunnelRotationUnchangedEndpointAndReferenceReleaseDoNotWaitForHandshake
 			ep := &controlpb.TunnelEndpoint{NodeId: "exit", EntryId: "entry"}
 			session := &tunnelSession{}
 			c := &tunnelClient{engine: e, endpoint: ep, session: session, users: map[*tunnelSession]int{session: 1}}
-			e.tunnelClients[ep.NodeId] = c
+			e.tunnelClients[endpointKey(ep)] = c
 			c.mu.Lock() // 模拟另一次仍在预算内的网络握手。
 			defer c.mu.Unlock()
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
 				if operation == "unchanged_endpoint" {
-					e.applyTunnelClients(map[string]*controlpb.TunnelEndpoint{ep.NodeId: ep})
+					e.applyTunnelClients(map[[2]string]*controlpb.TunnelEndpoint{endpointKey(ep): ep})
 				} else {
 					c.releaseSession(session)
 				}

@@ -103,8 +103,8 @@ func TestIXAddressDomainMappedPortAndOldDialerIsolation(t *testing.T) {
 	as, bs := proto.Clone(latest[aid]).(*controlpb.ConfigSnapshot), proto.Clone(latest[bid]).(*controlpb.ConfigSnapshot)
 	mu.Unlock()
 	ep := as.ExitGroups[0].Exits[0]
-	if ep.Port != uint32(mapped) || bs.TunnelServer.ListenPort != uint32(bport) || ep.ServerName != saved["server_name"] || ep.EndpointConfigDigest == "" || (ep.ProtoReflect().Descriptor().Fields().ByNumber(280) != nil && ep.ProtoReflect().Has(ep.ProtoReflect().Descriptor().Fields().ByNumber(280))) {
-		t.Fatal("映射改变监听、身份或提前发送地址身份", ep, bs)
+	if ep.Port != uint32(mapped) || bs.TunnelServer.ListenPort != uint32(bport) || ep.ServerName != saved["server_name"] || ep.EndpointConfigDigest == "" || ep.AddressId != "public" {
+		t.Fatal("映射改变监听、TLS 身份或当前节点未收到公网地址身份")
 	}
 	directPort := reserve()
 	directRule := c.Do("POST", "/api/rules", directBody(entryGroup(c, aid)["id"].(string), directPort, "127.0.0.1", directTarget), 201)

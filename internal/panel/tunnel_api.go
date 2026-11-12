@@ -30,10 +30,16 @@ type tunnelExitView struct {
 	CertificatePEM     string                     `json:"certificate_pem"`
 }
 type exitGroupView struct {
-	ID       string                  `json:"id"`
-	Name     string                  `json:"name"`
-	Strategy forwarding.ExitStrategy `json:"strategy"`
-	Members  []string                `json:"members"`
+	ID              string                  `json:"id"`
+	Name            string                  `json:"name"`
+	Strategy        forwarding.ExitStrategy `json:"strategy"`
+	Members         []string                `json:"members"`
+	MemberAddresses []memberAddress         `json:"member_addresses"`
+}
+
+type memberAddress struct {
+	NodeID    string `json:"node_id"`
+	AddressID string `json:"address_id"`
 }
 
 func (p *Panel) tunnelRoutes(mux *http.ServeMux) {
@@ -142,6 +148,21 @@ func (p *Panel) saveTunnelExit(w http.ResponseWriter, r *http.Request) {
 				}
 				seen[d.ID] = true
 			}
+			if old != nil {
+				for _, d := range old.DedicatedAddresses {
+					if seen[d.ID] {
+						continue
+					}
+					var group string
+					err := tx.QueryRowContext(r.Context(), "SELECT g.name FROM exit_groups g JOIN exit_group_members m ON m.group_id=g.id WHERE m.node_id=? AND m.address_id=? ORDER BY g.id LIMIT 1", id, d.ID).Scan(&group)
+					if err == nil {
+						return &forwardingError{409, "专线地址仍被端点组“" + group + "”引用，请先更换组地址"}
+					}
+					if err != sql.ErrNoRows {
+						return err
+					}
+				}
+			}
 		}
 		if old == nil {
 			name, cert, key, err := p.newExitIdentity()
@@ -163,13 +184,17 @@ func (p *Panel) saveTunnelExit(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if len(body.DedicatedAddresses) > 0 {
-			if _, err = tx.ExecContext(r.Context(), "DELETE FROM tunnel_addresses WHERE node_id=?", id); err != nil {
+			// Move retained rows aside before assigning new unique positions. Never delete a referenced identity.
+			if _, err = tx.ExecContext(r.Context(), "UPDATE tunnel_addresses SET position=-position-1 WHERE node_id=?", id); err != nil {
 				return err
 			}
 			for position, d := range dedicated {
-				if _, err = tx.ExecContext(r.Context(), "INSERT INTO tunnel_addresses(node_id,id,name,address,public_port,position) VALUES(?,?,?,?,?,?)", id, d.ID, d.Name, d.Address, d.PublicPort, position); err != nil {
+				if _, err = tx.ExecContext(r.Context(), `INSERT INTO tunnel_addresses(node_id,id,name,address,public_port,position) VALUES(?,?,?,?,?,?) ON CONFLICT(node_id,id) DO UPDATE SET name=excluded.name,address=excluded.address,public_port=excluded.public_port,position=excluded.position`, id, d.ID, d.Name, d.Address, d.PublicPort, position); err != nil {
 					return err
 				}
+			}
+			if _, err = tx.ExecContext(r.Context(), "DELETE FROM tunnel_addresses WHERE node_id=? AND position<0", id); err != nil {
+				return err
 			}
 		}
 		all, err := loadTunnelExits(r.Context(), tx)
@@ -227,7 +252,7 @@ func (p *Panel) newExitCertificate(name string) ([]byte, []byte, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), nil
 }
 func loadExitGroups(ctx context.Context, q queryer) ([]exitGroupView, error) {
-	rows, err := q.QueryContext(ctx, "SELECT g.id,g.name,g.strategy,m.node_id FROM exit_groups g JOIN exit_group_members m ON g.id=m.group_id ORDER BY g.id,m.position")
+	rows, err := q.QueryContext(ctx, "SELECT g.id,g.name,g.strategy,m.node_id,m.address_id FROM exit_groups g JOIN exit_group_members m ON g.id=m.group_id ORDER BY g.id,m.position")
 	if err != nil {
 		return nil, err
 	}
@@ -235,13 +260,15 @@ func loadExitGroups(ctx context.Context, q queryer) ([]exitGroupView, error) {
 	groups := []exitGroupView{}
 	for rows.Next() {
 		var g exitGroupView
-		var id string
-		if err := rows.Scan(&g.ID, &g.Name, &g.Strategy, &id); err != nil {
+		var member memberAddress
+		if err := rows.Scan(&g.ID, &g.Name, &g.Strategy, &member.NodeID, &member.AddressID); err != nil {
 			return nil, err
 		}
-		g.Members = []string{id}
+		g.Members = []string{member.NodeID}
+		g.MemberAddresses = []memberAddress{member}
 		if len(groups) > 0 && groups[len(groups)-1].ID == g.ID {
-			groups[len(groups)-1].Members = append(groups[len(groups)-1].Members, id)
+			groups[len(groups)-1].Members = append(groups[len(groups)-1].Members, member.NodeID)
+			groups[len(groups)-1].MemberAddresses = append(groups[len(groups)-1].MemberAddresses, member)
 		} else {
 			groups = append(groups, g)
 		}
@@ -261,15 +288,46 @@ func (p *Panel) listExitGroups(w http.ResponseWriter, r *http.Request) {
 }
 func (p *Panel) saveExitGroup(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name     string                  `json:"name"`
-		Members  []string                `json:"members"`
-		Strategy forwarding.ExitStrategy `json:"strategy"`
+		Name            string                  `json:"name"`
+		Members         json.RawMessage         `json:"members"`
+		MemberAddresses json.RawMessage         `json:"member_addresses"`
+		Strategy        forwarding.ExitStrategy `json:"strategy"`
 	}
 	if !decode(w, r, &body) {
 		return
 	}
+	var members []string
+	var addresses []memberAddress
+	if len(body.Members) > 0 && (string(body.Members) == "null" || json.Unmarshal(body.Members, &members) != nil) {
+		problem(w, 400, "成员须为列表")
+		return
+	}
+	if len(body.MemberAddresses) > 0 {
+		if string(body.MemberAddresses) == "null" || json.Unmarshal(body.MemberAddresses, &addresses) != nil {
+			problem(w, 400, "成员地址须为列表")
+			return
+		}
+		if len(body.Members) > 0 && len(members) != len(addresses) {
+			problem(w, 400, "成员与地址列表长度或顺序不一致")
+			return
+		}
+		for i, m := range addresses {
+			if m.AddressID == "" || m.NodeID == "" || len(body.Members) > 0 && members[i] != m.NodeID {
+				problem(w, 400, "成员与地址列表不一致或地址标识为空")
+				return
+			}
+		}
+		members = nil
+		for _, m := range addresses {
+			members = append(members, m.NodeID)
+		}
+	} else {
+		for _, id := range members {
+			addresses = append(addresses, memberAddress{id, "public"})
+		}
+	}
 	body.Name = strings.TrimSpace(body.Name)
-	if body.Name == "" || len(body.Name) > 200 || len(body.Members) == 0 || body.Strategy != forwarding.PrimaryBackup {
+	if body.Name == "" || len(body.Name) > 200 || len(members) == 0 || body.Strategy != forwarding.PrimaryBackup {
 		problem(w, 400, "出口组须有名称、不重复的已配置 WSS 出口成员（按主备顺序）及主备策略")
 		return
 	}
@@ -286,12 +344,12 @@ func (p *Panel) saveExitGroup(w http.ResponseWriter, r *http.Request) {
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {
 		var n int
 		seen := map[string]bool{}
-		for _, member := range body.Members {
-			if seen[member] {
+		for _, member := range addresses {
+			if seen[member.NodeID] {
 				return &forwardingError{400, "出口成员不能重复"}
 			}
-			seen[member] = true
-			if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM tunnel_exits WHERE node_id=?", member).Scan(&n); err != nil {
+			seen[member.NodeID] = true
+			if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM tunnel_exits WHERE node_id=? AND (?='public' OR EXISTS(SELECT 1 FROM tunnel_addresses WHERE node_id=? AND id=?))", member.NodeID, member.AddressID, member.NodeID, member.AddressID).Scan(&n); err != nil {
 				return err
 			}
 			if n != 1 {
@@ -310,8 +368,8 @@ func (p *Panel) saveExitGroup(w http.ResponseWriter, r *http.Request) {
 		if _, err := tx.ExecContext(r.Context(), "DELETE FROM exit_group_members WHERE group_id=?", id); err != nil {
 			return err
 		}
-		for position, member := range body.Members {
-			if _, err := tx.ExecContext(r.Context(), "INSERT INTO exit_group_members(group_id,node_id,position) VALUES(?,?,?)", id, member, position); err != nil {
+		for position, member := range addresses {
+			if _, err := tx.ExecContext(r.Context(), "INSERT INTO exit_group_members(group_id,node_id,position,address_id) VALUES(?,?,?,?)", id, member.NodeID, position, member.AddressID); err != nil {
 				return err
 			}
 		}
@@ -323,7 +381,7 @@ func (p *Panel) saveExitGroup(w http.ResponseWriter, r *http.Request) {
 	if creating {
 		code = 201
 	}
-	respond(w, code, exitGroupView{ID: id, Name: body.Name, Strategy: body.Strategy, Members: body.Members})
+	respond(w, code, exitGroupView{ID: id, Name: body.Name, Strategy: body.Strategy, Members: members, MemberAddresses: addresses})
 }
 func (p *Panel) deleteExitGroup(w http.ResponseWriter, r *http.Request) {
 	if !p.mutateForwarding(w, r, func(tx *sql.Tx) error {

@@ -301,7 +301,7 @@ func TestIXAddressHealthRequiresCurrentEndpointDigest(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if inputs.health[exit] != (sampleDigest == digest) {
+		if inputs.health[[3]string{exit, "public", digest}] != (sampleDigest == digest) {
 			t.Fatal("就绪复用旧配置成功", sampleDigest, inputs.health)
 		}
 	}

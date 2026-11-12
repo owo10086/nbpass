@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"nbpass/internal/controlpb"
+	"nbpass/internal/forwarding"
 )
 
 // 迁移 25：地址版本与证书轮换版本独立，确认不依赖可清理的探针历史。
@@ -141,7 +142,7 @@ func trackExitAddresses(ctx context.Context, tx *sql.Tx, compiled map[string]*co
 	for entry, s := range compiled {
 		for _, g := range s.ExitGroups {
 			for _, ep := range g.Exits {
-				if ep.AddressVersion == "" {
+				if ep.AddressVersion == "" || forwarding.NormalizeAddressID(ep.AddressId) != "public" {
 					continue
 				}
 				wanted[[2]string{ep.AddressVersion, entry}] = true
@@ -199,7 +200,7 @@ func (p *Panel) confirmExitAddresses(ctx context.Context, tx *sql.Tx, id string,
 	}
 	for _, g := range s.ExitGroups {
 		for _, ep := range g.Exits {
-			if ep.AddressVersion == "" {
+			if ep.AddressVersion == "" || forwarding.NormalizeAddressID(ep.AddressId) != "public" {
 				continue
 			}
 			if _, err := tx.ExecContext(ctx, "UPDATE exit_address_progress SET applied_revision=MAX(applied_revision,?) WHERE action_id=? AND entry_id=?", desired, ep.AddressVersion, id); err != nil {
@@ -212,7 +213,7 @@ func (p *Panel) confirmExitAddresses(ctx context.Context, tx *sql.Tx, id string,
 
 // 真实健康握手单独推进本次地址版本；旧地址、失败及无版本旧节点均不确认。
 func (p *Panel) confirmExitAddressHandshake(ctx context.Context, tx *sql.Tx, entry string, h *controlpb.ExitHealth) error {
-	if h.AddressVersion == "" || h.LastProbe != "success" || h.CheckedAtUnix == 0 {
+	if forwarding.NormalizeAddressID(h.AddressId) != "public" || h.AddressVersion == "" || h.LastProbe != "success" || h.CheckedAtUnix == 0 {
 		return nil
 	}
 	snapshot, err := p.exitHealthSnapshot(ctx, tx, entry)
