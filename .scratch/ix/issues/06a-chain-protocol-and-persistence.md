@@ -1,6 +1,6 @@
 # 06a 链式规则协议、持久化与按变更范围校验
 
-Status: ready-for-agent
+Status: resolved
 Blocked by: 04, 05（缓存按 spec 已定决策 7：A 实施）
 Migration: 51（`chainRulesMigration`；原 06 的迁移完整归本票）
 Parallel: 可与 07 CRUD 前端并行；本票独占规则后端、proto/生成物、迁移及编译模型；06b 在本票后接数据面，06c 在 06b 后集成并统一宣告能力。不改 07/08 的 web 文件。
@@ -54,11 +54,77 @@ Parallel: 可与 07 CRUD 前端并行；本票独占规则后端、proto/生成�
 
 ## 验收标准
 
-- [ ] 迁移 51、API/导入与相邻边编译完整，协议/指纹/错误/总预算接缝明确且未宣告 forward_chains。
-- [ ] 历史重复节点只在被变更影响时校验，无关保存/重连/确认不阻塞。
-- [ ] 所有可能末跳参与目标回环检测，监听占用按实际监听者，对外端口不占本机端口。
-- [ ] A 的格式 2 完整缓存契约及真实旧版拒绝公共矩阵已定义，可由 06b 落地，不改 01 的读写范围。
+- [x] 迁移 51、API/导入与相邻边编译完整，协议/指纹/错误/总预算接缝明确且未宣告 forward_chains。
+- [x] 历史重复节点只在被变更影响时校验，无关保存/重连/确认不阻塞。
+- [x] 所有可能末跳参与目标回环检测，监听占用按实际监听者，对外端口不占本机端口。
+- [x] A 的格式 2 完整缓存契约及真实旧版拒绝公共矩阵已定义，可由 06b 落地，不改 01 的读写范围。
 
 ## 不做的事
 
 不实现 relay 数据面、真实 grant 确认/健康/事故投影或前端；不宣告多跳能力，不改变 A 或另升缓存格式，不提交构建产物或改变已定决策。
+
+## Comments
+
+### 实施中（2026-11-12）
+
+- 基于 feat/ix 的 ec59ecbc；唯一实施者按完整 06a 需求实施，保持 claimed 待独立审查；不修改其余票文档、不创建工作树、不提交构建产物。
+
+### 实现与技术裁定
+
+- 迁移 **51** 仅在 50 后追加：`ALTER TABLE forward_rules ADD COLUMN chain_id`，不重建父表；INSERT/UPDATE XOR 触发器与链外键约束同时生效。新增逐 grant 结果表按 `(node_id,entry_id,rule_id)` 主键，节点、前驱或规则删除时清理。50→51 测试逐表比较旧规则与六张流量／授权依赖表的原始行，检查授权高水位、NULL 默认值、外键与级联。
+- 普通规则保存、随机端口、批量、导入预检／提交统一接入链引用。导出 3，导入 1/2/3；旧版本即使夹带空 `chain_id` 字段也拒绝。直连、单跳、链互改保留入口二选一约束；停用保留链引用，引用链 DELETE 为 409。链返回真实 rule_count；规则 path 返回实际入口集合、05 hops 及最终目标，observations 保持空数组，不冒充实时选路。节点引用与轮换参与者覆盖链的间接引用，轮换用真实直接前驱集合。
+- 受影响集合扩展链、端点组、入口组的全部引用，含停用规则与备用成员。重复路径为 **400 且指明服务器**；原 05/计数回归只精确调整此状态断言，监听／环路仍保持既有 409。全量编译未引入路径唯一性检查；历史库无关保存、重连、授权确认继续真实 WSS 业务。目标回指按每个实际末跳解释 loopback／localhost／已证明 A 记录；本机监听仍只在实际入口，外部映射端口不占本地端口。
+- 相邻编译只生成入口集合×第一组和相邻两组的凭据；grant.entry_id 是直接前驱。中间节点无业务监听，grant 中 `NextExitGroupId`、`AuthorizedNextNodeIds` 是唯一下一组拨号许可；末跳两者为空。共享链／单跳组使用同一有序合并，避免生成重复运行组。能力计划采用逆向可达后缀加正向入口可达、精确逐边过滤；某个专线备用缺能力不会阻塞仍完整可用的公网路径，也不会把 B2 的下一边授权交给 B1。
+- **协议最终技术裁定（主编排者批准）**：ForwardRule `chain_id=285`、`hop_index=286`、`ChainAuthorization chain_authorization=287`；嵌套 `fingerprint=1,edges=2`，`ChainEdgeAuthorization` 的 `from_node_id/to_node_id/address_id/hop_index/endpoint_config_digest` 为 1–5。原先提出 287 单字符串的草案未发布，最终合并成结构化可信上下文，不新增 288。TunnelGrant 的 285–287、NodeReport 285、TunnelGrantApplyResult 1–5 及既有 280/281/284 原号保留。`make proto` 实际生成，最后重复生成逐字节一致。
+- 指纹来自数据库中的有序链／有序成员、每个实际地址的 02/03 EndpointConfigDigest（node/address/地址值/有效端口/transport/TLS server_name）、最终目标、实际入口集合及末跳源 IP；不依赖节点报告或入口自报。所有 grant.Rule 带同一可信指纹及持久递增代次，同内容重编译不递增；主备顺序、备用地址／映射端口、目标、源 IP、链重排均改变指纹。新链不能使用旧零代次兼容，保留旧单跳语义。
+- 可信 edges 只是错误证据上下文，无私钥／凭据，不扩大拨号权限。每份 relay grant 只带自身真实入边和从自身可达的后缀，不能验证同组兄弟的伪造失败。`ValidateChainFailureFromNext` 必须传入本轮真正选中的 endpoint（含 EntryId/address/digest），再验证相应可达子图、rule/grant 代次与可信 fingerprint；06b 接收远端响应须用此入口，不能仅用整链成员关系。
+- 逐流 JSON 已定义 chain_id/hop_index/chain_fingerprint/remaining_budget_ms，规则授权匹配检查真实前驱、代次、目标、链与接收跳；新链零预算或超过 10000 ms 拒绝。错误对象只含实际边、地址、跳、两种代次、指纹与地址摘要，不含自由响应正文。`entry_exit` 上传改为 `downstream_next_hop` 保留归属，`exit_target` 不改；中间节点本地资源／授权错误可定位自身并停止重试，只有 exit_target 须为末跳。
+- `ChainBudget`/`ChainRemainingBudgetMS` 为 06b 提供共享本地单调期限：min(父 context 剩余期限、10 秒、本机限额、上游剩余时间)，毫秒向下取整，零预算不重置；解析／握手／目标拨号／重试共用同一 context，`ChainMaxCandidates=3`。06b 负责真正接入 relay、取消与重试，06c 才按逐 grant 磁盘检查点确认并开放入口。当前真实节点未宣告 forward_chains；编译与协议测试的能力快照是显式测试夹具，不声称多跳数据面已上线。
+- 逐 grant 错误纳入既有 NodeReport 有界摘要预算，保留每个结果身份／代次。快照 60 KiB 与控制消息 64 KiB 以真实 protobuf 编码长度测试；超大整批导入预检和提交均回滚，真实 gRPC 服务验证 65536 字节可收、65537 字节 ResourceExhausted。
+
+### 06b 缓存与协议交接
+
+- 不新增缓存格式或加载路径：沿用 01 的读 1/2、只写 2、同一 `config.enc`、相同 AEAD 附加数据和先持久化撤销检查点流程。新 proto 的 relay-only 下一组、完整 grant（直接前驱、下一组许可、hop、代次、可信指纹／边）、端点摘要与源 IP 必须与高水位／撤销检查点一起纳入 State；06b 需要补 State 组收集与 Restore，不能把空入口 Rules 的 relay 还原成末跳直拨。
+- 公共验收矩阵交 06b 执行：新版实际写出 relay-only 缓存、末跳源 IP 缓存、撤销检查点三类格式 2；以 01/04 固定真实旧源码 `3899928362a75b58ac74ff6844652d319760b656` 的严格 `Version==1` 读取器和真实旧 Run/二进制读取，断开控制须明确拒绝并退出，业务监听／下一跳／目标连接为零。按 spec 原样隔离后旧版离线空启动仍停转发，重连只取能力内当前快照；不得改 version、加载旧副本或自动跳过普通缓存损坏。
+- 新版读格式 1 要保留高水位和撤销证据后写 2；同版本格式 2 按 ADR 0006 离线恢复。保留 04 源 IP 四格及同 revision 重新核验失败的窄准入，不重构该逻辑。本票没有冒称已执行 06b 的 relay State/真实旧版矩阵；06b 完成后交 06c，09 核验实际生产回滚目标与完整一次发行安装步骤。
+
+### 红绿与验证记录
+
+以下记录实际命令及退出码；包耗时为 Go 输出，墙钟为 `/usr/bin/time -p`。未通过的测试均保留原断言意图，修复实现或明确的夹具错误。
+
+| 命令 | 退出码／实际耗时 | 结果 |
+|---|---|---|
+| `go test ./internal/panel -run TestChainRulesHTTPReferencesAndImport -count=1 -timeout=2m`（红） | 1；panel 1.714 秒，墙钟 3.00 秒 | chain_id 尚未接入，创建 400 而应 201。 |
+| 同命令（基础接入后） | 0；panel 1.750 秒，墙钟 3.42 秒 | 引用、互改、导入、path/count/delete 通过。 |
+| `go test ./internal/forwarding -run TestChainTargetDialerLoops -count=1 -timeout=2m`（初始） | 1；墙钟 0.23 秒 | 新接缝未实现；初稿另缺 netip import，随后修正。 |
+| 同命令（保留旧构图的占位接缝） | 1；forwarding 0.607 秒，墙钟 1.23 秒 | 夹具没有设置保留端口，出现端口 0 冲突；补真实默认端口。 |
+| 同命令（有效红） | 1；forwarding 0.592 秒，墙钟 1.23 秒 | 127.0.0.1／localhost／A 记录的备用末跳环路确实未识别。 |
+| `go test ./internal/forwarding ./internal/panel -run 'TestChain(TargetDialerLoops|RulesHTTPReferencesAndImport)' -count=1 -timeout=2m` | 0；forwarding 0.597、panel 1.154 秒，墙钟 2.70 秒 | 末跳构图修复与基础 API 通过。 |
+| `go test ./internal/panel ./internal/forwarding -run 'TestChain' -count=1 -timeout=2m` | 0；panel 1.700、forwarding 1.749 秒，墙钟 3.36 秒 | 初版协议与模型通过。 |
+| `go test ./internal/panel ./internal/forwarding -run 'TestChain' -count=1 -timeout=3m` | 0；panel 3.208、forwarding 1.516 秒，墙钟 4.73 秒 | 51 保全、相邻最小秘密、指纹、协议与预算通过。 |
+| `go test ./internal/panel ./internal/forwarding ./internal/node -timeout=15m`（首轮） | 1；panel 51.827、forwarding 11.648、node 14.534 秒，墙钟 52.36 秒 | 唯一失败为 05 固定 409／迁移50的旧断言，按06a合约精确改为400／当前迁移数。 |
+| `go test ./internal/panel ./internal/forwarding -run 'Test(Chain|ForwardChains)' -count=1 -timeout=3m` | 1；panel 3.491、forwarding 1.895 秒，墙钟 5.04 秒 | 已收窄 relay 证据为自身后缀；旧测试期望含兄弟的5条，修正为入边+本机两条后边共3条，并增加兄弟伪造拒绝。 |
+| `go test ./internal/panel -run TestChainCapabilityPlanKeepsUsablePublicPath -count=1 -timeout=2m`（回置旧并集行为的红） | 1；panel 0.641 秒，墙钟 1.95 秒 | 专线备用缺能力错误阻塞公网路径；恢复逐边可达计划后纳入后续绿测。 |
+| `go test ./internal/node -run TestChainGrantReportErrorsStayBounded -count=1 -timeout=2m`（红） | 1；node 0.650 秒，墙钟 1.31 秒 | grant错误未分摊预算导致整份报告超限；扩展统一限额后纳入绿测。 |
+| `go test ./internal/panel ./internal/forwarding ./internal/node -run 'Test(Chain|ForwardChains)' -count=1 -timeout=3m` | 0；panel 4.728、forwarding 1.318、node 2.531 秒，墙钟 6.22 秒 | 协议、能力边、边界、旧历史、管理与导入通过。 |
+| `go test ./internal/clusterharness -run 'Test(.*ForwardChainsAPI|RulesJSON|TunnelManagementValidationAndGates|CombinedEntryExitCountsBusinessOnce)' -count=1 -timeout=5m`（首轮） | 1；clusterharness 4.351 秒，墙钟 6.25 秒 | 新测试辅助路径误写 importpreflight，补 `/preflight`，未改服务契约。 |
+| `go test ./internal/panel ./internal/forwarding ./internal/node -timeout=15m`（第二轮） | 0；panel 52.295、forwarding 11.166、node 14.206 秒，墙钟 52.87 秒 | 三个完整包通过。 |
+| `go test ./internal/panel ./internal/node -run 'TestChain' -count=1 -timeout=3m` | 0；panel 3.695、node 0.396 秒，墙钟 5.03 秒 | 增补实际末跳/备用/本机IP/A记录、真实监听/映射及真实gRPC 64KiB通过。 |
+| 上述定向 clusterharness 命令（最终该轮） | 0；clusterharness 3.686 秒，墙钟 4.97 秒 | 真实HTTP链引用、共享编辑、导入1/2/3、授权事务故障回滚、门禁与普通业务隔离、历史WSS业务重连确认全部通过。 |
+| `make proto` 后对两份生成文件 SHA256 前后比较 | 0；墙钟 3.900 秒 | 真实生成逐字节一致；此前实现时也已运行真实生成。 |
+| `go test ./internal/panel -run 'TestChainRules(Migration51|Adjacent)' -count=1 -timeout=3m` | 0；panel 1.829 秒，墙钟 3.15 秒 | 增补INSERT XOR、成员重排、末跳源指纹变化通过。 |
+| `go test ./internal/panel -run TestChainRulesNeverUseLegacyZeroGeneration -count=1 -timeout=2m`（红） | 1；panel 0.732 秒，墙钟 2.04 秒 | legacy比较器缺显式chain排除；补空chain约束，保持旧单跳兼容。 |
+
+- 未修改07/08前端、compatibility能力声明或缓存版本。未使用浏览器，未生成额外报告／日志／方案，未覆盖真实02双二进制。其他02/03/04/05/09未提交文档保留；所有.md等本轮最终统一中文文档提交。本票代码保持未提交、Status=claimed，等待独立审查和主编排者批准功能提交。
+
+### 独立审查前最终稳定验证
+
+- `go test ./internal/panel ./internal/forwarding ./internal/node -timeout=15m` 最终退出 **0**：panel **51.321 秒**；forwarding/node 使用有效缓存（最近完整运行分别 **11.166 / 14.206 秒**，之后对应源码未变）；墙钟 **52.69 秒**。包含零代次兼容显式拒绝链的修复。
+- `git diff --check` 退出 **0**，墙钟 **0.02 秒**；`git status --short web/dist internal/nodebundle bin` 无输出。原 02/03/04/05/09 五份未提交文档没有被本实施者改动。暂不勾选完成或提交，交独立审查复核本票范围与上述证据。
+- 最后一处 legacy 比较器变更后，再运行 `go test ./internal/clusterharness -run 'Test(.*ForwardChainsAPI|RulesJSON|TunnelManagementValidationAndGates|CombinedEntryExitCountsBusinessOnce)' -count=1 -timeout=5m` 退出 **0**，clusterharness **4.371 秒**，墙钟 **6.28 秒**；链／导入／历史真实授权确认及普通业务回归仍通过。
+
+### 独立审查与功能提交
+
+- 主编排者安排的独立只读 `review_06a` 已正式批准并复核全部源码、最终 Comments、legacy 零代次排除和最终验证证据：**Spec 符合本票及最终技术裁定 / Quality 通过；Critical 0 / Important 0 / Minor 0**。本票验收项已勾选，Status 标记 **resolved**。
+- 主编排者明确授权后完成中文功能提交：**`27ea261d1a5465ed872c13420f7fd5689f36a3c5`**「支持链式规则持久化与相邻授权编译协议」，含 34 个源码／测试／protobuf 文件。迁移、规则引用与协议编译相互依赖，因此保留一个完整功能提交。提交前工作区与暂存区 `git diff --check` 均退出 0。
+- 未暂存任何 `.md`、dist/nodebundle/bin，其他 02/03/04/05/09 未提交文档保持；本票文档同样等待最终统一中文文档提交。未重复已通过且无变更的昂贵测试，未开始 06b，无 push/deploy/merge。

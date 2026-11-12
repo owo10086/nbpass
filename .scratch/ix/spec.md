@@ -1,6 +1,6 @@
 # IX / 专线中转：专线地址、端口映射、转发链与出站 IP
 
-Status: ready-for-agent（缓存策略 A 已定；各票仍按 Blocked by 推进）
+Status: resolved（01–09 本机可执行交付及独立审查完成；页面细项及真实网络/生产演练待验，未发布）
 
 参考：Zero Forwarder「IX 使用说明」https://www.zeroforwarder.com/docs/ix-guide/ （以及 /docs/jp-us-lan/、/docs/fwd-chain/、/docs/config/），Forwardx 的「主机入口地址 / 内网地址 + 按主机顺序建隧道」模型。决策记录见 `docs/adr/0009-ix-addresses-and-chains.md`。界面名称见 `GLOSSARY.md`（服务器 = 节点，转发端点 = 隧道出口，端点组 = 出口组，端口 = 规则）。
 
@@ -86,18 +86,18 @@ IX / 专线场景：客户端 → 入口服务器 A →（专线 / 内网）→ 
 
 | 票号 | 标题 | 依赖 | 可否并行 | 迁移版本 | Status |
 |---|---|---|---|---|---|
-| [01](issues/01-capability-gates.md) | 节点能力门禁与逐端口升级提示 | 无 | 先完成，供后续复用 | 无 | ready-for-agent |
-| [02](issues/02-server-addresses.md) | 服务器专线地址、对外端口与公网换 IP 隔离 | 01 | 与 03 串行 | 47 | ready-for-agent |
-| [03](issues/03-group-member-addresses.md) | 端点组成员选择服务器地址与按地址隔离健康 | 02 | 与 02 串行，完成后分流 | 48 | ready-for-agent |
-| [04](issues/04-outbound-source-ip.md) | 服务器出站源 IPv4 与本机地址应用校验 | 03 | 与 05 独立模型/API 文件并行；迁移先 04 | 49 | ready-for-agent |
-| [05](issues/05-chain-management-api.md) | 转发链持久化、管理 API 与全路径静态校验 | 03；04 仅阻塞迁移注册/最终升级验收 | 03 后可推进模型/API；注册 50 等 49 | 50 | ready-for-agent |
-| [06a](issues/06a-chain-protocol-and-persistence.md) | 链式规则协议、持久化与按变更范围校验 | 04、05 | 与 07 CRUD 前端并行；后端/proto 独占 | 51 | ready-for-agent |
-| [06b](issues/06b-chain-relay-and-recovery.md) | Relay 数据面、逐边重试与缓存恢复 | 06a | 与 07 CRUD 并行；与 06a/06c 后端串行 | 无 | ready-for-agent |
-| [06c](issues/06c-chain-readiness-and-incidents.md) | 逐跳授权确认、健康就绪与事故集成 | 06b | 与 07 CRUD 并行；最后统一宣告多跳能力 | 无 | ready-for-agent |
-| [07](issues/07-chains-page.md) | 转发链管理页与逐跳路径预览 | 05 完成 CRUD；06c 后完成多跳集成 | CRUD 与 06a–06c 并行；整票完成须两个边界通过 | 无 | ready-for-agent |
-| [08](issues/08-port-chain-mode.md) | 端口链式模式、完整路径与逐跳同步展示 | 06c、07 两个边界 | 依赖就绪后串行联调 | 无 | ready-for-agent |
-| [09](issues/09-finish.md) | IX 整体收尾、术语、构建产物与全量验收 | 01–05、06a–06c、07、08 | 最后串行，含部署文档与人工网络验收交付 | 无 | ready-for-agent |
+| [01](issues/01-capability-gates.md) | 节点能力门禁与逐端口升级提示 | 无 | 先完成，供后续复用 | 无 | resolved |
+| [02](issues/02-server-addresses.md) | 服务器专线地址、对外端口与公网换 IP 隔离 | 01 | 与 03 串行 | 47 | resolved |
+| [03](issues/03-group-member-addresses.md) | 端点组成员选择服务器地址与按地址隔离健康 | 02 | 与 02 串行，完成后分流 | 48 | resolved |
+| [04](issues/04-outbound-source-ip.md) | 服务器出站源 IPv4 与本机地址应用校验 | 03 | 与 05 独立模型/API 文件并行；迁移先 04 | 49 | resolved |
+| [05](issues/05-chain-management-api.md) | 转发链持久化、管理 API 与全路径静态校验 | 03；04 仅阻塞迁移注册/最终升级验收 | 03 后可推进模型/API；注册 50 等 49 | 50 | resolved |
+| [06a](issues/06a-chain-protocol-and-persistence.md) | 链式规则协议、持久化与按变更范围校验 | 04、05 | 与 07 CRUD 前端并行；后端/proto 独占 | 51 | resolved |
+| [06b](issues/06b-chain-relay-and-recovery.md) | Relay 数据面、逐边重试与缓存恢复 | 06a | 与 07 CRUD 并行；与 06a/06c 后端串行 | 无 | resolved |
+| [06c](issues/06c-chain-readiness-and-incidents.md) | 逐跳授权确认、健康就绪与事故集成 | 06b | 与 07 CRUD 并行；最后统一宣告多跳能力 | 无 | resolved |
+| [07](issues/07-chains-page.md) | 转发链管理页与逐跳路径预览 | 05 完成 CRUD；06c 后完成多跳集成 | CRUD 与 06a–06c 并行；整票完成须两个边界通过 | 无 | resolved |
+| [08](issues/08-port-chain-mode.md) | 端口链式模式、完整路径与逐跳同步展示 | 06c、07 两个边界 | 依赖就绪后串行联调 | 无 | resolved |
+| [09](issues/09-finish.md) | IX 整体收尾、术语、构建产物与全量验收 | 01–05、06a–06c、07、08 | 最后串行，含部署文档与人工网络验收交付 | 无 | resolved（本机交付；生产待验） |
 
-生产库当前 `user_version=46`。47–51 编号不变，归属为 02→03→04→05→06a（原 06 的 51 完整交给 06a，含链规则和逐 grant 结果）；06b/06c 不占新迁移。迁移由 `internal/panel/migrations.go` 数组下标加一，只能在 46 后依序追加，禁止重排、争抢或占位。05 模型/API 不依赖出站语义，可在 03 后推进；迁移 50 注册与最终升级测试等待 04 的 49。缓存策略 A 已定，全部票恢复 `ready-for-agent`；此状态表示规格可交接，不代表依赖已完成或授权实施，不能越过 Blocked by。
+生产库当前 `user_version=46`。47–51 编号不变，归属为 02→03→04→05→06a（原 06 的 51 完整交给 06a，含链规则和逐 grant 结果）；06b/06c 不占新迁移。迁移由 `internal/panel/migrations.go` 数组下标加一，只能在 46 后依序追加，禁止重排、争抢或占位。05 模型/API 不依赖出站语义，可在 03 后推进；迁移 50 注册与最终升级测试等待 04 的 49。缓存策略 A 已定。上述状态仅记录实施与本机交付进度，01–09 均已完成本机可执行工作及独立审查，09 完整 `GOFLAGS=-timeout=30m make test` 退出0；页面及生产网络/重装回滚人工项按原票最新 Comments 分别记录，不能据自动化状态推断全部人工验收或生产发布完成。原依赖与授权边界不变。
 
 共享文件必须串行交接：`migrations.go` 按 02→03→04→05→06a；proto/生成物按 02（摘要 281）→03（地址身份 280）→04（源 IP 284）→06a（链/逐 grant 285–287），06b/06c 消费合约；04/05 互不交叠文件可并行，迁移注册按号完成。06a→06b→06c 后端串行，均不改 07 的 Chains 页面/main.tsx；07 CRUD 完成不等于真实多跳集成完成，后者等待 06c。08 负责端口与现有运维界面的最终联调；09 统一发行产物、DESIGN/GLOSSARY、部署文档及完整验收。沿用当前分支/目录，不创建工作树；功能票不提交临时产物。
