@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 	"nbpass/internal/controlpb"
 	"nbpass/internal/eventlog"
+	"nbpass/internal/forwarding"
 )
 
 const eventMigration = `CREATE TABLE events (
@@ -103,6 +104,46 @@ func (p *Panel) acceptEvents(ctx context.Context, nodeID string, session *contro
 			break
 		}
 		acked = append(acked, e.ID)
+		if e.Type == "event_gap" {
+			if scope, ok := forwarding.DecodeChainResourceScope(e.Message); ok {
+				e.Message = scope.Message()
+			}
+		}
+		if e.Type == "chain_flow" {
+			var duplicate bool
+			if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM events WHERE node_id=? AND source='node' AND event_id=?)", nodeID, e.ID).Scan(&duplicate); err != nil {
+				break
+			}
+			if duplicate {
+				continue
+			}
+			valid, checkErr := p.currentChainEvent(ctx, tx, nodeID, session.instance, e)
+			if checkErr != nil {
+				return nil, status.Error(codes.InvalidArgument, "链路径事件无效")
+			}
+			observed, decodeErr := decodeChainEvent(e.Message)
+			if decodeErr != nil {
+				return nil, status.Error(codes.InvalidArgument, "链路径事件无效")
+			}
+			// Receipt decisions belong to the panel. Never trust flags sent by
+			// the node; persist the decision so expiry/restart cannot resurrect
+			// a failure already cleared by a current fresh success.
+			at := observed.Observation.ObservedAt
+			observed.Historical = !valid
+			observed.AcceptedSuccess = valid && forwarding.IsChainEstablishment(observed.Observation.Class) && !now.Before(at) && now.Sub(at) < 15*time.Second
+			observed.Retained = false
+			if !e.OccurredAt.Before(now.Add(-eventlog.BackfillWindow)) {
+				if err = retainChainOutcome(ctx, tx, nodeID, &observed); err != nil {
+					break
+				}
+			}
+			encoded, encodeErr := json.Marshal(observed)
+			if encodeErr != nil || len(encoded) > 2048 {
+				return nil, status.Error(codes.InvalidArgument, "链路径事件无效或过大")
+			}
+			e.Message = string(encoded)
+		}
+
 		// 服务端再次执行 24 小时上限；过期内容只留下缺口摘要并确认消费。
 		if e.Type != "event_gap" && e.OccurredAt.Before(now.Add(-eventlog.BackfillWindow)) {
 			e = eventlog.Event{ID: "expired:" + e.ID, Type: "event_gap", OccurredAt: now, Message: "拒收超过 24 小时的离线事件", Gap: &eventlog.Gap{Count: 1, From: e.OccurredAt, To: e.OccurredAt, Reason: "expired"}}

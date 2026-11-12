@@ -120,6 +120,22 @@ func (p *Panel) operationsSnapshot(ctx context.Context) (operationsView, error) 
 	if err = attachOperationPublications(ctx, tx, &view, checks, nodes, now); err != nil {
 		return view, err
 	}
+	chains, err := loadForwardChains(ctx, tx)
+	if err != nil {
+		return view, err
+	}
+	chainGroups, err := loadChainGroups(ctx, tx)
+	if err != nil {
+		return view, err
+	}
+	runtime, err := p.loadChainRuntime(ctx, tx, connected, now)
+	if err != nil {
+		return view, err
+	}
+	plans, err := p.ruleCapabilityPlans(ctx, tx, rules, members)
+	if err != nil {
+		return view, err
+	}
 	for _, r := range rules {
 		config := r
 		config.Name = ""
@@ -132,6 +148,59 @@ func (p *Panel) operationsSnapshot(ctx context.Context) (operationsView, error) 
 		}
 		evaluateOperationRule(&item, checks, nodes, now)
 		scopeOperationRule(&item, view.Groups)
+		item.ChainID = r.ChainID
+		item.PathNodes = append([]string{}, item.Members...)
+		if r.ChainID != "" {
+			hops, e := rulePathHops(r, chains, chainGroups)
+			if e != nil {
+				return view, e
+			}
+			for _, hop := range hops {
+				for _, m := range hop.Members {
+					if !containsEntryMember(item.PathNodes, m.NodeID) {
+						item.PathNodes = append(item.PathNodes, m.NodeID)
+					}
+				}
+			}
+			fp, e := chainAuthorizationFingerprint(ctx, tx, r, item.Members)
+			if e != nil {
+				return view, e
+			}
+			item.ChainFingerprint = fp
+			item.Configuration = incidentFingerprint(struct {
+				Rule forwarding.Rule
+				Path string
+			}{config, fp})
+			item.ChainEdges, e = p.chainRuleEvidence(ctx, tx, r, item.Members, hops, runtime)
+			if e != nil {
+				return view, e
+			}
+			for _, id := range item.Members {
+				item.ConfigurationBlockers = append(item.ConfigurationBlockers, plans[[2]string{id, r.ID}].Blockers...)
+			}
+			for i := range item.ChainEdges {
+				edge := item.ChainEdges[i]
+				if edge.State == "ready" {
+					continue
+				}
+				code := "chain_edge_unknown"
+				message := "逐边或后续路径证据未知/历史"
+				if edge.State == "grant_failed" {
+					code = "chain_grant_failed"
+					message = "逐授权持久应用失败：" + edge.ApplyError
+				}
+				item.Reasons = append(item.Reasons, operationReason{Code: code, Message: message, Source: "链路径", NodeID: edge.ToNodeID, At: edge.ObservedAt, Chain: &edge})
+			}
+			for _, b := range item.ConfigurationBlockers {
+				item.Reasons = append(item.Reasons, operationReason{Code: "capability_missing", Message: b.Reason + " / " + b.Capability, Source: "能力门禁", NodeID: b.NodeID})
+			}
+		}
+
+		if r.ChainID != "" {
+			if e := p.attachChainFlowEvidence(ctx, tx, &item, runtime, now); e != nil {
+				return view, e
+			}
+		}
 		view.Rules = append(view.Rules, item)
 	}
 	view.Counts.Entry = len(view.Groups)

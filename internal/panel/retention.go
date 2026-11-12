@@ -2,6 +2,7 @@ package panel
 
 import (
 	"context"
+	"nbpass/internal/forwarding"
 	"time"
 )
 
@@ -18,7 +19,19 @@ func (p *Panel) cleanHistoryBatch(ctx context.Context) (bool, error) {
 		{`DELETE FROM events WHERE sequence IN (
  SELECT sequence FROM events
  WHERE occurred_at < ? - (SELECT event_days FROM retention_settings WHERE id=1) * ?
- ORDER BY occurred_at LIMIT ?)`, []any{now.UnixNano(), int64(24 * time.Hour), retentionBatchSize}},
+ AND NOT (type='chain_flow' AND source='node' AND CASE WHEN json_valid(message) THEN
+   COALESCE(json_extract(message,'$.retained'),0)=1 AND EXISTS (
+     SELECT 1 FROM rule_authorizations a WHERE a.rule_id=json_extract(message,'$.observation.RuleID')
+       AND a.generation=json_extract(message,'$.observation.Edge.rule_generation')
+       AND a.fingerprint=json_extract(message,'$.observation.Edge.chain_fingerprint'))
+   ELSE 0 END)
+ AND NOT (type='event_gap' AND source='node' AND CASE WHEN json_valid(message) THEN
+   COALESCE(json_extract(message,'$.chain_resource_gap'),'')=? AND EXISTS (
+    SELECT 1 FROM rule_authorizations a JOIN nodes n ON n.id=events.node_id
+    WHERE a.rule_id=json_extract(message,'$.rule_id') AND a.generation=json_extract(message,'$.generation') AND a.fingerprint=json_extract(message,'$.fingerprint'))
+   AND sequence=(SELECT MAX(g.sequence) FROM events g WHERE g.node_id=events.node_id AND g.type='event_gap' AND g.source='node' AND g.message=events.message AND json_extract(g.gap,'$.reason')=json_extract(events.gap,'$.reason'))
+   ELSE 0 END)
+ ORDER BY occurred_at LIMIT ?)`, []any{now.UnixNano(), int64(24 * time.Hour), forwarding.ChainResourceGapMessage, retentionBatchSize}},
 		{`DELETE FROM operation_incidents WHERE sequence IN (SELECT sequence FROM operation_incidents WHERE ended_at IS NOT NULL AND ended_at < ? - (SELECT event_days FROM retention_settings WHERE id=1) * ? ORDER BY ended_at LIMIT ?)`, []any{now.UnixNano(), int64(24 * time.Hour), retentionBatchSize}},
 		{`DELETE FROM probe_minutes WHERE rowid IN (
  SELECT rowid FROM probe_minutes

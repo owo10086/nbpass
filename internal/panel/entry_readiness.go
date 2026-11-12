@@ -154,6 +154,19 @@ func (p *Panel) checkEntryCandidates(ctx context.Context) (map[[2]string]entryMe
 	}
 	now := p.deps.Clock.Now().UTC()
 	states := map[[2]string]entryMemberState{}
+	chainInputs := map[string]entryReadinessInputs{}
+	grantResults, err := loadChainGrantResults(ctx, p.db)
+	if err != nil {
+		return nil, err
+	}
+	for id := range nodes {
+		v, e := p.loadEntryReadinessInputs(ctx, id, now)
+		if e != nil {
+			return nil, e
+		}
+		chainInputs[id] = v
+	}
+
 	// 一个节点的隧道/国内证据只读取一次，所有入口组共享同一轮物理观测。
 	for id, n := range nodes {
 		var owned []string
@@ -165,10 +178,7 @@ func (p *Panel) checkEntryCandidates(ctx context.Context) (map[[2]string]entryMe
 		if len(owned) == 0 {
 			continue
 		}
-		inputs, err := p.loadEntryReadinessInputs(ctx, id, now)
-		if err != nil {
-			return nil, err
-		}
+		inputs := chainInputs[id]
 		for _, group := range owned {
 			state := entryMemberState{DesiredRevision: n.desired, AppliedRevision: n.reported, NodeID: id, NodeName: n.name, CheckedAt: &now, Ready: true, ReadinessStatus: "ready", ReadinessReasons: []entryStateReason{}, CandidateReasons: []entryStateReason{}, DomesticEvidence: inputs.domestic}
 			for _, r := range rules {
@@ -189,7 +199,11 @@ func (p *Panel) checkEntryCandidates(ctx context.Context) (map[[2]string]entryMe
 				case !current || !exists || result.applied != n.desired:
 					state.ReadinessReasons = append(state.ReadinessReasons, entryStateReason{Code: "rule_not_applied", RuleID: r.ID, Message: fmt.Sprintf("转发规则“%s”尚未确认应用当前配置与监听", r.Name)})
 				}
-				if r.Kind == forwarding.Tunnel && !inputs.tunnelReady(r.ID) {
+				tunnelReady := inputs.tunnelReady(r.ID)
+				if r.ChainID != "" {
+					tunnelReady = chainPathReady(id, r.ID, chainInputs, grantResults)
+				}
+				if r.Kind == forwarding.Tunnel && !tunnelReady {
 					state.ReadinessReasons = append(state.ReadinessReasons, entryStateReason{Code: "tunnel_handshake_missing", RuleID: r.ID, Message: fmt.Sprintf("隧道规则“%s”没有获授权出口的新鲜成功握手", r.Name)})
 				}
 			}
@@ -315,7 +329,7 @@ func (p *Panel) loadEntryReadinessInputs(ctx context.Context, id string, now tim
 	for _, h := range health {
 		// 探测最多5.5秒间隔+3秒握手+5秒采样，加上秒级时间戳取整；未完成和旧成功均不能当新握手。
 		age := now.Sub(time.Unix(h.GetCheckedAtUnix(), 0))
-		if matchesEndpointHealth(v.snapshot, h) && h.GetLastProbe() == "success" && age >= 0 && age < 15*time.Second {
+		if matchesEndpointHealth(v.snapshot, h) && h.GetLastProbe() == "success" && h.GetState() == "healthy" && age >= 0 && age < 15*time.Second {
 			v.health[[3]string{h.ExitId, forwarding.NormalizeAddressID(h.AddressId), h.EndpointConfigDigest}] = true
 		}
 	}

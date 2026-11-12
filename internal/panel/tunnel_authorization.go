@@ -124,8 +124,11 @@ func gateTunnelRules(ctx context.Context, tx *sql.Tx, compiled map[string]*contr
 				ready = append(ready, r)
 				continue
 			}
-			// Chain readiness is enabled by 06c after durable per-grant confirmation.
+			// Chain candidates have passed recursive durable grant confirmation.
 			if r.ChainId != "" {
+				if len(r.AuthorizedExitIds) > 0 {
+					ready = append(ready, r)
+				}
 				continue
 			}
 			if legacyReady[[2]string{entry, r.Id}] {
@@ -153,8 +156,19 @@ func gateTunnelRules(ctx context.Context, tx *sql.Tx, compiled map[string]*contr
 // 仅当前会话的独立配置报告可确认；发送成功、探针、事件、活性均不构成确认。
 // 完整成功意味着出口监听、授权及缓存都已应用。其他规则部分失败时保守等待完整确认。
 func (p *Panel) confirmTunnelAuthorizations(ctx context.Context, tx *sql.Tx, id string, report *controlpb.NodeReport, desired uint64, digest string) ([]string, error) {
+	chainChanged, err := p.confirmChainGrants(ctx, tx, id, report, desired, digest)
+	if err != nil {
+		return nil, err
+	}
+	var chainChanges []string
+	if chainChanged {
+		chainChanges, err = p.compileSnapshots(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if desired == 0 || digest == "" || report.AttemptedRevision != desired || report.AttemptedDigest != digest || report.AppliedRevision != desired || report.AppliedDigest != digest || report.ApplyError != "" || !report.RevocationsApplied {
-		return nil, nil
+		return chainChanges, nil
 	}
 	var version uint32
 	if err := tx.QueryRowContext(ctx, "SELECT tunnel_authorization_version FROM nodes WHERE id=?", id).Scan(&version); err != nil {
@@ -190,10 +204,11 @@ func (p *Panel) confirmTunnelAuthorizations(ctx context.Context, tx *sql.Tx, id 
 		changed = changed || n > 0
 	}
 	if !changed {
-		return nil, nil
+		return chainChanges, nil
 	}
 	// 确认和入口快照在同一事务提交，不会留下“确认已存、入口永远未启用”的崩溃窗口。
-	return p.compileSnapshots(ctx, tx)
+	changes, err := p.compileSnapshots(ctx, tx)
+	return append(chainChanges, changes...), err
 }
 
 func (p *Panel) notifyConfiguration(changed []string) {
@@ -219,10 +234,16 @@ func (p *Panel) admitTunnelAuthorization(ctx context.Context, tx *sql.Tx, id str
 	if _, err := tx.ExecContext(ctx, "UPDATE nodes SET tunnel_authorization_version=? WHERE id=?", version, id); err != nil {
 		return nil, err
 	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM node_tunnel_grant_results WHERE node_id=?", id); err != nil {
+		return nil, err
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM tunnel_authorization_confirmations WHERE exit_id=?", id); err != nil {
 		return nil, err
 	}
 	if previous != version || force {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM node_tunnel_grant_results WHERE entry_id=?", id); err != nil {
+			return nil, err
+		}
 		// 入口降级会撤掉其他出口上的 grants；再次升级不能复用撤销前的确认。
 		if _, err := tx.ExecContext(ctx, "DELETE FROM tunnel_authorization_confirmations WHERE entry_id=?", id); err != nil {
 			return nil, err

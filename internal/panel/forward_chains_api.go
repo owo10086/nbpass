@@ -69,6 +69,8 @@ func loadChainGroups(ctx context.Context, q queryer) (map[string]forwarding.Chai
 }
 
 func (p *Panel) listForwardChains(w http.ResponseWriter, r *http.Request) {
+	p.controlMu.Lock()
+	defer p.controlMu.Unlock()
 	tx, err := p.db.BeginTx(r.Context(), &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		problem(w, 503, "存储暂不可用")
@@ -79,6 +81,18 @@ func (p *Panel) listForwardChains(w http.ResponseWriter, r *http.Request) {
 	var groups map[string]forwarding.ChainGroup
 	if err == nil {
 		groups, err = loadChainGroups(r.Context(), tx)
+	}
+	rules, e := loadRules(r.Context(), tx)
+	if err == nil {
+		err = e
+	}
+	members, e := loadEntryGroupMembers(r.Context(), tx)
+	if err == nil {
+		err = e
+	}
+	runtime, e := p.loadChainRuntime(r.Context(), tx, p.connectedControls(), p.deps.Clock.Now())
+	if err == nil {
+		err = e
 	}
 	views := []forwardChainView{}
 	if err == nil {
@@ -92,6 +106,17 @@ func (p *Panel) listForwardChains(w http.ResponseWriter, r *http.Request) {
 			if e := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM forward_rules WHERE chain_id=?", chain.ID).Scan(&count); e != nil {
 				err = e
 				break
+			}
+			for _, rule := range rules {
+				if rule.ChainID != chain.ID {
+					continue
+				}
+				edges, e := p.chainRuleEvidence(r.Context(), tx, rule, forwarding.RuleEntryNodes(rule, members), hops, runtime)
+				if e != nil {
+					err = e
+					break
+				}
+				attachHopEvidence(hops, edges)
 			}
 			views = append(views, forwardChainView{ForwardChain: chain, Hops: hops, RuleCount: count})
 		}

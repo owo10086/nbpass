@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"nbpass/internal/forwarding"
 	"time"
 )
 
@@ -70,6 +71,43 @@ func (p *Panel) projectIncidents(ctx context.Context) error {
 	if seen != len(current) {
 		return errors.New("运维配置已变更")
 	}
+	// Revision alone is insufficient: capability-blocked chain edits can leave
+	// node snapshots unchanged while changing the incident configuration key.
+	rules, err := loadRules(ctx, tx)
+	if err != nil {
+		return err
+	}
+	members, err := loadEntryGroupMembers(ctx, tx)
+	if err != nil {
+		return err
+	}
+	if len(rules) != len(view.Rules) {
+		return errors.New("运维规则配置已变更")
+	}
+	for _, r := range rules {
+		config := r
+		config.Name = ""
+		fp := incidentFingerprint(config)
+		if r.ChainID != "" {
+			path, e := chainAuthorizationFingerprint(ctx, tx, r, forwarding.RuleEntryNodes(r, members))
+			if e != nil {
+				return e
+			}
+			fp = incidentFingerprint(struct {
+				Rule forwarding.Rule
+				Path string
+			}{config, path})
+		}
+		found := false
+		for _, v := range view.Rules {
+			if v.ID == r.ID && v.Configuration == fp {
+				found = true
+			}
+		}
+		if !found {
+			return errors.New("运维链配置已变更")
+		}
+	}
 	observations, err := collectOfflineIncidents(ctx, tx, view)
 	if err != nil {
 		return err
@@ -119,7 +157,11 @@ func nodeIncidentRefs(view operationsView, node string) []incidentRef {
 		}
 	}
 	for _, r := range view.Rules {
-		if r.Enabled && containsEntryMember(r.Members, node) {
+		path := r.PathNodes
+		if len(path) == 0 {
+			path = r.Members
+		}
+		if r.Enabled && containsEntryMember(path, node) {
 			refs = append(refs, incidentRef{Kind: "rule", ID: r.ID, Name: r.Name, Exists: true})
 		}
 	}

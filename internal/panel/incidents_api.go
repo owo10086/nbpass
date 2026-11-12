@@ -141,7 +141,7 @@ func (p *Panel) getIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	existing := map[string]bool{}
-	err = operationRows(r.Context(), p.db, `SELECT 'node',id FROM nodes UNION ALL SELECT 'group',id FROM entry_groups UNION ALL SELECT 'rule',id FROM forward_rules UNION ALL SELECT 'watch',id FROM dns_watches`, func(rows *sql.Rows) error {
+	err = operationRows(r.Context(), p.db, `SELECT 'node',id FROM nodes UNION ALL SELECT 'group',id FROM entry_groups UNION ALL SELECT 'rule',id FROM forward_rules UNION ALL SELECT 'watch',id FROM dns_watches UNION ALL SELECT 'chain',id FROM forward_chains`, func(rows *sql.Rows) error {
 		var kind, id string
 		if e := rows.Scan(&kind, &id); e != nil {
 			return e

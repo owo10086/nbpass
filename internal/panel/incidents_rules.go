@@ -3,6 +3,7 @@ package panel
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 )
 
@@ -13,7 +14,14 @@ func collectRuleIncidents(view operationsView) []incidentObservation {
 		if r.GroupID != "" {
 			o.Refs = append(o.Refs, incidentRef{Kind: "group", ID: r.GroupID, Name: groupName(view, r.GroupID), Exists: true})
 		}
-		for _, id := range r.Members {
+		pathNodes := r.PathNodes
+		if len(pathNodes) == 0 {
+			pathNodes = r.Members
+		}
+		if r.ChainID != "" {
+			o.Refs = append(o.Refs, incidentRef{Kind: "chain", ID: r.ChainID, Name: r.ChainID, Exists: true})
+		}
+		for _, id := range pathNodes {
 			for _, n := range view.Nodes {
 				if n.ID == id {
 					o.Refs = append(o.Refs, incidentRef{Kind: "node", ID: id, Name: n.Name, Exists: true})
@@ -21,17 +29,35 @@ func collectRuleIncidents(view operationsView) []incidentObservation {
 			}
 		}
 		for _, reason := range r.Reasons {
-			if reason.Code != "rule_apply_failed" && reason.Code != "rule_not_applied" && reason.Code != "tunnel_handshake_missing" {
+			if reason.Code != "rule_apply_failed" && reason.Code != "rule_not_applied" && reason.Code != "tunnel_handshake_missing" && reason.Code != "chain_grant_failed" && reason.Code != "chain_edge_unknown" && reason.Code != "chain_flow_failed" && reason.Code != "chain_resource_gap" && reason.Code != "capability_missing" {
 				continue
 			}
 			o.ExistingOnly = false
 			message := reason.Message
+			if reason.Chain != nil || reason.Failure != nil {
+				data, _ := json.Marshal(reason)
+				message = string(data)
+			}
 			// 仅保留现有节点规则摘要，限制单条历史大小；不保存第三方响应。
-			if len([]rune(message)) > 500 {
+			if reason.Chain == nil && reason.Failure == nil && len([]rune(message)) > 500 {
 				message = string([]rune(message)[:500]) + "…"
 			}
 			o.Reasons = append(o.Reasons, message)
-			o.Entries = append(o.Entries, incidentEntry{Key: reason.NodeID + ":" + reason.Code, Stage: "规则证据异常", Message: message, Source: reason.Source, Version: int64(r.Revision), At: reason.At})
+			key := reason.NodeID + ":" + reason.Code
+			if reason.Chain != nil || reason.Failure != nil {
+				// One fact per actual edge/authorization and result. Probe sampling
+				// times are not transitions; real flow observations retain their
+				// sequence/time so a later failure is a separate historical fact.
+				stable := reason
+				stable.At = nil
+				if reason.Chain != nil {
+					edge := *reason.Chain
+					edge.ObservedAt = nil
+					stable.Chain = &edge
+				}
+				key += ":" + incidentFingerprint(stable)
+			}
+			o.Entries = append(o.Entries, incidentEntry{Key: key, Stage: "规则证据异常", Message: message, Source: reason.Source, Version: int64(r.Revision), At: reason.At})
 		}
 		for _, e := range r.Evidence {
 			o.Entries = append(o.Entries, incidentEntry{Key: fmt.Sprintf("config:%s:%d:%d", e.NodeID, e.Desired, e.Applied), Stage: "配置版本证据", Message: fmt.Sprintf("节点 %s，期望 %d，报告 %d；出口组 %s", e.NodeID, e.Desired, e.Applied, r.ExitGroupID), Source: "入口检查", Version: int64(e.Desired), At: e.At})

@@ -1,30 +1,40 @@
 package panel
 
-import "time"
+import (
+	"nbpass/internal/forwarding"
+	"time"
+)
 
 // 展示状态描述现有证据，不作为新的自动处理决策输入。
 type operationReason struct {
-	Code    string     `json:"code"`
-	Message string     `json:"message"`
-	Source  string     `json:"source"`
-	NodeID  string     `json:"node_id,omitempty"`
-	At      *time.Time `json:"observed_at"`
+	Chain   *chainEdgeEvidence                  `json:"chain,omitempty"`
+	Failure *forwarding.ChainFailureObservation `json:"failure,omitempty"`
+	Code    string                              `json:"code"`
+	Message string                              `json:"message"`
+	Source  string                              `json:"source"`
+	NodeID  string                              `json:"node_id,omitempty"`
+	At      *time.Time                          `json:"observed_at"`
 }
 
 type operationRule struct {
-	IncidentID    string                  `json:"incident_id,omitempty"`
-	Configuration string                  `json:"-"`
-	ExitGroupID   string                  `json:"exit_group_id,omitempty"`
-	Evidence      []operationRuleEvidence `json:"evidence"`
-	ID            string                  `json:"id"`
-	Name          string                  `json:"name"`
-	GroupID       string                  `json:"group_id,omitempty"`
-	NodeID        string                  `json:"node_id,omitempty"`
-	Enabled       bool                    `json:"enabled"`
-	Revision      uint64                  `json:"revision"`
-	Status        string                  `json:"status"`
-	Reasons       []operationReason       `json:"reasons"`
-	Members       []string                `json:"members"`
+	ChainID               string                  `json:"chain_id,omitempty"`
+	ChainFingerprint      string                  `json:"chain_fingerprint,omitempty"`
+	PathNodes             []string                `json:"path_nodes"`
+	ChainEdges            []chainEdgeEvidence     `json:"chain_edges"`
+	ConfigurationBlockers []configurationBlocker  `json:"configuration_blockers"`
+	IncidentID            string                  `json:"incident_id,omitempty"`
+	Configuration         string                  `json:"-"`
+	ExitGroupID           string                  `json:"exit_group_id,omitempty"`
+	Evidence              []operationRuleEvidence `json:"evidence"`
+	ID                    string                  `json:"id"`
+	Name                  string                  `json:"name"`
+	GroupID               string                  `json:"group_id,omitempty"`
+	NodeID                string                  `json:"node_id,omitempty"`
+	Enabled               bool                    `json:"enabled"`
+	Revision              uint64                  `json:"revision"`
+	Status                string                  `json:"status"`
+	Reasons               []operationReason       `json:"reasons"`
+	Members               []string                `json:"members"`
 }
 
 type operationGroup struct {

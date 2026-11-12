@@ -224,7 +224,6 @@ func TestChainRulesAdjacentSecretsAndFingerprint(t *testing.T) {
 		}
 		for _, id := range ids {
 			c := nodeCompatibility{ProcessInstance: "fixture", ControlProtocol: 2, Node: compatibility.Current()}
-			c.Node.Capabilities = append(c.Node.Capabilities, compatibility.ForwardChains)
 			c.Capabilities = append([]string{}, c.Node.Capabilities...)
 			if err := p.saveNodeCompatibility(ctx, tx, id, c); err != nil {
 				return err
@@ -233,6 +232,25 @@ func TestChainRulesAdjacentSecretsAndFingerprint(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
+	}
+	// 06c confirms the terminal layer before installing upstream grants.
+	for _, id := range ids[4:6] {
+		m, e := p.controlMessage(ctx, id)
+		if e != nil {
+			t.Fatal(e)
+		}
+		tx, e := p.db.BeginTx(ctx, nil)
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, e = p.confirmTunnelAuthorizations(ctx, tx, id, chainReport(m.Snapshot), m.Snapshot.Revision, m.Snapshot.Digest)
+		if e != nil {
+			tx.Rollback()
+			t.Fatal(e)
+		}
+		if e = tx.Commit(); e != nil {
+			t.Fatal(e)
+		}
 	}
 	var pairs int
 	if err := p.db.QueryRow("SELECT count(*) FROM tunnel_pairs").Scan(&pairs); err != nil || pairs != 8 {

@@ -21,7 +21,10 @@ func TestCurrentStateWindowIsOneWayUpgrade(t *testing.T) {
 	if !Supports(c, OutboundIPv4) {
 		t.Fatal("未宣告已经实现的出站 IPv4 能力")
 	}
-	for _, cap := range []string{"forward_chains", "ix_addresses"} {
+	if !Supports(c, ForwardChains) {
+		t.Fatal("未宣告已经完成逐跳持久确认与端到端验收的链能力")
+	}
+	for _, cap := range []string{"ix_addresses"} {
 		if Supports(c, cap) {
 			t.Fatalf("提前宣告未实现能力 %s", cap)
 		}
