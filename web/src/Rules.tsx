@@ -12,7 +12,9 @@ import { ColorTag } from './ColorTag';
 import { FormSection } from './FormSection';
 import { byMetric, byText, useDragOrder } from './ListOrder';
 import { PortSyncDetails, PortSyncStatus } from './PortSyncDetails';
-import { buildRuleInput, filterRules, ruleLine, sortRuleDetails, type Group, type Rule, type RuleDetailSort, type RuleFilters, type RuleFormValues } from './RulesData';
+import { buildRuleInput, createRuleReloader, filterRules, ruleFormValues, ruleMode, ruleModeLabels, sortRuleDetails, type Group, type PathNode, type Rule, type RuleDetailSort, type RuleFilters, type RuleFormValues } from './RulesData';
+import type { ForwardChain } from './ChainsData';
+import { rulePathSteps } from './RulePathData';
 import './Rules.css';
 
 type BatchAction = 'enable' | 'disable' | 'delete';
@@ -28,8 +30,9 @@ function bytes(value: number) {
 export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionExpired: () => void }) {
   const { message, modal } = App.useApp();
   const [rows, setRows] = useState<Rule[]>([]);
-  const [nodes, setNodes] = useState<Group[]>([]);
+  const [nodes, setNodes] = useState<PathNode[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
+  const [chains, setChains] = useState<ForwardChain[]>([]);
   const [exitGroups, setExitGroups] = useState<Group[]>([]);
   const [editing, setEditing] = useState<Rule | null>();
   const [error, setError] = useState('');
@@ -46,46 +49,53 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
   const [pageSize, setPageSize] = useState(20);
   const [detailSort, setDetailSort] = useState<RuleDetailSort>();
   const [form] = Form.useForm<RuleFormValues>();
-  const kind = Form.useWatch('kind', form);
+  const mode = Form.useWatch('mode', form);
+  const selectedChain = Form.useWatch('chain_id', form);
   const line = Form.useWatch('line', form);
   const randomPort = Form.useWatch('random_port', form);
+  const reloader = useRef<ReturnType<typeof createRuleReloader> | undefined>(undefined);
   const expired = useRef(onSessionExpired); expired.current = onSessionExpired;
 
   function failed(e: unknown, showError = setError) {
     if (e instanceof APIError && (e.status === 401 || e.status === 428)) expired.current();
     else showError((e as Error).message);
   }
-  async function load() {
-    setLoading(true);
-    try {
-      const [rules, entryGroups, exits, entries] = await Promise.all([
-        api<{ rules: Rule[] }>('/rules'), api<{ entry_groups: Group[] }>('/entry-groups'),
-        api<{ exit_groups: Group[] }>('/exit-groups'), api<{ nodes: Group[] }>('/nodes'),
-      ]);
-      setNodes(entries.nodes); setRows(rules.rules); setGroups(entryGroups.entry_groups); setExitGroups(exits.exit_groups);
-      setSelectedIDs(ids => ids.filter(id => rules.rules.some(row => row.id === id)));
-      setError(''); setLoaded(true);
-    } catch (e) { failed(e); }
-    finally { setLoading(false); }
-  }
-  const filtered = !!(filters.search?.trim() || filters.line || filters.kind || filters.enabled !== undefined);
+  function load() { return reloader.current?.refresh() ?? Promise.resolve(); }
+  const filtered = !!(filters.search?.trim() || filters.line || filters.mode || filters.enabled !== undefined);
   const visibleRows = sortRuleDetails(filterRules(rows, filters, focus), detailSort);
   const order = useDragOrder(rows, setRows, '/rules', { filtered: filtered || !!focus || !!detailSort, onError: failed, reload: load });
   useEffect(() => {
-    void load();
-    const timer = window.setInterval(() => { if (!order.busy()) void load(); }, 5000);
-    return () => window.clearInterval(timer);
+    const current = createRuleReloader(() => Promise.all([
+      api<{ rules: Rule[] }>('/rules'), api<{ entry_groups: Group[] }>('/entry-groups'),
+      api<{ exit_groups: Group[] }>('/exit-groups'), api<{ nodes: PathNode[] }>('/nodes'),
+      api<{ chains: ForwardChain[] }>('/forward-chains'),
+    ]), {
+      apply: ([rules, entryGroups, exits, entries, paths]) => {
+        setChains(paths.chains); setNodes(entries.nodes); setRows(rules.rules); setGroups(entryGroups.entry_groups); setExitGroups(exits.exit_groups);
+        setSelectedIDs(ids => ids.filter(id => rules.rules.some(row => row.id === id)));
+        setError(''); setLoaded(true);
+      },
+      failed, loading: setLoading,
+    });
+    reloader.current = current;
+    void current.refresh();
+    const timer = window.setInterval(() => { if (!order.busy()) current.poll(); }, 5000);
+    return () => {
+      current.dispose();
+      if (reloader.current === current) reloader.current = undefined;
+      window.clearInterval(timer);
+    };
   }, []);
   useEffect(() => {
     setFilters({}); setPage(1); setExpandedIDs(focus ? [focus] : []);
   }, [focus]);
 
-  function edit(row: Rule | null) {
+  function edit(row: Rule | null, copy = false) {
     setFormError(''); form.resetFields();
-    form.setFieldsValue(row ? { ...row, line: ruleLine(row), random_port: false } : {
-      kind: 'direct', enabled: true, allow_private: false, random_port: false,
+    form.setFieldsValue(row ? ruleFormValues(row) : {
+      mode: 'direct', enabled: true, allow_private: false, random_port: false,
     });
-    setEditing(row);
+    setEditing(copy ? null : row);
   }
   function closeEditor() {
     if (saving) return;
@@ -102,7 +112,7 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
   async function toggle(row: Rule) {
     setActingID(row.id);
     try {
-      await api(`/rules/${row.id}`, 'PUT', buildRuleInput({ ...row, line: ruleLine(row), enabled: !row.enabled }));
+      await api(`/rules/${row.id}`, 'PUT', buildRuleInput({ ...ruleFormValues(row), enabled: !row.enabled }));
       await load();
     } catch (e) { failed(e); }
     finally { setActingID(undefined); }
@@ -165,13 +175,13 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
     </PageHeader>
 
     {(error || order.error) && <Alert title={error || order.error} type="error" showIcon className="message" />}
-    {focus && <Alert title={rows.some(row => row.id === focus) ? '已定位关联端口，展开行可查看成员生效版本。' : '关联端口已删除或尚未读取。'}
+    {focus && <Alert title={rows.some(row => row.id === focus) ? '已定位关联端口，展开行可查看完整路径与同步。' : '关联端口已删除或尚未读取。'}
       action={<Button onClick={() => go('ports')}>查看全部端口</Button>} type="info" showIcon className="message" />}
 
     <FilterCard loading={loading} onRefresh={() => { if (!order.busy()) void load(); }}>
       <FilterField label="名称" htmlFor="ports-search"><Input id="ports-search" value={filters.search ?? ''} allowClear prefix={<SearchOutlined />} placeholder="搜索端口名称 / 目标" onChange={event => updateFilters({ search: event.target.value })} /></FilterField>
       <FilterField label="线路" htmlFor="ports-line"><Select id="ports-line" value={filters.line} allowClear showSearch optionFilterProp="label" placeholder="全部线路" options={lineOptions} onChange={value => updateFilters({ line: value })} /></FilterField>
-      <FilterField label="模式" htmlFor="ports-mode"><Select id="ports-mode" value={filters.kind} allowClear placeholder="全部模式" options={[{ value: 'direct', label: '直连' }, { value: 'tunnel', label: '单跳转发' }]} onChange={value => updateFilters({ kind: value })} /></FilterField>
+      <FilterField label="模式" htmlFor="ports-mode"><Select id="ports-mode" value={filters.mode} allowClear placeholder="全部模式" options={Object.entries(ruleModeLabels).map(([value, label]) => ({ value, label }))} onChange={value => updateFilters({ mode: value })} /></FilterField>
       <FilterField label="状态" htmlFor="ports-status"><Select id="ports-status" value={filters.enabled === undefined ? undefined : filters.enabled ? 'enabled' : 'paused'} allowClear placeholder="全部状态" options={[{ value: 'enabled', label: '已启用' }, { value: 'paused', label: '已暂停' }]} onChange={value => updateFilters({ enabled: value === undefined ? undefined : value === 'enabled' })} /></FilterField>
       {filtered && <Button type="text" onClick={() => { setFilters({}); setPage(1); }}>重置筛选</Button>}
     </FilterCard>
@@ -189,13 +199,13 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
       onRow={order.onRow} rowClassName={row => order.rowClass(row.id)} loading={!loaded && !error}
       pagination={{ current: Math.max(1, Math.min(page, Math.ceil(visibleRows.length / pageSize))), pageSize, showSizeChanger: true, pageSizeOptions: [20, 50, 100] }}
       scroll={{ x: 1080 }} locale={{ emptyText: filtered || focus ? '没有符合条件的端口。' : '暂无端口，请先接入服务器，再添加端口转发。' }}
-      expandable={{ fixed: 'left', columnWidth: 30, expandedRowKeys: expandedIDs, onExpandedRowsChange: keys => setExpandedIDs([...keys]), expandedRowRender: row => <PortSyncDetails members={row.sync_members} /> }} columns={[
+      expandable={{ fixed: 'left', columnWidth: 30, expandedRowKeys: expandedIDs, onExpandedRowsChange: keys => setExpandedIDs([...keys]), expandedRowRender: row => <PortSyncDetails rule={row} entryName={entryName(row)} chains={chains} nodes={nodes} /> }} columns={[
         { ...order.handle, width: 28 },
         { title: '名称 / ID', dataIndex: 'name', fixed: 'left', width: 146, ...order.sorted('name'), sorter: byText(row => row.name), render: (value, row) => <><span className="node-name ports-name">{value}</span><span className="cell-sub"><Typography.Text className="ports-id mono" copyable={{ text: row.id }}><Tooltip title={row.id}><span>{row.id.length > 8 ? `${row.id.slice(0, 8)}…` : row.id}</span></Tooltip></Typography.Text></span></> },
         { title: '线路', width: 100, ...order.sorted('entry'), sorter: byText(entryName), render: (_, row) => <><span className="ports-name">{entryName(row)}</span><span className="cell-sub">{row.entry_node_id ? '服务器' : '服务器组'}</span></> },
         { title: '服务端口', dataIndex: 'listen_port', width: 88, ...order.sorted('listen_port'), sorter: (a, b) => a.listen_port - b.listen_port, render: value => <span className="mono">{value}</span> },
-        { title: '目标', width: 140, ...order.sorted('target'), sorter: byText(row => `${row.target_address}:${row.target_port}`), render: (_, row) => <><span className="mono ports-target">{row.target_address}:{row.target_port}</span><span className="cell-sub">{row.allow_private ? '允许私网目标' : '仅公网目标'}</span></> },
-        { title: '转发模式', width: 100, render: (_, row) => <><ColorTag tone={row.kind === 'tunnel' ? 'blue' : 'neutral'}>{row.kind === 'tunnel' ? '单跳转发' : '直连'}</ColorTag>{row.kind === 'tunnel' && <span className="cell-sub ports-name">{exitGroups.find(group => group.id === row.exit_group_id)?.name ?? row.exit_group_id}</span>}</> },
+        { title: '完整路径 / 最终目标', width: 140, ...order.sorted('target'), sorter: byText(row => `${row.target_address}:${row.target_port}`), render: (_, row) => <><span className="mono ports-target">{row.target_address}:{row.target_port}</span><span className="cell-sub ports-path">{rulePathSteps(row, entryName(row), chains).join(' → ')}</span><span className="cell-sub">{row.allow_private ? '允许私网目标' : '仅公网目标'}</span></> },
+        { title: '转发模式', width: 100, render: (_, row) => <><ColorTag tone={ruleMode(row) === 'chain' ? 'purple' : ruleMode(row) === 'single' ? 'blue' : 'neutral'}>{ruleModeLabels[ruleMode(row)]}</ColorTag>{row.chain_id ? <Button size="small" type="link" onClick={() => go('chains', row.chain_id)}>{chains.find(chain => chain.id === row.chain_id)?.name ?? `引用待确认 · ${row.chain_id}`}</Button> : row.exit_group_id && <span className="cell-sub ports-name">{exitGroups.find(group => group.id === row.exit_group_id)?.name ?? row.exit_group_id}</span>}</> },
         { title: '状态 / 同步', width: 100, ...order.sorted('enabled'), sorter: (a, b) => Number(b.enabled) - Number(a.enabled), render: (_, row) => <><StatusDot tone={row.enabled ? 'ok' : 'warn'}>{row.enabled ? '已启用' : '已暂停'}</StatusDot><span className="cell-sub"><PortSyncStatus status={row.sync_status} /></span></> },
         { title: '流量', width: 96, ...order.sorted('traffic'), sortDirections: ['descend', 'ascend'], sorter: byMetric<Rule>(row => row.traffic ? row.traffic.upload_bytes + row.traffic.download_bytes : null), render: (_, row) => <span className="num ports-traffic" title={`上行 ${(row.traffic?.upload_bytes ?? 0).toLocaleString()} B，下行 ${(row.traffic?.download_bytes ?? 0).toLocaleString()} B`}>↑ {bytes(row.traffic?.upload_bytes ?? 0)}<span className="cell-sub">↓ {bytes(row.traffic?.download_bytes ?? 0)}</span></span> },
         { title: '连接', width: 70, ...order.sorted('connections'), sortDirections: ['descend', 'ascend'], sorter: byMetric<Rule>(row => row.traffic?.active_connections), render: (_, row) => row.traffic?.active_connections == null ? <span className="muted">缺测</span> : <span className="num">{row.traffic.active_connections.toLocaleString()}</span> },
@@ -203,9 +213,11 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
           <Button size="small" type="link" disabled={mutating} onClick={() => edit(row)}>编辑</Button>
           <Popconfirm title={row.enabled ? '暂停该端口并断开所有现有连接？' : '启用该端口？'} onConfirm={() => toggle(row)}><Button size="small" type="text" disabled={mutating} loading={actingID === row.id}>{row.enabled ? '暂停' : '启用'}</Button></Popconfirm>
           <Dropdown trigger={['click']} menu={{ items: [
-            { key: 'sync', label: expandedIDs.includes(row.id) ? '收起成员生效版本' : '查看成员生效版本' },
+            { key: 'copy', label: '复制端口定义', disabled: mutating },
+            { key: 'sync', label: expandedIDs.includes(row.id) ? '收起路径与同步' : '查看完整路径与同步' },
             { type: 'divider' }, { key: 'delete', label: '删除端口', icon: <DeleteOutlined />, danger: true, disabled: mutating },
           ], onClick: ({ key }) => {
+            if (key === 'copy') edit(row, true);
             if (key === 'sync') toggleDetails(row.id);
             if (key === 'delete') modal.confirm({ title: `删除端口「${row.name}」？`, content: '会断开该端口的所有现有连接，删除后不可恢复。', okText: '确认删除', okButtonProps: { danger: true }, onOk: () => remove(row.id) });
           } }}><Button size="small" type="text" aria-label={`端口 ${row.name} 的更多操作`}>更多 <DownOutlined /></Button></Dropdown>
@@ -213,7 +225,7 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
       ]} />
 
     <div className="ports-notes">
-      <p>展开行或使用「更多 → 查看成员生效版本」，核对成员服务器的期望版本、实际生效版本与应用错误。离线服务器恢复控制连接后才能应用改动。</p>
+      <p>展开行或使用「更多 → 查看完整路径与同步」，核对成员服务器的期望版本、实际生效版本与应用错误。离线服务器恢复控制连接后才能应用改动。</p>
       <p>同步状态按成员确认结果汇总；部分端口应用成功时，服务器的已应用版本仍保留在上一次完整成功的版本。已暂停端口显示「正常」，表示服务器已确认撤销监听。</p>
       <p>流量仅计入口侧业务字节；↑ 为用户到目标，↓ 为目标到用户。离线或样本过期时连接数显示「缺测」。清除排序、筛选和关联定位后，可拖动左侧手柄保存自定义顺序。</p>
     </div>
@@ -231,8 +243,18 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
           <Form.Item name="target_port" label="目标端口" rules={[{ required: true, message: '请输入目标端口' }]}><InputNumber min={1} max={65535} precision={0} placeholder="1–65535" /></Form.Item>
         </FormSection>
         <FormSection title="转发配置" icon={<LinkOutlined />}>
-          <Form.Item name="kind" label="转发模式" rules={[{ required: true }]} extra="直连：入口服务器直接连接目标；单跳转发：经端点组中的转发端点连接目标。"><Segmented options={[{ value: 'direct', label: '直连' }, { value: 'tunnel', label: '单跳转发' }]} /></Form.Item>
-          {kind === 'tunnel' && <Form.Item name="exit_group_id" label="端点组" preserve={false} rules={[{ required: true, message: '请选择端点组' }]} extra="域名目标由转发端点解析。端点组不可用时，新连接失败。"><Select showSearch optionFilterProp="label" placeholder="选择端点组" options={exitGroups.map(group => ({ value: group.id, label: group.name }))} /></Form.Item>}
+          <Form.Item name="mode" label="转发模式" rules={[{ required: true }]} extra="直连由入口连目标；单跳经一个端点组；链式按已保存链逐跳转发，最终目标由末跳解析。"><Segmented options={Object.entries(ruleModeLabels).map(([value, label]) => ({ value, label }))} onChange={() => form.setFieldsValue({ exit_group_id: undefined, chain_id: undefined })} /></Form.Item>
+          {mode === 'single' && <Form.Item name="exit_group_id" label="端点组" preserve={false} rules={[{ required: true, message: '请选择端点组' }]} extra="域名目标由转发端点解析。端点组不可用时，新连接失败。"><Select showSearch optionFilterProp="label" placeholder="选择端点组" options={exitGroups.map(group => ({ value: group.id, label: group.name }))} /></Form.Item>}
+          {mode === 'chain' && <>
+            <Form.Item name="chain_id" label="转发链" preserve={false} rules={[{ required: true, message: '请选择已保存的转发链' }]} extra="链由多个端口共享；编辑链会同时影响全部引用端口，不为本端口复制私有路径。">
+              <Select showSearch optionFilterProp="label" placeholder="选择已保存的转发链" options={[
+                ...chains.map(chain => ({ value: chain.id, label: `${chain.name}（${chain.rule_count} 个引用端口）` })),
+                ...(selectedChain && !chains.some(chain => chain.id === selectedChain) ? [{ value: selectedChain, label: `引用暂时缺失 · ${selectedChain}` }] : []),
+              ]} />
+            </Form.Item>
+            {selectedChain && !chains.some(chain => chain.id === selectedChain) && <Alert type="warning" showIcon title="链引用暂时缺失，已保留原引用。请刷新或重新选择；保存时由服务端验证，模式不会自动变为直连。" />}
+            <p><Button type="link" onClick={() => go('chains', selectedChain)}>{chains.length ? '管理 / 编辑共享转发链' : '尚无转发链，前往创建至少两跳的链'}</Button></p>
+          </>}
           <Form.Item name="allow_private" label="允许私网目标" valuePropName="checked" extra="域名解析到私网、回环或链路本地地址时，同样需要显式允许。"><Switch /></Form.Item>
           <Form.Item name="enabled" label="启用端口" valuePropName="checked"><Switch /></Form.Item>
         </FormSection>

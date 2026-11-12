@@ -35,7 +35,12 @@ func TestChainAuthorizationEveryOldPositionFiltered(t *testing.T) {
 		awaitNode(t, r.c, id, func(v map[string]any) bool { return v["connected"] == false })
 		r.nodes[i].Restart()
 		r.restore(t, i)
-		awaitRule(t, r.c, r.rule, "整条阻塞（需升级服务器）")
+		blocked := awaitRule(t, r.c, r.rule, "整条阻塞（需升级服务器）")
+		address := ""
+		if i >= r.entries {
+			address = r.addresses[i]
+		}
+		assertPortCapabilityBlocker(t, blocked, id, address)
 		r.advance(t, 3)
 		for _, rule := range r.snapshot(i).Rules {
 			if rule.ChainId != "" {
@@ -71,6 +76,7 @@ func TestChainAuthorizationBackupUpgradeWaitsForFreshDurableConfirmation(t *test
 			r.nodes[backup].Restart()
 			r.restore(t, backup)
 			view := awaitRule(t, r.c, r.rule, "可运行但备用成员能力不足")
+			assertPortCapabilityBlocker(t, view, id, r.addresses[backup])
 			if len(view["configuration_blockers"].([]any)) == 0 {
 				t.Fatal("missing backup blocker")
 			}
@@ -109,6 +115,21 @@ func TestChainAuthorizationBackupUpgradeWaitsForFreshDurableConfirmation(t *test
 			case <-time.After(5 * time.Second):
 				t.Fatal("upgraded grant delivery not exercised")
 			}
+			// Rules GET must not present the held upgraded grant as confirmed.
+			pending := ruleRow(t, r.c, r.rule)["path"].(map[string]any)
+			foundPending := false
+			for _, raw := range pending["edges"].([]any) {
+				edge := raw.(map[string]any)
+				if edge["to_node_id"] == id {
+					foundPending = true
+					if edge["state"] == "ready" || edge["suffix_ready"] == true || edge["grant_generation"] == edge["rule_generation"] && edge["applied_revision"].(float64) > 0 {
+						t.Fatal("port GET reused pre-upgrade confirmation", edge)
+					}
+				}
+			}
+			if !foundPending {
+				t.Fatal("port omitted upgraded candidate pending confirmation", pending)
+			}
 			if backup == 2 {
 				for _, rule := range r.snapshot(0).Rules {
 					for _, candidate := range rule.AuthorizedExitIds {
@@ -132,6 +153,8 @@ func TestChainAuthorizationBackupUpgradeWaitsForFreshDurableConfirmation(t *test
 			r.advance(t, 3)
 			awaitRule(t, r.c, r.rule, "正常")
 			r.ready(t, true)
+			r.awaitOperation(t, chainEdgesReady)
+			r.assertPortPath(t, ruleRow(t, r.c, r.rule))
 			// Break each primary and prove the re-confirmed backup is usable in order.
 			if backup == 2 {
 				for _, terminal := range r.layers[1] {

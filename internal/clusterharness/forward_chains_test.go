@@ -91,6 +91,17 @@ func TestForwardChainHTTPRealMultiHopAndOffline(t *testing.T) {
 			}
 			tcpExchange(t, port, "chain:")
 			history := forwardChainRow(t, c, chain.(string))
+			portHistory := ruleRow(t, c, rule)["path"].(map[string]any)
+			if len(portHistory["edges"].([]any)) != hops {
+				t.Fatal("port lost offline path edges", portHistory)
+			}
+			for _, raw := range portHistory["edges"].([]any) {
+				edge := raw.(map[string]any)
+				if edge["state"] != "historical" || edge["fresh"] != false || edge["observed_at"] == nil || edge["rule_generation"] != edge["grant_generation"] {
+					t.Fatal("port claimed offline cached forwarding was current readiness", edge)
+				}
+			}
+
 			for i := 0; i < hops; i++ {
 				old := chainEdgeRow(t, current, rule, ids[i], ids[i+1])
 				o := chainEdgeRow(t, history, rule, ids[i], ids[i+1])

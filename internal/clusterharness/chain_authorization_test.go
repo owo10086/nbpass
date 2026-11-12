@@ -309,6 +309,12 @@ func TestChainAuthorizationSharedEditMoveModeAndDeleteIsolation(t *testing.T) {
 	awaitRule(t, r.c, r.rule, "正常")
 	awaitRule(t, r.c, second, "正常")
 	r.ready(t, true)
+	r.awaitOperation(t, chainEdgesReady)
+	r.assertPortPath(t, ruleRow(t, r.c, r.rule))
+	secondRow := ruleRow(t, r.c, second)
+	if secondRow["chain_id"] != r.chain || secondRow["path"].(map[string]any)["hops"].([]any)[0].(map[string]any)["exit_group_id"] != replacement {
+		t.Fatal("shared edit not reflected in both port paths", secondRow)
+	}
 	afterView := forwardChainRow(t, r.c, r.chain)
 	r.assertChainContract(t, afterView, r.rule, second)
 	if afterView["id"] != beforeView["id"] || afterView["name"] != "edited shared chain" {

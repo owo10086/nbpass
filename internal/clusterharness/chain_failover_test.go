@@ -293,6 +293,19 @@ func TestChainFailoverAsymmetricEdgesAndRecovery(t *testing.T) {
 			t.Fatal("management page lost actual downstream bad edge", e)
 		}
 	}
+	portPath := ruleRow(t, r.c, r.rule)["path"].(map[string]any)
+	for _, raw := range portPath["edges"].([]any) {
+		edge := raw.(map[string]any)
+		if edge["from_node_id"] == r.ids[0] && edge["to_node_id"] == r.ids[1] && (edge["state"] != "suffix_unknown" || edge["local_ready"] != true || edge["suffix_ready"] != false || edge["fresh"] != true) {
+			t.Fatal("port conflated healthy local edge and broken suffix", edge)
+		}
+		if edge["from_node_id"] == r.ids[1] && (edge["state"] != "edge_unhealthy" || edge["fresh"] != true) {
+			t.Fatal("port lost actual bad downstream edge", edge)
+		}
+		if edge["from_node_id"] == r.ids[0] && edge["to_node_id"] == r.ids[2] && (edge["state"] != "ready" || edge["fresh"] != true) {
+			t.Fatal("port lost independent backup suffix readiness", edge)
+		}
+	}
 	for _, terminal := range r.layers[1] {
 		r.links[2][terminal].block(true)
 	}

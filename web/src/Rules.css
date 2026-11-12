@@ -35,3 +35,8 @@
   .ports-editor .ant-form-item-control { flex: auto !important; }
   .ports-member-details { max-width: calc(100vw - 110px); }
 }
+
+.ports-path { overflow-wrap: anywhere; white-space: normal; line-height: 1.7; }
+.ports-page .ant-btn-link { max-width: 100%; height: auto; white-space: normal; overflow-wrap: anywhere; }
+.ports-member-details > p { margin-top: 16px; }
+.ports-member-details > .ant-space { margin-bottom: 12px; }
