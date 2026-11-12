@@ -291,6 +291,40 @@ func TestChainAuthorizationSharedEditMoveModeAndDeleteIsolation(t *testing.T) {
 	r.exchange(t, 0)
 	keep := tcpExchange(t, secondPort, "chain:")
 	tcpExchange(t, ordinaryPort, "chain:")
+	// Edit the saved chain itself (not only a member group), then verify every
+	// referring port crosses the new authorization boundary and still forwards.
+	r.ready(t, true)
+	beforeView := forwardChainRow(t, r.c, r.chain)
+	r.layers[0] = []int{2, 1} // the preceding group edit changed candidate priority
+	r.assertChainContract(t, beforeView, r.rule, second)
+	r.c.Do("DELETE", "/api/forward-chains/"+r.chain, nil, 409)
+	oldReferences := map[string]map[string]any{}
+	for _, id := range []string{r.rule, second} {
+		oldReferences[id] = chainEdgeRow(t, beforeView, id, r.ids[0], r.ids[2])
+	}
+	replacement := r.c.Do("POST", "/api/exit-groups", map[string]any{"name": "replacement first hop", "strategy": "primary_backup", "member_addresses": []map[string]string{{"node_id": r.ids[2], "address_id": r.addresses[2]}}}, 201)["id"].(string)
+	r.groups[0] = replacement
+	r.layers[0] = []int{2}
+	r.c.Do("PUT", "/api/forward-chains/"+r.chain, map[string]any{"name": "edited shared chain", "exit_group_ids": r.groups}, 200)
+	awaitRule(t, r.c, r.rule, "正常")
+	awaitRule(t, r.c, second, "正常")
+	r.ready(t, true)
+	afterView := forwardChainRow(t, r.c, r.chain)
+	r.assertChainContract(t, afterView, r.rule, second)
+	if afterView["id"] != beforeView["id"] || afterView["name"] != "edited shared chain" {
+		t.Fatal("shared chain edit lost identity/name", afterView)
+	}
+	for id, old := range oldReferences {
+		current := chainEdgeRow(t, afterView, id, r.ids[0], r.ids[2])
+		if current["generation"].(float64) <= old["generation"].(float64) || current["chain_fingerprint"] == old["chain_fingerprint"] {
+			t.Fatal("chain edit did not revise every reference in management GET", id, old, current)
+		}
+	}
+	r.advance(t, 1)
+	chainStreamClosed(t, keep)
+	r.exchange(t, 0)
+	keep = tcpExchange(t, secondPort, "chain:")
+	tcpExchange(t, ordinaryPort, "chain:")
 	r.body["enabled"] = false
 	r.c.Do("PUT", "/api/rules/"+r.rule, r.body, 200)
 	awaitRule(t, r.c, r.rule, "正常")
@@ -318,7 +352,14 @@ func TestChainAuthorizationSharedEditMoveModeAndDeleteIsolation(t *testing.T) {
 	r.c.Do("PUT", "/api/rules/"+second, secondBody, 200)
 	awaitRule(t, r.c, second, "正常")
 	tcpExchange(t, secondPort, "chain:")
+	if row := forwardChainRow(t, r.c, r.chain); row["rule_count"] != float64(1) {
+		t.Fatal("disabled reference disappeared or mode change kept obsolete reference", row)
+	}
+	r.c.Do("DELETE", "/api/forward-chains/"+r.chain, nil, 409)
 	r.c.Do("DELETE", "/api/rules/"+r.rule, nil, 204)
+	if row := forwardChainRow(t, r.c, r.chain); row["rule_count"] != float64(0) {
+		t.Fatal("deleted reference remained in chain management", row)
+	}
 	r.c.Do("DELETE", "/api/forward-chains/"+r.chain, nil, 204)
 	r.advance(t, 2)
 	for i := 1; i < len(r.ids); i++ {

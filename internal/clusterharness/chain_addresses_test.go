@@ -53,6 +53,16 @@ func TestChainFailoverAddressIsolationLateDigestAndIncidentBoundary(t *testing.T
 	if entryState(t, r.c, eg, r.ids[0])["ready"] != false {
 		t.Fatal("bad public borrowed dedicated readiness")
 	}
+	goodView := r.awaitChain(t, func(v map[string]any) bool {
+		return chainEdgeRow(t, v, r.rule, r.ids[0], r.ids[1])["state"] == "ready"
+	})
+	r.assertChainContract(t, goodView, r.rule)
+	goodEdge := chainEdgeRow(t, goodView, r.rule, r.ids[0], r.ids[1])
+	badView := forwardChainRow(t, r.c, bc)
+	badEdge := chainEdgeRow(t, badView, bad, r.ids[0], r.ids[1])
+	if badView["rule_count"] != float64(1) || badEdge["address_id"] != "public" || badEdge["endpoint_config_digest"] == goodEdge["endpoint_config_digest"] || badEdge["state"] == "ready" {
+		t.Fatal("management page borrowed dedicated address evidence for public address", badEdge, goodEdge)
+	}
 	r.links[1][2].block(true)
 	assertTCPFailure(t, int(r.entryPorts[0].Load()))
 	r.ready(t, false)
@@ -101,10 +111,19 @@ func TestChainFailoverAddressIsolationLateDigestAndIncidentBoundary(t *testing.T
 	if current["ended_at"] != nil {
 		t.Fatal("unknown current address evidence cleared incident", current)
 	}
+	view := forwardChainRow(t, r.c, r.chain)
+	edge := chainEdgeRow(t, view, r.rule, r.ids[0], r.ids[1])
+	if edge["address_id"] != r.addresses[1] || edge["endpoint_config_digest"] == oldDigest || edge["chain_fingerprint"] == goodEdge["chain_fingerprint"] || edge["generation"].(float64) <= goodEdge["generation"].(float64) || edge["state"] != "unknown" || edge["fresh"] != false || edge["sampled_at"] != "" {
+		t.Fatal("management page accepted late old digest as current evidence", edge, goodEdge)
+	}
 	r.h.TransformControlReports(nil)
 	r.ready(t, true)
 	r.exchange(t, 0)
 	r.advance(t, 10)
+	view = r.awaitChain(t, func(v map[string]any) bool {
+		return chainEdgeRow(t, v, r.rule, r.ids[0], r.ids[1])["state"] == "ready"
+	})
+	r.assertChainContract(t, view, r.rule)
 	if old = r.c.Do("GET", "/api/incidents/"+oldID, nil, 200); old["closure"] != "新版本替代" {
 		t.Fatal("late observations rewrote old boundary")
 	}

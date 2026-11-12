@@ -279,6 +279,20 @@ func TestChainFailoverAsymmetricEdgesAndRecovery(t *testing.T) {
 	if !found {
 		t.Fatal("missing first edge", op)
 	}
+	view := r.awaitChain(t, func(v map[string]any) bool {
+		return chainEdgeRow(t, v, r.rule, r.ids[0], r.ids[1])["state"] == "suffix_unknown"
+	})
+	r.assertChainContract(t, view, r.rule)
+	first := chainEdgeRow(t, view, r.rule, r.ids[0], r.ids[1])
+	backup := chainEdgeRow(t, view, r.rule, r.ids[0], r.ids[2])
+	if first["fresh"] != true || backup["state"] != "ready" || backup["fresh"] != true {
+		t.Fatal("management page conflated reachable edge/downstream failure with backup readiness", first, backup)
+	}
+	for _, terminal := range r.layers[1] {
+		if e := chainEdgeRow(t, view, r.rule, r.ids[1], r.ids[terminal]); e["state"] != "edge_unhealthy" || e["fresh"] != true {
+			t.Fatal("management page lost actual downstream bad edge", e)
+		}
+	}
 	for _, terminal := range r.layers[1] {
 		r.links[2][terminal].block(true)
 	}
@@ -322,6 +336,16 @@ func TestChainFailoverEachHopCandidateRecoveryAndTargetClassification(t *testing
 		r.advance(t, 15)
 		r.ready(t, true)
 		r.exchange(t, 0)
+		failedView := r.awaitChain(t, func(v map[string]any) bool {
+			for _, from := range predecessors {
+				e := chainEdgeRow(t, v, r.rule, r.ids[from], r.ids[candidate])
+				if e["state"] != "edge_unhealthy" || e["fresh"] != true {
+					return false
+				}
+			}
+			return true
+		})
+		r.assertChainContract(t, failedView, r.rule)
 		for _, from := range predecessors {
 			r.links[from][candidate].recover()
 		}
@@ -337,6 +361,16 @@ func TestChainFailoverEachHopCandidateRecoveryAndTargetClassification(t *testing
 			}
 			return true
 		})
+		recoveredView := r.awaitChain(t, func(v map[string]any) bool {
+			for _, from := range predecessors {
+				e := chainEdgeRow(t, v, r.rule, r.ids[from], r.ids[candidate])
+				if e["state"] != "ready" || e["fresh"] != true {
+					return false
+				}
+			}
+			return true
+		})
+		r.assertChainContract(t, recoveredView, r.rule)
 	}
 	// Start the independent target-failure phase only after every current edge
 	// has recovered. Keep the exact endpoint/generation identities for the
@@ -355,6 +389,7 @@ func TestChainFailoverEachHopCandidateRecoveryAndTargetClassification(t *testing
 		return true
 	}
 	before := r.awaitOperation(t, healthy)
+	r.assertChainContract(t, forwardChainRow(t, r.c, r.chain), r.rule)
 	edgeIdentity := func(e map[string]any) string {
 		return fmt.Sprint(e["from_node_id"], e["to_node_id"], e["address_id"], e["endpoint_config_digest"], e["rule_generation"], e["grant_generation"], e["chain_fingerprint"])
 	}
@@ -396,6 +431,15 @@ func TestChainFailoverEachHopCandidateRecoveryAndTargetClassification(t *testing
 		e := raw.(map[string]any)
 		if e["local_ready"] != true || e["fresh"] != true || !expected[edgeIdentity(e)] {
 			t.Fatal("target failure poisoned previous physical edge", e)
+		}
+	}
+	view := forwardChainRow(t, r.c, r.chain)
+	r.assertChainContract(t, view, r.rule)
+	for _, raw := range view["hops"].([]any) {
+		for _, raw := range raw.(map[string]any)["observations"].([]any) {
+			if e := raw.(map[string]any); e["state"] != "ready" || e["fresh"] != true {
+				t.Fatal("management GET confused final target failure with chain readiness", e)
+			}
 		}
 	}
 	targetFailure.Store(false)

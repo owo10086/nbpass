@@ -56,6 +56,33 @@ func TestForwardChainHTTPRealMultiHopAndOffline(t *testing.T) {
 				awaitUptime(t, c, id, 0)
 			}
 			h.Clock.Advance(5 * time.Second)
+			var current map[string]any
+			for tick := 0; tick < 35; tick++ {
+				current = forwardChainRow(t, c, chain.(string))
+				ready := true
+				for i := 0; i < hops; i++ {
+					o := chainEdgeRow(t, current, rule, ids[i], ids[i+1])
+					if o["state"] != "ready" || o["fresh"] != true {
+						ready = false
+					}
+				}
+				if ready {
+					break
+				}
+				awaitControlIdle(t, h)
+				h.Clock.Advance(time.Second)
+				time.Sleep(2 * time.Millisecond)
+			}
+			if current["rule_count"] != float64(1) || len(current["hops"].([]any)) != hops {
+				t.Fatal("management GET lost real multi-hop reference/path", current)
+			}
+			for i, raw := range current["hops"].([]any) {
+				hop := raw.(map[string]any)
+				o := chainEdgeRow(t, current, rule, ids[i], ids[i+1])
+				if hop["position"] != float64(i+1) || hop["exit_group_id"] != groups[i] || len(hop["observations"].([]any)) != 1 || o["address_id"] != "public" || o["endpoint_config_digest"] == "" || o["chain_fingerprint"] == "" || o["generation"].(float64) < 1 || o["state"] != "ready" || o["fresh"] != true || o["sampled_at"] == "" {
+					t.Fatal("management GET lost current real multi-hop evidence", hop)
+				}
+			}
 			for _, disconnect := range stop {
 				disconnect()
 			}
@@ -63,6 +90,14 @@ func TestForwardChainHTTPRealMultiHopAndOffline(t *testing.T) {
 				awaitNode(t, c, id, func(v map[string]any) bool { return v["connected"] == false })
 			}
 			tcpExchange(t, port, "chain:")
+			history := forwardChainRow(t, c, chain.(string))
+			for i := 0; i < hops; i++ {
+				old := chainEdgeRow(t, current, rule, ids[i], ids[i+1])
+				o := chainEdgeRow(t, history, rule, ids[i], ids[i+1])
+				if o["state"] != "historical" || o["fresh"] != false || o["sampled_at"] == "" || o["endpoint_config_digest"] != old["endpoint_config_digest"] || o["chain_fingerprint"] != old["chain_fingerprint"] || o["generation"] != old["generation"] {
+					t.Fatal("management GET claimed offline cached forwarding was fresh readiness", o, old)
+				}
+			}
 		})
 	}
 }
