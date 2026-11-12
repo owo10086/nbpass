@@ -127,6 +127,9 @@ func validateTunnelSnapshot(s *controlpb.ConfigSnapshot) error {
 			if err := ValidateTarget(r.TargetAddress, r.AllowPrivate); err != nil {
 				return err
 			}
+			if err := validateChainGrant(grant, s.ExitGroups); err != nil {
+				return err
+			}
 			grants[key] = true
 		}
 	}

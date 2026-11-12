@@ -15,6 +15,7 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -35,6 +36,10 @@ type tunnelAuth struct {
 	Credential      string `json:"credential"`
 }
 type tunnelRequest struct {
+	// Runtime-only trusted context; never decoded from a predecessor.
+	rule              *controlpb.ForwardRule
+	nextGroup         string
+	selectedNext      *atomic.Pointer[controlpb.TunnelEndpoint]
 	ChainID           string                  `json:"chain_id,omitempty"`
 	HopIndex          uint32                  `json:"hop_index,omitempty"`
 	ChainFingerprint  string                  `json:"chain_fingerprint,omitempty"`
@@ -87,7 +92,17 @@ func readTunnelMessage(r io.Reader, v any) error {
 	if _, err := io.ReadFull(r, data); err != nil {
 		return err
 	}
-	return json.Unmarshal(data, v)
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if _, request := v.(*tunnelRequest); request {
+		decoder.DisallowUnknownFields()
+	}
+	if err := decoder.Decode(v); err != nil {
+		return err
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return errors.New("隧道消息尾部无效")
+	}
+	return nil
 }
 
 // 能力绑定到经过 TLS/凭据认证的具体会话，重连时重新协商。
@@ -192,7 +207,14 @@ func (c *tunnelClient) openSessionEndpoint(ctx context.Context, ep *controlpb.Tu
 		}
 		return failTunnel(failureConfig, errors.New("出口证书与固定信任不匹配"))
 	}}, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-		dialCtx, cancel := context.WithCancel(ctx)
+		deadline, hasDeadline := handshakeCtx.Deadline()
+		var dialCtx context.Context
+		var cancel context.CancelFunc
+		if hasDeadline {
+			dialCtx, cancel = context.WithDeadline(ctx, deadline)
+		} else {
+			dialCtx, cancel = context.WithCancel(ctx)
+		}
 		stop := context.AfterFunc(handshakeCtx, cancel)
 		defer stop()
 		defer cancel()
@@ -297,7 +319,9 @@ func (c *tunnelClient) openSessionEndpoint(ctx context.Context, ep *controlpb.Tu
 	return &tunnelSession{Session: session, checkSupported: result.CheckSupported}, nil
 }
 func (c *tunnelClient) dial(ctx context.Context, rule *controlpb.ForwardRule, cleanup ...*tunnelAttemptCleanup) (net.Conn, error) {
-	return c.open(ctx, streamAuthorization(c.currentEndpoint().EntryId, rule), cleanup...)
+	request := streamAuthorization(c.currentEndpoint().EntryId, rule)
+	request.rule = rule
+	return c.open(ctx, request, cleanup...)
 }
 
 func (c *tunnelClient) ready(ctx context.Context, rule *controlpb.ForwardRule) error {
@@ -311,7 +335,11 @@ func (c *tunnelClient) ready(ctx context.Context, rule *controlpb.ForwardRule) e
 	cleanup := &tunnelAttemptCleanup{}
 	defer cleanup.after(lease.release)
 	request := streamAuthorization(c.currentEndpoint().EntryId, rule)
-	request.Check = rule
+	request.Check = &controlpb.ForwardRule{Id: rule.Id, AuthorizationGeneration: rule.AuthorizationGeneration, TargetAddress: rule.TargetAddress, TargetPort: rule.TargetPort, TargetFamily: rule.TargetFamily, ChainId: rule.ChainId, HopIndex: rule.HopIndex}
+	if rule.ChainId != "" {
+		request.Check.ChainAuthorization = &controlpb.ChainAuthorization{Fingerprint: rule.GetChainAuthorization().GetFingerprint()}
+	}
+	request.rule = rule
 	stream, err := c.open(ctx, request, cleanup)
 	if stream != nil {
 		if closeErr := cleanup.close(ctx, stream); err == nil {
@@ -378,12 +406,27 @@ func (c *tunnelClient) openOnce(ctx context.Context, request tunnelRequest, clea
 	stream.SetDeadline(deadline)
 	stopCancel := context.AfterFunc(ctx, func() { stream.SetDeadline(time.Now()) })
 	defer stopCancel()
+	if request.ChainID != "" {
+		request.RemainingBudgetMS = ChainRemainingBudgetMS(ctx)
+		if request.RemainingBudgetMS == 0 {
+			return nil, context.DeadlineExceeded
+		}
+	}
 	result, err := exchangeTunnelRequest(ctx, stream, request)
 	if err != nil {
 		return nil, streamFailure(session.Session, err)
 	}
 	if !result.OK {
 		class := result.Failure
+		if request.ChainID != "" {
+			if result.Edge == nil && (class == failureLocal || class == failureConfig) {
+				result.Edge = &ChainFailure{FromNodeID: c.currentEndpoint().NodeId, HopIndex: request.HopIndex, RuleGeneration: request.Generation, GrantGeneration: request.Generation, ChainFingerprint: request.ChainFingerprint}
+			}
+			if class == failureLink || !ValidateChainFailureFromNext(request.rule, c.currentEndpoint(), string(class), result.Edge) {
+				return nil, failTunnel(failureConfig, errors.New("下游失败证据无效"))
+			}
+			return nil, &tunnelFailure{class: class, cause: errors.New("链式建流失败"), edge: result.Edge}
+		}
 		if class != failureTarget && class != failureLocal && class != failureConfig {
 			class = failureConfig
 		}
@@ -598,6 +641,7 @@ func (s *tunnelServer) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if auth.EntryID != s.engine.deps.NodeID {
 			lease = s.engine.resources.reserveTunnel()
 			if lease == nil {
+				s.finishStream(stream, tunnelResult{Failure: failureLocal})
 				(&tunnelStream{Stream: stream, engine: s.engine}).Close()
 				continue
 			}

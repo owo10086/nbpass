@@ -6,6 +6,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"io"
 	"nbpass/internal/controlpb"
+	"nbpass/internal/timing"
 	"net"
 	"strings"
 	"sync"
@@ -194,6 +195,123 @@ func TestTunnelRotationUnchangedEndpointAndReferenceReleaseDoNotWaitForHandshake
 			case <-time.After(200 * time.Millisecond):
 				t.Fatal("无网络操作错误等待了网络握手锁")
 			}
+		})
+	}
+}
+
+// Only the entry authorization recheck uses one-second timers in this fixture.
+// Publishing a second timer proves the first recheck completed, rather than
+// assuming that advancing time means its goroutine already ran.
+type entryRecheckClock struct {
+	resourceClock
+	created chan *entryRecheckTimer
+}
+type entryRecheckTimer struct{ ch chan time.Time }
+
+func (t *entryRecheckTimer) C() <-chan time.Time { return t.ch }
+func (t *entryRecheckTimer) Stop() bool          { return true }
+func (c *entryRecheckClock) NewTimer(d time.Duration) timing.Timer {
+	if d != time.Second {
+		return c.resourceClock.NewTimer(d)
+	}
+	timer := &entryRecheckTimer{ch: make(chan time.Time, 1)}
+	c.created <- timer
+	return timer
+}
+func TestTunnelRotationFinalSnapshotPreservesRecheckedEntryStream(t *testing.T) {
+	for _, hops := range []int{1, 2} {
+		t.Run(fmt.Sprint(hops), func(t *testing.T) {
+			f := newRelayFixture(t, hops)
+			clock := &entryRecheckClock{created: make(chan *entryRecheckTimer, 8)}
+			f.deps[0].Clock = clock
+			if hops == 1 {
+				r := f.snapshots[0].Rules[0]
+				r.ChainId = ""
+				r.ChainAuthorization = nil
+				g := f.snapshots[1].TunnelServer.Grants[0]
+				g.Rule.ChainId = ""
+				g.Rule.ChainAuthorization = nil
+				g.Rule.HopIndex = 0
+				g.HopIndex = 0
+			}
+			f.start(t)
+			c := f.connect(t)
+			defer c.Close()
+			relayExchange(t, c)
+			var first *entryRecheckTimer
+			select {
+			case first = <-clock.created:
+			case <-time.After(time.Second):
+				t.Fatal("entry watcher did not start")
+			}
+			entry := proto.Clone(f.snapshots[0]).(*controlpb.ConfigSnapshot)
+			server := proto.Clone(f.snapshots[1]).(*controlpb.ConfigSnapshot)
+			ep := entry.ExitGroups[0].Exits[0]
+			oldCert := ep.CertificatePem
+			oldCredential := ep.Credential
+			newCert, newKey, _, _ := tunnelTestIdentity(t, ep.ServerName, false)
+			newCredential := strings.Repeat("z", 43)
+			apply := func() {
+				t.Helper()
+				for _, pair := range []struct {
+					e *Engine
+					s *controlpb.ConfigSnapshot
+				}{{f.engines[1], server}, {f.engines[0], entry}} {
+					pair.s.Revision++
+					pair.s.Digest = SnapshotDigest(pair.s)
+					if err := pair.e.Apply(pair.s); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			ep.RotationId = "explicit-rotation"
+			ep.TrustedCertificatesPem = [][]byte{newCert}
+			server.TunnelServer.RotationId = ep.RotationId
+			server.TunnelServer.Peers[0].AdditionalCredentials = []string{newCredential}
+			apply()
+			ep.CertificatePem = newCert
+			ep.TrustedCertificatesPem = [][]byte{oldCert}
+			ep.Credential = newCredential
+			server.TunnelServer.CertificatePem = newCert
+			server.TunnelServer.PrivateKeyPem = newKey
+			server.TunnelServer.Peers[0].Credential = newCredential
+			server.TunnelServer.Peers[0].AdditionalCredentials = []string{oldCredential}
+			apply()
+			ep.RotationId = ""
+			ep.TrustedCertificatesPem = nil
+			server.TunnelServer.RotationId = ""
+			server.TunnelServer.Peers[0].AdditionalCredentials = nil
+			apply()
+			current := f.engines[0].rules["r"].selection.Load().clients[0].currentEndpoint()
+			if current.RotationId != "" || current.Credential != newCredential {
+				t.Fatal("final snapshot not installed")
+			}
+			first.ch <- time.Now()
+			select {
+			case <-clock.created:
+			case <-time.After(time.Second):
+				t.Fatal("final rotation recheck revoked old entry stream")
+			}
+			relayExchange(t, c)
+			fresh := f.connect(t)
+			defer fresh.Close()
+			relayExchange(t, fresh)
+			// An ordinary credential replacement without a rotation transition must
+			// still revoke the old carrier, even while the downstream keeps old state.
+			ep.Credential = strings.Repeat("q", 43)
+			entry.Revision++
+			entry.Digest = SnapshotDigest(entry)
+			if err := f.engines[0].Apply(entry); err != nil {
+				t.Fatal(err)
+			}
+			c.SetReadDeadline(time.Now().Add(time.Second))
+			var b [1]byte
+			if _, err := c.Read(b[:]); err == nil {
+				t.Fatal("ordinary credential replacement retained old flow")
+			} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+				t.Fatal("ordinary replacement did not revoke old carrier")
+			}
+
 		})
 	}
 }

@@ -1,10 +1,12 @@
 package node
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
@@ -67,7 +69,8 @@ func TestActualV1ReaderRejectsNewlyPersistedCache(t *testing.T) {
 			c.Close()
 		}
 	}()
-	for _, kind := range []string{"direct", "exit"} {
+	binary := buildActualRollbackNode(t, root)
+	for _, kind := range []string{"direct", "exit", "chain_terminal", "relay"} {
 		for _, checkpoint := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/checkpoint=%t", kind, checkpoint), func(t *testing.T) {
 				dir := filepath.Join(t.TempDir(), "node")
@@ -88,12 +91,32 @@ func TestActualV1ReaderRejectsNewlyPersistedCache(t *testing.T) {
 				businessPort := freePort()
 				rule := &controlpb.ForwardRule{Id: "r", Kind: controlpb.RuleKind_RULE_KIND_DIRECT, ListenPort: businessPort, TargetAddress: "127.0.0.1", TargetPort: uint32(target.Addr().(*net.TCPAddr).Port), TargetFamily: controlpb.AddressFamily_ADDRESS_FAMILY_IPV4, AllowPrivate: true}
 				snapshot := &controlpb.ConfigSnapshot{Revision: 7, OutboundIpv4: "127.0.0.1", Rules: []*controlpb.ForwardRule{rule}}
-				if kind == "exit" {
+				if kind != "direct" {
 					snapshot.Rules = nil
 					rule.Kind = controlpb.RuleKind_RULE_KIND_TUNNEL
 					snapshot.TunnelServer = rollbackTunnelServer(t, freePort(), rule)
 					businessPort = snapshot.TunnelServer.ListenPort
 				}
+				if kind == "relay" || kind == "chain_terminal" {
+					rule.ChainId = "rollback-chain"
+					rule.AuthorizationGeneration = 7
+					rule.HopIndex = 2
+					grant := snapshot.TunnelServer.Grants[0]
+					grant.HopIndex = rule.HopIndex
+					rule.ChainAuthorization = &controlpb.ChainAuthorization{Fingerprint: strings.Repeat("f", 64), Edges: []*controlpb.ChainEdgeAuthorization{{FromNodeId: "a", ToNodeId: "n", HopIndex: 2, AddressId: "public", EndpointConfigDigest: strings.Repeat("d", 64)}}}
+					if kind == "relay" {
+						rule.HopIndex = 1
+						grant.HopIndex = 1
+						rule.ChainAuthorization.Edges[0].HopIndex = 1
+						ep := &controlpb.TunnelEndpoint{NodeId: "c", EntryId: "n", AddressId: "public", Address: "127.0.0.1", Port: uint32(target.Addr().(*net.TCPAddr).Port), Transport: controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS, ServerName: snapshot.TunnelServer.ServerName, CertificatePem: snapshot.TunnelServer.CertificatePem, Credential: strings.Repeat("c", 43)}
+						ep.EndpointConfigDigest = forwarding.EndpointConfigDigest(ep)
+						snapshot.ExitGroups = []*controlpb.ExitGroup{{Id: "next", Strategy: controlpb.ExitStrategy_EXIT_STRATEGY_PRIMARY_BACKUP, Exits: []*controlpb.TunnelEndpoint{ep}}}
+						grant.NextExitGroupId = "next"
+						grant.AuthorizedNextNodeIds = []string{"c"}
+						rule.ChainAuthorization.Edges = append(rule.ChainAuthorization.Edges, &controlpb.ChainEdgeAuthorization{FromNodeId: "n", ToNodeId: "c", HopIndex: 2, AddressId: "public", EndpointConfigDigest: ep.EndpointConfigDigest})
+					}
+				}
+
 				var actual []forwarding.State
 				engine := forwarding.NewEngine(forwarding.Dependencies{Persist: func(state forwarding.State) error {
 					actual = append(actual, state)
@@ -129,7 +152,29 @@ func TestActualV1ReaderRejectsNewlyPersistedCache(t *testing.T) {
 				if err = json.Unmarshal(data, &cache); err != nil || cache.Version != 2 || cache.State.OutboundIPv4 != "127.0.0.1" {
 					t.Fatal("actual source cache lost", cache, err)
 				}
+				if kind == "relay" && !checkpoint && (len(cache.State.Rules) != 0 || len(cache.State.ExitGroups) != 1 || cache.State.TunnelServer.Grants[0].NextExitGroupId != "next" || len(cache.State.TunnelGrantResults) != 1) {
+					t.Fatal("actual relay persistence incomplete")
+				}
+				restored := forwarding.NewEngine(forwarding.Dependencies{NodeID: "n", Persist: func(state forwarding.State) error { return persistConfigCache(ctx, credential, store, state) }})
+				if err := openConfigCache(ctx, credential, &Dependencies{ConfigStore: store}, restored); err != nil {
+					restored.Close()
+					t.Fatal("current encrypted cache restore", err)
+				}
+				if kind == "relay" && !checkpoint {
+					state := restored.State()
+					if len(state.Rules) != 0 || len(state.ExitGroups) != 1 || len(state.TunnelGrantResults) != 1 || state.TunnelServer.Grants[0].NextExitGroupId != "next" {
+						restored.Close()
+						t.Fatal("encrypted relay restore incomplete")
+					}
+				}
+				restored.Close()
 				before := observations.Load()
+				reject := exec.CommandContext(ctx, binary, "--control-url", credential.ControlURL, "--data-dir", dir)
+				rejected, processErr := reject.CombinedOutput()
+				if processErr == nil || !bytes.Contains(rejected, []byte("节点配置缓存格式或身份不匹配")) {
+					t.Fatalf("actual old binary did not reject: %v %s", processErr, rejected)
+				}
+				t.Logf("actual old executable exited: %v / %s", processErr, strings.TrimSpace(string(rejected)))
 				cmd := exec.CommandContext(ctx, "go", "test", "-overlay", path, "-vet=off", "./internal/node", "-run", "^TestRollbackOldReaderRejectsActualNewCache$", "-count=1", "-v")
 				cmd.Dir = root
 				cmd.Env = append(os.Environ(), "NBPASS_ROLLBACK_CACHE_DIR="+dir, "NBPASS_ROLLBACK_BUSINESS_PORT="+strconv.Itoa(int(businessPort)))
@@ -170,4 +215,35 @@ func rollbackTunnelServer(t *testing.T, port uint32, rule *controlpb.ForwardRule
 		t.Fatal(err)
 	}
 	return &controlpb.TunnelServer{ListenPort: port, Transport: controlpb.TunnelTransport_TUNNEL_TRANSPORT_WSS, ServerName: "rollback.test", CertificatePem: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), PrivateKeyPem: pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), Peers: []*controlpb.TunnelPeer{{EntryId: "a", Credential: strings.Repeat("a", 43)}}, Grants: []*controlpb.TunnelGrant{{EntryId: "a", Rule: rule}}}
+}
+
+// Build unchanged historical source in the test's disposable directory; never
+// overwrite either IX02 baseline executable or any repository build artifact.
+func buildActualRollbackNode(t *testing.T, root string) string {
+	t.Helper()
+	const commit = "3899928362a75b58ac74ff6844652d319760b656"
+	archive := exec.Command("git", "archive", commit, "api", "internal", "cmd", "go.mod", "go.sum")
+	archive.Dir = root
+	data, err := archive.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := t.TempDir()
+	extract := exec.Command("tar", "-xf", "-", "-C", source)
+	extract.Stdin = bytes.NewReader(data)
+	if out, err := extract.CombinedOutput(); err != nil {
+		t.Fatal(string(out), err)
+	}
+	binary := filepath.Join(source, "nbpass-node-state-v1")
+	build := exec.Command("go", "build", "-trimpath", "-buildvcs=false", "-o", binary, "./cmd/nbpass-node")
+	build.Dir = source
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatal(string(out), err)
+	}
+	data, err = os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("actual rollback source=%s binary SHA256=%x", commit, sha256.Sum256(data))
+	return binary
 }

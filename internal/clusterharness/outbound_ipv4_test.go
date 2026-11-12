@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"google.golang.org/protobuf/proto"
 	"io"
 	"nbpass/internal/compatibility"
@@ -422,6 +423,23 @@ func TestOutboundIPv4ActualV1ManualIsolationAndReconnect(t *testing.T) {
 		}
 		return nil
 	})
+	// The same real old process is a possible entry, relay, and terminal in
+	// current chain rules. Reconnection must not deliver any new chain semantics.
+	other := []string{addNode(c, "回滚前驱")["id"].(string), addNode(c, "回滚末跳")["id"].(string)}
+	groups := map[string]string{}
+	for _, nodeID := range append([]string{id}, other...) {
+		c.Do("PUT", "/api/nodes/"+nodeID+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": reserve(), "transport": "wss"}, 200)
+		groups[nodeID] = c.Do("POST", "/api/exit-groups", map[string]any{"name": "回滚组" + nodeID, "members": []string{nodeID}, "strategy": "primary_backup"}, 201)["id"].(string)
+	}
+	chainRules := []string{}
+	for index, path := range [][]string{{id, other[0], other[1]}, {other[0], id, other[1]}, {other[0], other[1], id}} {
+		chain := c.Do("POST", "/api/forward-chains", map[string]any{"name": fmt.Sprintf("回滚位置%d", index), "exit_group_ids": []string{groups[path[1]], groups[path[2]]}}, 201)
+		body := directBody("", reserve(), "127.0.0.1", target)
+		body["entry_node_id"] = path[0]
+		body["kind"] = "tunnel"
+		body["chain_id"] = chain["id"]
+		chainRules = append(chainRules, c.Do("POST", "/api/rules", body, 201)["id"].(string))
+	}
 	denied.Store(false)
 	stopOnline := start()
 	defer stopOnline()
@@ -445,6 +463,16 @@ func TestOutboundIPv4ActualV1ManualIsolationAndReconnect(t *testing.T) {
 	c.Do("PUT", "/api/nodes/"+id+"/outbound", map[string]string{"outbound_ipv4": ""}, 200)
 	awaitRule(t, c, rule, "正常")
 	outboundExchange(t, port, seen, "127.0.0.1")
+	for _, rid := range chainRules {
+		awaitRule(t, c, rid, "整条阻塞（需升级服务器）")
+	}
+	mu.Lock()
+	filtered := latest != nil && len(latest.Rules) == 1 && latest.Rules[0].Id == rule && latest.Rules[0].ChainId == "" && len(latest.GetTunnelServer().GetGrants()) == 0 && len(latest.ExitGroups) == 0
+	mu.Unlock()
+	if !filtered {
+		t.Fatal("real old reconnect received chain entry/relay/terminal semantics")
+	}
+	t.Log("real old reconnect filtered chain entry, relay and terminal grants; compatible current direct rule remained usable")
 	t.Log("manual isolation: offline empty process stayed stopped; reconnect filtered source rule; explicit clear restored only current compatible rule")
 }
 

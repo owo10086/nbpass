@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"nbpass/internal/controlpb"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -68,7 +69,11 @@ func (r *listenerRule) serveLimitedTunnel(client net.Conn, lease *resourceLease,
 	if selection == nil {
 		return
 	}
-	target, err := selection.dial(ctx, cleanup)
+	attempt := *selection
+	attempt.selectedClient = &atomic.Pointer[tunnelClient]{}
+	stopSelection := r.watchSelectedExit(ctx, cancel, client, attempt.selectedClient)
+	defer stopSelection()
+	target, err := attempt.dial(ctx, cleanup)
 	cleanup.after(lease.dialDone)
 	if err != nil {
 		return
@@ -84,8 +89,9 @@ func (r *listenerRule) serveLimitedTunnel(client net.Conn, lease *resourceLease,
 // 同机入口已经预占逻辑业务与拨号预算；出口只在其他入口交来时扣槽。
 // 解析和目标拨号期间仍预读有界数据，以便 RST 立即取消未完成的目标拨号。
 func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Conn, auth tunnelAuth, lease *resourceLease) {
+	cleanup := &tunnelAttemptCleanup{}
 	if lease != nil {
-		defer lease.release()
+		defer cleanup.after(lease.release)
 		s.engine.businessConnections.Add(1)
 		defer s.engine.businessConnections.Add(^uint64(0))
 	}
@@ -99,6 +105,7 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 	stopHandshake := context.AfterFunc(handshake, func() { stream.Close() })
 	defer stopHandshake()
 	stream.SetDeadline(time.Now().Add(s.engine.resources.limits.TunnelHandshakeTimeout))
+	receivedAt := time.Now()
 	var request tunnelRequest
 	if err := readTunnelMessage(stream, &request); err != nil || request.RuleID == "" {
 		return
@@ -115,20 +122,36 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 		}
 		// 兼容票22旧入口的完整规则对象；认证会话提供入口身份，
 		// 监听端口等元数据不参与跨节点授权。
-		request = streamAuthorization(auth.EntryID, request.Check)
+		remaining := request.RemainingBudgetMS
+		projected := streamAuthorization(auth.EntryID, request.Check)
+		if request.ChainID != "" || projected.ChainID != "" {
+			if request.ChainID != projected.ChainID || request.HopIndex != projected.HopIndex || request.ChainFingerprint != projected.ChainFingerprint || request.EntryID != projected.EntryID || request.Generation != projected.Generation || request.TargetAddress != projected.TargetAddress || request.TargetPort != projected.TargetPort || request.TargetFamily != projected.TargetFamily {
+				s.rejectStream(stream)
+				return
+			}
+		}
+		request = projected
+		request.RemainingBudgetMS = remaining
 	}
 	rule := s.authorizeStream(auth, request)
 	if rule == nil {
 		s.rejectStream(stream)
 		return
 	}
+	grant := s.streamGrant(auth, request)
+	if grant == nil {
+		s.rejectStream(stream)
+		return
+	}
+	request.nextGroup = grant.NextExitGroupId
+	request.selectedNext = &atomic.Pointer[controlpb.TunnelEndpoint]{}
 	if lease != nil && !lease.assignRule(rule.Id) {
-		s.finishStream(stream, tunnelResult{Failure: failureLocal})
+		s.finishStream(stream, s.chainLocalResult(rule, failureLocal))
 		return
 	}
 	binding := s.engine.outboundBinding()
-	if binding.err != nil {
-		s.rejectStream(stream)
+	if binding.err != nil && grant.NextExitGroupId == "" {
+		s.finishStream(stream, s.chainLocalResult(rule, failureConfig))
 		return
 	}
 	if check {
@@ -142,33 +165,47 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 	stream.SetDeadline(time.Time{})
 	input := newDirectInput(ctx, stream, cancel, s.engine.deps.Clock)
 	defer func() { cancel(); stream.Close(); <-input.done }()
-	dialCtx, stopDial := s.engine.tunnelTimeout(ctx, s.engine.resources.limits.DialTimeout)
-	// 目标始终取自出口授权配置，不接受入口自选的拨号地址。
-	target, err := s.engine.dialTargetWithin(dialCtx, rule, s.engine.resources.limits.DialTimeout, binding.source)
-	stopDial()
+	dialCtx, stopDial := chainEstablishmentContext(ctx, s.engine, request, receivedAt)
+	defer stopDial()
+	var target net.Conn
+	var err error
+	if grant.NextExitGroupId != "" {
+		target, err = s.engine.relaySelection(grant, request.selectedNext).dial(dialCtx, cleanup)
+	} else {
+		target, err = s.engine.dialTargetWithin(dialCtx, rule, s.engine.resources.limits.DialTimeout, binding.source)
+	}
 	if lease != nil {
-		lease.dialDone()
+		cleanup.after(lease.dialDone)
 	}
 	if err != nil {
 		class := classifyTunnel(failTunnel(failureTarget, err))
-		if ctx.Err() != nil || s.authorizeExistingStream(auth, request) == nil {
+		revoked := ctx.Err() != nil || s.authorizeExistingStream(auth, request) == nil
+		if revoked {
 			class = failureConfig
 		}
-		s.finishStream(stream, tunnelResult{Failure: class})
+		result := s.chainLocalResult(rule, class)
+		var failure *tunnelFailure
+		if grant.NextExitGroupId != "" && errors.As(err, &failure) && failure.edge != nil && !revoked {
+			result.Edge = failure.edge
+			result = upstreamChainResult(result)
+		}
+		s.finishStream(stream, result)
 		return
 	}
 	defer target.Close()
 	stopTarget := context.AfterFunc(ctx, func() { target.Close() })
 	defer stopTarget()
-	stream.SetWriteDeadline(time.Now().Add(s.engine.resources.limits.TunnelHandshakeTimeout))
+	deadline, _ := dialCtx.Deadline()
+	stream.SetWriteDeadline(deadline)
 	// 拨号期间授权可能已变更；交付成功前再核验一次，不等待下一秒复查。
-	if ctx.Err() != nil || s.authorizeExistingStream(auth, request) == nil {
+	if dialCtx.Err() != nil || s.authorizeExistingStream(auth, request) == nil {
 		s.rejectStream(stream)
 		return
 	}
 	if err := writeTunnelMessage(stream, tunnelResult{OK: true}); err != nil {
 		return
 	}
+	stopDial()
 	stream.SetWriteDeadline(time.Time{})
 	proxyDirect(ctx, stream, target, input, s.engine.resources.limits.IdleTimeout)
 }

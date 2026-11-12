@@ -211,7 +211,7 @@ func (s *tunnelServer) authorizeExistingStream(auth tunnelAuth, request tunnelRe
 	for _, grant := range s.config.Grants {
 		if grant.EntryId == auth.EntryID && grant.Rule.Id == request.RuleID {
 			rule := matchStreamAuthorization(grant.Rule, auth, request)
-			if rule != nil {
+			if rule != nil && grantAllowsSelected(grant, request) {
 				return proto.Clone(rule).(*controlpb.ForwardRule)
 			}
 		}

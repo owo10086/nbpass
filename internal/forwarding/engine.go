@@ -58,6 +58,12 @@ type Engine struct {
 	highestDigest       string
 	results             []*controlpb.RuleApplyResult
 	tunnelError         string
+	exitGroups          map[string]*controlpb.ExitGroup
+	grantResults        []*controlpb.TunnelGrantApplyResult
+	grantResultsMu      sync.Mutex
+	chainRules          map[string]*controlpb.ForwardRule
+	chainFailuresMu     sync.Mutex
+	chainFailures       map[string]ChainFailureObservation
 }
 
 func NewEngine(deps Dependencies) *Engine {
@@ -127,7 +133,7 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 	checkpoint := e.State()
 	checkpoint.HighestRevision, checkpoint.HighestDigest = s.Revision, s.Digest
 	checkpoint.OutboundIPv4 = s.OutboundIpv4
-	sourceRequired := len(s.GetTunnelServer().GetGrants()) > 0
+	sourceRequired := hasTerminalGrants(s.TunnelServer)
 	for _, r := range s.Rules {
 		sourceRequired = sourceRequired || r.Kind == controlpb.RuleKind_RULE_KIND_DIRECT
 	}
@@ -147,6 +153,7 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 	if !proto.Equal(checkpoint.TunnelServer, s.TunnelServer) {
 		// 更新授权也属于撤销：最终写盘失败后不能恢复旧凭据或旧授权。
 		checkpoint.TunnelServer = nil
+		checkpoint.TunnelGrantResults = nil
 		if s.TunnelServer != nil {
 			checkpoint.TunnelError = "出口隧道配置应用尚未完成"
 		}
@@ -163,6 +170,7 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 		return err
 	}
 	e.highest, e.highestDigest = s.Revision, s.Digest
+	e.setChainRules(s)
 	e.outbound.Store(binding)
 	if sourceFailed {
 		e.revision, e.digest = 0, ""
@@ -183,11 +191,13 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 		e.tunnelError = ErrorSummary(fmt.Sprintf("出口隧道监听失败: %v", err), 1024)
 		failures = append(failures, errors.New(e.tunnelError))
 	}
-	if binding.err != nil && len(s.GetTunnelServer().GetGrants()) > 0 {
+	if binding.err != nil && hasTerminalGrants(s.TunnelServer) {
 		e.tunnelError = ErrorSummary(binding.err.Error(), 1024)
 		failures = append(failures, binding.err)
 	}
 	e.applyTunnelClients(endpoints)
+	e.setExitGroups(groups)
+	grantResults := e.buildGrantResults(s.Revision, s.TunnelServer)
 	readiness := e.checkNewTunnelRules(ctx, s.Rules, groups)
 	e.results = nil
 	for _, r := range s.Rules {
@@ -208,6 +218,7 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 		e.results = append(e.results, result)
 	}
 	state := e.State()
+	state.TunnelGrantResults = grantResults
 	if len(failures) == 0 {
 		state.AppliedRevision, state.AppliedDigest = s.Revision, s.Digest
 	}
@@ -217,8 +228,10 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 				r.ApplyError = ErrorSummary(err.Error(), 1024)
 			}
 		}
+		e.setGrantResults(failedGrantResults(grantResults, err))
 		return errors.Join(append(failures, err)...)
 	}
+	e.setGrantResults(grantResults)
 	e.revision, e.digest = state.AppliedRevision, state.AppliedDigest
 	return errors.Join(failures...)
 }
@@ -268,12 +281,14 @@ func sameListenerRule(a, b *controlpb.ForwardRule) bool {
 func (e *Engine) selectTunnel(r *controlpb.ForwardRule, ep *controlpb.ExitGroup) *tunnelSelection {
 	selection := &tunnelSelection{rule: proto.Clone(r).(*controlpb.ForwardRule)}
 	for _, endpoint := range ep.GetExits() {
-		allowed := len(r.AuthorizedExitIds) == 0 && len(ep.Exits) == 1
+		allowed := r.ChainId == "" && len(r.AuthorizedExitIds) == 0 && len(ep.Exits) == 1
 		for _, id := range r.AuthorizedExitIds {
 			allowed = allowed || id == endpoint.NodeId
 		}
 		if allowed {
-			selection.clients = append(selection.clients, e.tunnelClients[endpointKey(endpoint)])
+			if client := e.tunnelClients[endpointKey(endpoint)]; client != nil {
+				selection.clients = append(selection.clients, client)
+			}
 		}
 	}
 	return selection

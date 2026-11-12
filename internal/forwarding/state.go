@@ -14,19 +14,20 @@ import (
 // State 只缓存实际生效的规则；高水位独立于最后完整成功版本。
 // Persist 必须先原子保存撤销检查点，再保存实际应用结果。
 type State struct {
-	OutboundIPv4    string                       `json:"outbound_ipv4,omitempty"`
-	CheckConfigured bool                         `json:"check_configured,omitempty"`
-	CheckPort       uint32                       `json:"check_port,omitempty"`
-	CheckError      string                       `json:"check_error,omitempty"`
-	HighestRevision uint64                       `json:"highest_revision"`
-	HighestDigest   string                       `json:"highest_digest"`
-	AppliedRevision uint64                       `json:"applied_revision"`
-	AppliedDigest   string                       `json:"applied_digest"`
-	Rules           []*controlpb.ForwardRule     `json:"rules"`
-	Results         []*controlpb.RuleApplyResult `json:"results"`
-	ExitGroups      []*controlpb.ExitGroup       `json:"exit_groups,omitempty"`
-	TunnelServer    *controlpb.TunnelServer      `json:"tunnel_server,omitempty"`
-	TunnelError     string                       `json:"tunnel_error,omitempty"`
+	TunnelGrantResults []*controlpb.TunnelGrantApplyResult `json:"tunnel_grant_results,omitempty"`
+	OutboundIPv4       string                              `json:"outbound_ipv4,omitempty"`
+	CheckConfigured    bool                                `json:"check_configured,omitempty"`
+	CheckPort          uint32                              `json:"check_port,omitempty"`
+	CheckError         string                              `json:"check_error,omitempty"`
+	HighestRevision    uint64                              `json:"highest_revision"`
+	HighestDigest      string                              `json:"highest_digest"`
+	AppliedRevision    uint64                              `json:"applied_revision"`
+	AppliedDigest      string                              `json:"applied_digest"`
+	Rules              []*controlpb.ForwardRule            `json:"rules"`
+	Results            []*controlpb.RuleApplyResult        `json:"results"`
+	ExitGroups         []*controlpb.ExitGroup              `json:"exit_groups,omitempty"`
+	TunnelServer       *controlpb.TunnelServer             `json:"tunnel_server,omitempty"`
+	TunnelError        string                              `json:"tunnel_error,omitempty"`
 }
 
 func ErrorSummary(message string, limit int) string {
@@ -49,7 +50,13 @@ func (e *Engine) State() State {
 	if e.tunnelServer != nil {
 		s.TunnelServer = proto.Clone(e.tunnelServer.config).(*controlpb.TunnelServer)
 	}
+	s.TunnelGrantResults = e.TunnelGrantResults()
 	groups := map[string]*controlpb.ExitGroup{}
+	for _, grant := range s.TunnelServer.GetGrants() {
+		if g := e.exitGroups[grant.NextExitGroupId]; g != nil {
+			groups[g.Id] = proto.Clone(g).(*controlpb.ExitGroup)
+		}
+	}
 	for _, r := range e.rules {
 		s.Rules = append(s.Rules, proto.Clone(r.selection.Load().rule).(*controlpb.ForwardRule))
 		if r.exit != nil {
@@ -100,8 +107,33 @@ func (e *Engine) Restore(s State) error {
 			return errors.New("实际规则缺少缓存结果")
 		}
 	}
+	seenGrants := map[string]bool{}
+	for _, r := range s.TunnelGrantResults {
+		if r == nil || r.EntryId == "" || r.RuleId == "" || r.AppliedRevision > s.HighestRevision || seenGrants[r.EntryId+":"+r.RuleId] {
+			return errors.New("逐授权缓存结果无效")
+		}
+		seenGrants[r.EntryId+":"+r.RuleId] = true
+		present := false
+		for _, g := range s.TunnelServer.GetGrants() {
+			if g.EntryId == r.EntryId && g.Rule.Id == r.RuleId {
+				present = true
+				if g.Rule.AuthorizationGeneration != r.Generation {
+					return errors.New("逐授权缓存结果代次不匹配")
+				}
+			}
+		}
+		if !present && (r.AppliedRevision != 0 || r.ApplyError == "") {
+			return errors.New("逐授权缓存结果代次不匹配")
+		}
+	}
+	for _, g := range s.TunnelServer.GetGrants() {
+		if g.Rule.ChainId != "" && !seenGrants[g.EntryId+":"+g.Rule.Id] {
+			return errors.New("链式实际授权缺少缓存结果")
+		}
+	}
 	binding := e.validateOutbound(s.OutboundIPv4)
 	e.outbound.Store(binding)
+	e.setChainRules(snapshot)
 	e.highest, e.highestDigest = s.HighestRevision, s.HighestDigest
 	e.revision, e.digest = s.AppliedRevision, s.AppliedDigest
 	e.results, e.tunnelError = s.Results, s.TunnelError
@@ -132,12 +164,31 @@ func (e *Engine) Restore(s State) error {
 		e.tunnelError = ErrorSummary(fmt.Sprintf("出口隧道监听失败: %v", err), 1024)
 		e.revision, e.digest = 0, ""
 	}
-	if binding.err != nil && len(s.TunnelServer.GetGrants()) > 0 {
+	if binding.err != nil && hasTerminalGrants(s.TunnelServer) {
 		e.tunnelError = ErrorSummary(binding.err.Error(), 1024)
 		e.revision, e.digest = 0, ""
 	}
 	endpoints, groups := tunnelEndpoints(s.ExitGroups)
 	e.applyTunnelClients(endpoints)
+	e.setExitGroups(groups)
+	grantResults := e.buildGrantResults(s.HighestRevision, s.TunnelServer)
+	for _, current := range grantResults {
+		for _, cached := range s.TunnelGrantResults {
+			if cached.EntryId == current.EntryId && cached.RuleId == current.RuleId && cached.Generation == current.Generation && current.ApplyError == "" && cached.ApplyError == "" {
+				current.AppliedRevision = cached.AppliedRevision
+				current.ApplyError = cached.ApplyError
+			}
+		}
+	}
+	for _, cached := range s.TunnelGrantResults {
+		found := false
+		for _, current := range grantResults {
+			found = found || cached.EntryId == current.EntryId && cached.RuleId == current.RuleId
+		}
+		if !found {
+			grantResults = append(grantResults, proto.Clone(cached).(*controlpb.TunnelGrantApplyResult))
+		}
+	}
 	for _, r := range s.Rules {
 		result := results[r.Id]
 		err := binding.err
@@ -149,7 +200,14 @@ func (e *Engine) Restore(s State) error {
 			e.revision, e.digest = 0, ""
 		}
 	}
-	return e.persist(e.State())
+	state := e.State()
+	state.TunnelGrantResults = grantResults
+	if err := e.persist(state); err != nil {
+		e.setGrantResults(failedGrantResults(grantResults, err))
+		return err
+	}
+	e.setGrantResults(grantResults)
+	return nil
 }
 
 func (e *Engine) ApplyError() string {
