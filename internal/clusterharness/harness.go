@@ -93,7 +93,8 @@ func (h *Harness) start() error {
 		return err
 	}
 	h.Panel = core
-	control := grpc.NewServer(grpc.MaxRecvMsgSize(64<<10), grpc.MaxSendMsgSize(64<<10), grpc.StreamInterceptor(h.repeatControlDelivery))
+	// Restore replaces SQLite files after stop, so canceled RPCs must finish first.
+	control := grpc.NewServer(grpc.WaitForHandlers(true), grpc.MaxRecvMsgSize(64<<10), grpc.MaxSendMsgSize(64<<10), grpc.StreamInterceptor(h.repeatControlDelivery))
 	core.RegisterControl(control)
 	h.controlServer.Store(control)
 	server.Config.Handler = core.Handler()
