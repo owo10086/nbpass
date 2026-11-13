@@ -1,15 +1,14 @@
 import { useState } from 'react';
-import { Button, Checkbox, Empty, Input, Modal, Space } from 'antd';
+import { Button, Checkbox, Empty, Input, Space } from 'antd';
 import { ArrowDownOutlined, ArrowLeftOutlined, ArrowRightOutlined, ArrowUpOutlined, SearchOutlined } from '@ant-design/icons';
 import { ColorTag } from './ColorTag';
-import { memberKey, moveMembers, replaceMemberAddresses, type MemberAddress, type EndpointOption } from './EndpointData';
+import { memberKey, moveMembers, type MemberAddress, type EndpointOption } from './EndpointData';
 import './Endpoints.css';
 
 // 已选列表始终按表单中的成员 ID 顺序渲染；搜索只影响可见项，不改变主备顺序。
 export function EndpointMembers({ value: members = [], onChange, options, disabled = false }: {
   value?: MemberAddress[]; onChange?: (ids: MemberAddress[]) => void; options: EndpointOption[]; disabled?: boolean;
 }) {
-  const [modal, contextHolder] = Modal.useModal();
   const value = members.map(memberKey);
   const changeOrder = (ids: string[]) => onChange?.(ids.map(id => members.find(member => memberKey(member) === id)!));
   const [queries, setQueries] = useState({ available: '', selected: '' });
@@ -25,14 +24,8 @@ export function EndpointMembers({ value: members = [], onChange, options, disabl
   function transfer(ids: string[], direction: 'add' | 'remove') {
     const finish = (next: MemberAddress[]) => { onChange?.(next); setChecked(current => current.filter(id => !ids.includes(id))); };
     if (direction === 'remove') { finish(members.filter(member => !ids.includes(memberKey(member)))); return; }
-    const additions = options.filter(option => ids.includes(option.id));
-    if (new Set(additions.map(option => option.node_id)).size !== additions.length) {
-      modal.warning({ title: '同一服务器只能选择一个地址', content: '请为每台服务器勾选一个公网或专线地址。' }); return;
-    }
-    const replacements = additions.filter(option => members.some(member => member.node_id === option.node_id && member.address_id !== option.address_id));
-    const apply = () => finish(replaceMemberAddresses(members, additions.map(({ node_id, address_id }) => ({ node_id, address_id }))));
-    if (replacements.length) modal.confirm({ title: '替换已选服务器的地址？', content: `${replacements.map(option => option.name).join('、')} 将替换该服务器现有地址，主备位置保持不变。`, okText: '替换地址', cancelText: '取消', onOk: apply });
-    else apply();
+    const additions = available.filter(option => ids.includes(option.id));
+    finish([...members, ...additions.map(({ node_id, address_id }) => ({ node_id, address_id }))]);
   }
   function panel(side: 'available' | 'selected', items: EndpointOption[], total: number) {
     const ids = items.map(option => option.id);
@@ -62,7 +55,6 @@ export function EndpointMembers({ value: members = [], onChange, options, disabl
     </section>;
   }
   return <div className="endpoint-members">
-    {contextHolder}
     <div className="endpoint-member-transfer">
       {panel('available', visibleAvailable, available.length)}
       <div className="endpoint-member-transfer-actions">

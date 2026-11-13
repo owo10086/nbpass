@@ -1,9 +1,8 @@
 export type MemberAddress = { node_id: string; address_id: string };
 export type EndpointGroup = { id: string; name: string; strategy: 'primary_backup'; members: string[]; member_addresses: MemberAddress[] };
 export type EndpointNode = { id: string; name: string; connected: boolean };
-export type DedicatedAddress = { id?: string; name: string; address: string; public_port: number | null };
-export type EndpointValues = { node_id: string; address: string; listen_port: number; public_port?: number | null; dedicated_addresses?: DedicatedAddress[] };
-export type Endpoint = { public_port: number | null; dedicated_addresses: DedicatedAddress[]; node_id: string; address: string; listen_port: number; transport: 'wss'; server_name: string; certificate_pem: string };
+export type EndpointValues = { node_id: string; address: string; listen_port: number; public_port?: number | null };
+export type Endpoint = { public_port: number | null; node_id: string; address: string; listen_port: number; transport: 'wss'; server_name: string; certificate_pem: string };
 export type EndpointHealth = { exit_id: string; address_id?: string; endpoint_config_digest?: string; state: string; consecutive_failures?: number; last_probe?: string; failure_class?: string; recovery_since_unix?: number; checked_at_unix?: number };
 export type HealthReport = { fresh: boolean; sampled_at: string | null; exits: EndpointHealth[] };
 export type EndpointOption = MemberAddress & { id: string; name: string; address: string };
@@ -13,25 +12,10 @@ export function memberKey(member: MemberAddress): string {
 }
 
 export function endpointMemberOptions(exits: Endpoint[], nodes: EndpointNode[]): EndpointOption[] {
-  return exits.flatMap(exit => [
-    { address_id: 'public', name: '公网', address: exit.address, public_port: exit.public_port },
-    ...exit.dedicated_addresses.filter(address => !!address.id).map(address => ({ ...address, address_id: address.id! })),
-  ].map(address => {
-    const member = { node_id: exit.node_id, address_id: address.address_id };
-    return { ...member, id: memberKey(member), name: `${nodes.find(node => node.id === exit.node_id)?.name ?? exit.node_id} · ${address.name}`, address: `${address.address}:${effectiveEndpointPort({ public_port: address.public_port, listen_port: exit.listen_port })}` };
-  }));
-}
-
-// Callers confirm replacements; retained servers keep their priority position.
-export function replaceMemberAddresses(current: MemberAddress[], additions: MemberAddress[]): MemberAddress[] {
-  if (new Set(additions.map(member => member.node_id)).size !== additions.length) throw new Error('同一服务器只能选择一个地址');
-  const next = current.map(member => ({ ...member }));
-  for (const member of additions) {
-    const index = next.findIndex(item => item.node_id === member.node_id);
-    if (index < 0) next.push({ ...member });
-    else next[index] = { ...member };
-  }
-  return next;
+  return exits.map(exit => {
+    const member = { node_id: exit.node_id, address_id: 'public' };
+    return { ...member, id: memberKey(member), name: nodes.find(node => node.id === exit.node_id)?.name ?? exit.node_id, address: `${exit.address}:${effectiveEndpointPort(exit)}` };
+  });
 }
 
 export function transferMembers(current: string[], ids: string[], direction: 'add' | 'remove'): string[] {
@@ -68,23 +52,19 @@ export function effectiveEndpointPort(endpoint: { public_port?: number | null; l
 
 export function endpointAddressDetails(endpoint: EndpointValues): { label: string; value: string }[] {
   return [
-    { label: '公网地址', value: `${endpoint.address}:${effectiveEndpointPort(endpoint)}` },
+    { label: '连接地址', value: `${endpoint.address}:${effectiveEndpointPort(endpoint)}` },
     { label: '本机监听端口', value: String(endpoint.listen_port) },
-    ...(endpoint.dedicated_addresses ?? []).map(address => ({ label: address.name, value: `${address.address}:${address.public_port ?? endpoint.listen_port}` })),
   ];
 }
 
 export function endpointFormValues(endpoint?: EndpointValues) {
-  return endpoint ? { ...endpoint, public_port: endpoint.public_port ?? null, dedicated_addresses: (endpoint.dedicated_addresses ?? []).map(address => ({ ...address })) }
-    : { address: '', listen_port: undefined, public_port: null, dedicated_addresses: [] };
+  return endpoint ? { ...endpoint, public_port: endpoint.public_port ?? null }
+    : { address: '', listen_port: undefined, public_port: null };
 }
 
 export function endpointPayload(values: EndpointValues) {
-  const normalize = (value: string) => value.trim().replace(/\.$/, '').toLowerCase();
   return {
-    address: normalize(values.address), listen_port: values.listen_port, transport: 'wss', public_port: values.public_port ?? null,
-    dedicated_addresses: (values.dedicated_addresses ?? []).map(address => ({
-      ...(address.id ? { id: address.id } : {}), name: address.name.trim(), address: normalize(address.address), public_port: address.public_port ?? null,
-    })),
+    address: values.address.trim().replace(/\.$/, '').toLowerCase(),
+    listen_port: values.listen_port, transport: 'wss', public_port: values.public_port ?? null,
   };
 }

@@ -139,7 +139,7 @@ func TestChainRulesMigration51PreservesAllDependencies(t *testing.T) {
 	p := openDiskPanel(t, dir)
 	defer p.Close()
 	var version int
-	if err = p.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 51 {
+	if err = p.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != len(migrations) {
 		t.Fatal(version, err)
 	}
 	for _, table := range tables {
@@ -348,21 +348,24 @@ func TestChainCapabilityPlanKeepsUsablePublicPath(t *testing.T) {
 	for _, id := range []string{"a", "b1", "b2", "c1", "c2"} {
 		c[id] = nodeCapabilities{name: id, capabilities: map[string]bool{compatibility.ForwardChains: true, "tunnel_authorization": true, "exit_failover": true}}
 	}
-	c["b2"].capabilities[compatibility.IXMemberIdentity] = true
+	c["b2"].capabilities[compatibility.IXAddressDialing] = true
 	groups := map[string]exitGroupView{
-		"b": {ID: "b", Members: []string{"b1", "b2"}, MemberAddresses: []memberAddress{{NodeID: "b1", AddressID: "public"}, {NodeID: "b2", AddressID: "ix"}}},
-		"c": {ID: "c", Members: []string{"c1", "c2"}, MemberAddresses: []memberAddress{{NodeID: "c1", AddressID: "public"}, {NodeID: "c2", AddressID: "ix"}}},
+		"b": {ID: "b", Members: []string{"b1", "b2"}, MemberAddresses: []memberAddress{{NodeID: "b1", AddressID: "public"}, {NodeID: "b2", AddressID: "public"}}},
+		"c": {ID: "c", Members: []string{"c1", "c2"}, MemberAddresses: []memberAddress{{NodeID: "c1", AddressID: "public"}, {NodeID: "c2", AddressID: "public"}}},
 	}
 	addresses := map[string]tunnelExitView{}
 	for _, id := range []string{"b1", "b2", "c1", "c2"} {
-		addresses[id] = tunnelExitView{NodeID: id, Address: "192.0.2.1", DedicatedAddresses: []dedicatedAddress{{ID: "ix", Address: "10.0.0.1"}}}
+		addresses[id] = tunnelExitView{NodeID: id, Address: "192.0.2.1"}
+		if id == "b2" || id == "c2" {
+			addresses[id] = tunnelExitView{NodeID: id, Address: "exit.test"}
+		}
 	}
 	r := forwarding.Rule{ChainID: "chain"}
 	plan := chainCapabilityPlan(r, "a", []string{"b", "c"}, groups, c, addresses, nil)
 	if plan.Blocked || len(plan.Blockers) == 0 || len(plan.Hops[0]) != 1 || plan.Hops[0][0].NodeID != "b1" || len(plan.Hops[1]) != 1 || plan.Edges[[2]string{"a", "b2"}] || plan.Edges[[2]string{"b1", "c2"}] {
 		t.Fatal("backup address blocked public path", plan)
 	}
-	c["a"].capabilities[compatibility.IXMemberIdentity] = true
+	c["a"].capabilities[compatibility.IXAddressDialing] = true
 	plan = chainCapabilityPlan(r, "a", []string{"b", "c"}, groups, c, addresses, nil)
 	if plan.Blocked || len(plan.Hops[0]) != 2 || len(plan.Hops[1]) != 2 || !plan.Edges[[2]string{"b2", "c2"}] || plan.Edges[[2]string{"b1", "c2"}] {
 		t.Fatal("per-predecessor edge permissions lost", plan)

@@ -164,7 +164,7 @@ func TestIXAddressDomainMappedPortAndOldDialerIsolation(t *testing.T) {
 	assertTCPFailure(t, port)
 }
 
-func TestIXAddressRotationPreservesDedicatedPortsAndIdentity(t *testing.T) {
+func TestEndpointAddressRotationPreservesPortsAndIdentity(t *testing.T) {
 	for _, automatic := range []bool{false, true} {
 		t.Run(map[bool]string{false: "manual", true: "automatic"}[automatic], func(t *testing.T) {
 			r := newExitBlockedRig(t, 0)
@@ -176,7 +176,7 @@ func TestIXAddressRotationPreservesDedicatedPortsAndIdentity(t *testing.T) {
 					before = v
 				}
 			}
-			saved := f.c.Do("PUT", "/api/nodes/"+f.id+"/tunnel", map[string]any{"address": before["address"], "listen_port": before["listen_port"], "public_port": 2443, "transport": "wss", "dedicated_addresses": []any{map[string]any{"name": "沪日 IX", "address": "10.0.0.2", "public_port": 3443}, map[string]any{"name": "内网域名", "address": "ix.test"}}}, 200)
+			saved := f.c.Do("PUT", "/api/nodes/"+f.id+"/tunnel", map[string]any{"address": before["address"], "listen_port": before["listen_port"], "public_port": 2443, "transport": "wss"}, 200)
 			if automatic {
 				r.enable(t)
 				r.sites.mode.Store(2)
@@ -198,9 +198,9 @@ func TestIXAddressRotationPreservesDedicatedPortsAndIdentity(t *testing.T) {
 					if v["address"] != "8.8.8.8" {
 						t.Fatal("公网未更新", v)
 					}
-					for _, key := range []string{"dedicated_addresses", "public_port", "listen_port", "certificate_pem", "server_name"} {
+					for _, key := range []string{"public_port", "listen_port", "certificate_pem", "server_name"} {
 						if !reflect.DeepEqual(v[key], saved[key]) {
-							t.Fatal("换公网 IP 改变专线、端口或身份", key, v)
+							t.Fatal("换公网 IP 改变端口或身份", key, v)
 						}
 					}
 				}

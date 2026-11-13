@@ -50,27 +50,8 @@ func TestIXAddressMigrationPreservesVersion46(t *testing.T) {
 	if address != "10.0.0.8" || port != 22001 || name != "stable" || cert != "cert" || version != "version" || !reflect.DeepEqual(key, []byte{0x12, 0x34}) || public.Valid {
 		t.Fatal("升级改变旧公网槽/身份", address, port, public)
 	}
-	var count int
-	if err := p.db.QueryRow("SELECT count(*) FROM tunnel_addresses").Scan(&count); err != nil || count != 0 {
-		t.Fatal(count, err)
-	}
-	for _, q := range []string{
-		"INSERT INTO tunnel_addresses VALUES('missing','a','IX','10.0.0.1',NULL,0)",
-		"INSERT INTO tunnel_addresses VALUES('b','public','IX','10.0.0.1',NULL,0)",
-		"UPDATE tunnel_exits SET public_port=0 WHERE node_id='b'",
-		"INSERT INTO tunnel_addresses VALUES('b','a','IX','10.0.0.1',65536,0)",
-	} {
-		if _, err := p.db.Exec(q); err == nil {
-			t.Fatal("约束未生效", q)
-		}
-	}
-	if _, err := p.db.Exec("INSERT INTO tunnel_addresses VALUES('b','a','IX','10.0.0.1',NULL,0)"); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{"INSERT INTO tunnel_addresses VALUES('b','a','重复','10.0.0.2',NULL,1)", "INSERT INTO tunnel_addresses VALUES('b','c','重复位置','10.0.0.2',NULL,0)"} {
-		if _, err := p.db.Exec(q); err == nil {
-			t.Fatal("未约束稳定身份/顺序", q)
-		}
+	if _, err := p.db.Exec("UPDATE tunnel_exits SET public_port=0 WHERE node_id='b'"); err == nil {
+		t.Fatal("对外端口约束未生效")
 	}
 }
 
@@ -91,40 +72,28 @@ func ixAddressAPI(t *testing.T) (*Panel, func(string, string, any, int) map[stri
 	return p, request
 }
 
-func TestIXAddressAPIFormPreservesOmittedFieldsAndStableIDs(t *testing.T) {
+func TestEndpointAddressAPIFormPreservesPortAndIdentity(t *testing.T) {
 	_, request := ixAddressAPI(t)
 	id := request("POST", "/api/nodes", map[string]string{"name": "B"}, 201)["id"].(string)
 	path := "/api/nodes/" + id + "/tunnel"
-	base := map[string]any{"address": "  EXIT.Example.Test. ", "listen_port": 22001, "transport": "wss", "public_port": 2443, "dedicated_addresses": []any{map[string]any{"name": " 沪日 IX ", "address": " IX.Example.Test. ", "public_port": 3443}, map[string]any{"name": "内网", "address": "10.0.0.2"}}}
-	saved := request("PUT", path, base, 200)
-	if saved["configured"] != true || saved["address"] != "exit.example.test" || saved["public_port"] != float64(2443) {
-		t.Fatal("未返回规范化公开配置", saved)
-	}
-	addresses := saved["dedicated_addresses"].([]any)
-	first := addresses[0].(map[string]any)
-	if first["id"] == "" || first["id"] == "public" || first["name"] != "沪日 IX" || first["address"] != "ix.example.test" || addresses[1].(map[string]any)["public_port"] != nil {
-		t.Fatal(addresses)
+	saved := request("PUT", path, map[string]any{"address": " EXIT.Example.Test. ", "listen_port": 22001, "transport": "wss", "public_port": 2443}, 200)
+	if saved["address"] != "exit.example.test" || saved["public_port"] != float64(2443) {
+		t.Fatal(saved)
 	}
 	for key := range saved {
 		if strings.Contains(key, "private") || strings.Contains(key, "credential") {
 			t.Fatal("公开响应泄漏秘密", key)
 		}
 	}
-	base = map[string]any{"address": "127.0.0.1", "listen_port": 22001, "transport": "wss"}
-	preserved := request("PUT", path, base, 200)
-	if preserved["public_port"] != float64(2443) || !reflect.DeepEqual(preserved["dedicated_addresses"], addresses) || preserved["certificate_pem"] != saved["certificate_pem"] {
-		t.Fatal("省略字段清空配置/身份", preserved)
+	body := map[string]any{"address": "10.0.0.2", "listen_port": 22001, "transport": "wss"}
+	preserved := request("PUT", path, body, 200)
+	if preserved["public_port"] != float64(2443) || preserved["certificate_pem"] != saved["certificate_pem"] {
+		t.Fatal("修改地址改变端口或身份", preserved)
 	}
-	base["public_port"] = nil
-	base["dedicated_addresses"] = []any{addresses[1], addresses[0]}
-	reordered := request("PUT", path, base, 200)
-	if reordered["public_port"] != nil || reordered["dedicated_addresses"].([]any)[1].(map[string]any)["id"] != first["id"] {
-		t.Fatal("重排改变稳定 ID", reordered)
-	}
-	base["dedicated_addresses"] = []any{}
-	cleared := request("PUT", path, base, 200)
-	if len(cleared["dedicated_addresses"].([]any)) != 0 {
-		t.Fatal("显式空列表未清空")
+	body["public_port"] = nil
+	cleared := request("PUT", path, body, 200)
+	if cleared["public_port"] != nil {
+		t.Fatal("未清空对外端口", cleared)
 	}
 	listed := request("GET", "/api/tunnel-exits", nil, 200)["exits"].([]any)[0]
 	delete(cleared, "configured")
@@ -133,37 +102,20 @@ func TestIXAddressAPIFormPreservesOmittedFieldsAndStableIDs(t *testing.T) {
 	}
 }
 
-func TestIXAddressAPIRejectsInvalidOrForeignIDsAndListenerConflicts(t *testing.T) {
+func TestEndpointAddressAPIRejectsInvalidAddressesPortsAndListenerConflicts(t *testing.T) {
 	p, request := ixAddressAPI(t)
 	id := request("POST", "/api/nodes", map[string]string{"name": "B"}, 201)["id"].(string)
-	other := request("POST", "/api/nodes", map[string]string{"name": "C"}, 201)["id"].(string)
-	body := map[string]any{"address": "127.0.0.1", "listen_port": 22001, "transport": "wss", "dedicated_addresses": []any{map[string]any{"name": "IX", "address": "10.0.0.1"}}}
-	saved := request("PUT", "/api/nodes/"+id+"/tunnel", body, 200)
-	first := saved["dedicated_addresses"].([]any)[0]
-	body["dedicated_addresses"] = []any{first}
-	request("PUT", "/api/nodes/"+other+"/tunnel", body, 400)
-	body["dedicated_addresses"] = []any{first, first}
-	request("PUT", "/api/nodes/"+id+"/tunnel", body, 400)
-	for _, bad := range []any{map[string]any{"id": "public", "name": "IX", "address": "10.0.0.1"}, map[string]any{"id": "unknown", "name": "IX", "address": "10.0.0.1"}, map[string]any{"name": " ", "address": "10.0.0.1"}, map[string]any{"name": strings.Repeat("中", 67), "address": "10.0.0.1"}} {
-		body["dedicated_addresses"] = []any{bad}
-		request("PUT", "/api/nodes/"+id+"/tunnel", body, 400)
-	}
-	delete(body, "dedicated_addresses")
+	body := map[string]any{"address": "127.0.0.1", "listen_port": 22001, "transport": "wss"}
+	request("PUT", "/api/nodes/"+id+"/tunnel", body, 200)
 	for _, address := range []string{"::1", "::ffff:127.0.0.1", "0.0.0.0", "224.0.0.1", "255.255.255.255", "https://exit.test", "exit.test:443", "-exit.test"} {
 		body["address"] = address
 		request("PUT", "/api/nodes/"+id+"/tunnel", body, 400)
 		body["address"] = "127.0.0.1"
-		body["dedicated_addresses"] = []any{map[string]any{"name": "IX", "address": address}}
-		request("PUT", "/api/nodes/"+id+"/tunnel", body, 400)
-		delete(body, "dedicated_addresses")
 	}
 	for _, port := range []any{0, -1, 65536, 1.5, "443"} {
 		body["public_port"] = port
 		request("PUT", "/api/nodes/"+id+"/tunnel", body, 400)
 		delete(body, "public_port")
-		body["dedicated_addresses"] = []any{map[string]any{"name": "IX", "address": "10.0.0.1", "public_port": port}}
-		request("PUT", "/api/nodes/"+id+"/tunnel", body, 400)
-		delete(body, "dedicated_addresses")
 	}
 	// Only real local listeners reserve ports; a public NAT port may coincide with business.
 	request("POST", "/api/rules", map[string]any{"name": "业务", "entry_node_id": id, "kind": "direct", "listen_port": 23001, "target_address": "8.8.8.8", "target_family": "ipv4", "target_port": 443, "enabled": true}, 201)
@@ -313,7 +265,7 @@ func TestIXAddressHealthRequiresCurrentEndpointDigest(t *testing.T) {
 // Exercise the production starting point in one migration transaction. Keep the
 // original columns, including nullable values and encrypted bytes, in comparison
 // so a later ALTER cannot hide data loss behind a handful of selected fields.
-func TestIXFinalMigration46To51AndFreshInstallation(t *testing.T) {
+func TestEndpointFinalMigration46ToCurrentAndFreshInstallation(t *testing.T) {
 	for _, initial := range []int{46, 0} {
 		t.Run(fmt.Sprintf("from_%d", initial), func(t *testing.T) {
 			ctx := context.Background()
@@ -354,7 +306,7 @@ func TestIXFinalMigration46To51AndFreshInstallation(t *testing.T) {
 				`INSERT INTO tunnel_pairs VALUES('a','b',X'55667788')`,
 				`INSERT INTO forward_rules(id,name,entry_group_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled,exit_group_id,sort_order) VALUES('t','旧单跳','eg','tunnel',24001,'example.test','ipv4',443,0,1,'xg',5)`,
 				`INSERT INTO forward_rules(id,name,entry_node_id,kind,listen_port,target_address,target_family,target_port,allow_private,enabled,sort_order) VALUES('d','停用直连','a','direct',24002,'127.0.0.1','ipv4',8080,1,0,NULL)`,
-				`INSERT INTO node_snapshots VALUES('a',X'8899aabb','旧快照摘要',1)`,
+				`INSERT INTO node_snapshots(node_id,snapshot,digest,encrypted) VALUES('a',X'8899aabb','旧快照摘要',1)`,
 				`INSERT INTO node_rule_reports VALUES('a',986,'旧摘要',1)`,
 				`INSERT INTO node_rule_results VALUES('a','t','eg',24001,985,'旧应用错误')`,
 				`INSERT INTO retired_control_instances VALUES('a','已退休进程')`,
@@ -432,7 +384,7 @@ func TestIXFinalMigration46To51AndFreshInstallation(t *testing.T) {
 				}
 			}
 			var version, enabled int
-			if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 51 {
+			if err := db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != len(migrations) {
 				t.Fatal(version, err)
 			}
 			if err := db.QueryRow("PRAGMA foreign_keys").Scan(&enabled); err != nil || enabled != 1 {
@@ -448,15 +400,13 @@ func TestIXFinalMigration46To51AndFreshInstallation(t *testing.T) {
 			if err != nil || !bytes.Equal(key, currentKey) {
 				t.Fatal("panel key changed", err)
 			}
-			for _, table := range []string{"tunnel_addresses", "forward_chains", "forward_chain_hops", "node_tunnel_grant_results"} {
+			for _, table := range []string{"forward_chains", "forward_chain_hops", "node_tunnel_grant_results"} {
 				var count int
 				if err := db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 0 {
 					t.Fatal(table, count, err)
 				}
 			}
 			for _, statement := range []string{
-				`INSERT INTO tunnel_addresses VALUES('b','ix','专线','ix.example.test',3443,0)`,
-				`UPDATE exit_group_members SET address_id='ix' WHERE node_id='b'`,
 				`INSERT INTO forward_chains VALUES('chain','新链')`,
 				`INSERT INTO forward_chain_hops VALUES('chain',1,'xg')`,
 				`UPDATE forward_rules SET chain_id='chain',exit_group_id='' WHERE id='t'`,
@@ -469,7 +419,6 @@ func TestIXFinalMigration46To51AndFreshInstallation(t *testing.T) {
 			for _, statement := range []string{
 				`DELETE FROM forward_chains WHERE id='chain'`,
 				`DELETE FROM exit_groups WHERE id='xg'`,
-				`DELETE FROM tunnel_addresses WHERE node_id='b' AND id='ix'`,
 				`INSERT INTO node_tunnel_grant_results VALUES('missing','a','t',910,777,'')`,
 				`INSERT INTO node_tunnel_grant_results VALUES('b','missing','t',910,777,'')`,
 				`INSERT INTO node_tunnel_grant_results VALUES('b','a','missing',910,777,'')`,

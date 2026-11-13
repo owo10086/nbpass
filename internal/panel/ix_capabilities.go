@@ -174,10 +174,8 @@ func ruleCapabilityRequirements(r forwarding.Rule, entry string, group exitGroup
 		if sources[exit] != "" {
 			candidate.Required = append(candidate.Required, capabilityRequirement{NodeID: exit, Capabilities: []string{compatibility.OutboundIPv4}})
 		}
-		address, port, _ := selectedTunnelAddress(addresses[exit], member.AddressID)
-		if member.AddressID != "public" {
-			candidate.Required = append(candidate.Required, capabilityRequirement{NodeID: entry, AddressID: member.AddressID, Capabilities: []string{compatibility.IXMemberIdentity}})
-		}
+		endpoint := addresses[exit]
+		address, port := endpoint.Address, endpoint.PublicPort
 		if _, err := netip.ParseAddr(address); err != nil || port != nil {
 			candidate.Required = append(candidate.Required, capabilityRequirement{NodeID: entry, AddressID: member.AddressID, Capabilities: []string{compatibility.IXAddressDialing}})
 		}
@@ -302,10 +300,8 @@ func chainCapabilityPlan(r forwarding.Rule, entry string, ids []string, groups m
 	}
 	link := func(from string, next capabilityCandidate) bool {
 		needs := []string{}
-		if next.AddressID != "public" {
-			needs = append(needs, compatibility.IXMemberIdentity)
-		}
-		address, port, _ := selectedTunnelAddress(addresses[next.NodeID], next.AddressID)
+		endpoint := addresses[next.NodeID]
+		address, port := endpoint.Address, endpoint.PublicPort
 		if _, err := netip.ParseAddr(address); err != nil || port != nil {
 			needs = append(needs, compatibility.IXAddressDialing)
 		}

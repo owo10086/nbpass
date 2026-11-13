@@ -30,10 +30,6 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 	if err != nil {
 		return err
 	}
-	addresses, err := loadTunnelExits(ctx, tx)
-	if err != nil {
-		return err
-	}
 	generations := map[string]uint64{}
 	for _, r := range rules {
 		generation, err := updateAuthorizationGeneration(ctx, tx, r, forwarding.RuleEntryNodes(r, members), byGroup[r.ExitGroupID].Members)
@@ -73,19 +69,6 @@ func (p *Panel) compileTunnels(ctx context.Context, tx *sql.Tx, rules []forwardi
 	rows.Close()
 	if err != nil {
 		return err
-	}
-	for _, v := range addresses {
-		for _, a := range v.DedicatedAddresses {
-			ep := proto.Clone(endpoints[[2]string{v.NodeID, "public"}]).(*controlpb.TunnelEndpoint)
-			ep.AddressId, ep.Address, ep.AddressVersion = a.ID, a.Address, ""
-			ep.Port = uint32(v.ListenPort)
-			if a.PublicPort != nil {
-				ep.Port = uint32(*a.PublicPort)
-			}
-			key := [2]string{v.NodeID, a.ID}
-			endpoints[key] = ep
-			newDialing[key] = a.PublicPort != nil || !isIPv4Address(a.Address)
-		}
 	}
 	legacy := map[[3]string]bool{}
 	if len(endpoints) > 0 {

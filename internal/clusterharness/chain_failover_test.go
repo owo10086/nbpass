@@ -155,8 +155,8 @@ func newChainRig(t *testing.T, entries int, sizes []int, mode string, options ..
 			awaitSelfCheck(t, r.c, id, 1, "normal", 0)
 		}
 		if i >= entries {
-			saved := r.c.Do("PUT", "/api/nodes/"+id+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": r.ports[i], "transport": "wss", "dedicated_addresses": []map[string]any{{"name": "专线", "address": fmt.Sprintf("ix-node-%d.test", i), "public_port": r.mapped[i]}}}, 200)
-			r.addresses[i] = saved["dedicated_addresses"].([]any)[0].(map[string]any)["id"].(string)
+			r.c.Do("PUT", "/api/nodes/"+id+"/tunnel", map[string]any{"address": fmt.Sprintf("ix-node-%d.test", i), "listen_port": r.ports[i], "public_port": r.mapped[i], "transport": "wss"}, 200)
+			r.addresses[i] = "public"
 		}
 	}
 	groups := []string{}

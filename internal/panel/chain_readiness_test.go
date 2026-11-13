@@ -202,31 +202,4 @@ func TestChainPublicAddressRotationIncludesOfflineDirectPredecessorsOnly(t *test
 			t.Fatal("offline predecessor counted as applied", applied, e)
 		}
 	}
-	if e := p.commitForwarding(ctx, func(tx *sql.Tx) error {
-		if _, e := tx.Exec("INSERT INTO tunnel_addresses VALUES(?,'ix','private','10.0.0.9',NULL,0)", ids[2]); e != nil {
-			return e
-		}
-		_, e := tx.Exec("UPDATE exit_group_members SET address_id='ix' WHERE node_id=?", ids[2])
-		return e
-	}); e != nil {
-		t.Fatal(e)
-	}
-	if e := p.commitForwarding(ctx, func(tx *sql.Tx) error {
-		if _, e := tx.Exec("INSERT INTO rotation_actions(id,node_id,old_ip,state,created_at,expires_at,updated_at,secret_name) VALUES('private-not-consumer',?,'8.8.8.8','changed',0,0,0,'fixture')", ids[2]); e != nil {
-			return e
-		}
-		_, e := p.rotateExitAddress(ctx, tx, &rotationAction{ID: "private-not-consumer", NodeID: ids[2]}, "1.1.1.1")
-		return e
-	}); e != nil {
-		t.Fatal(e)
-	}
-	var count int
-	p.db.QueryRow("SELECT count(*) FROM exit_address_progress WHERE action_id='private-not-consumer'").Scan(&count)
-	if count != 0 {
-		t.Fatal("dedicated route became public rotation consumer")
-	}
-	var address string
-	if e := p.db.QueryRow("SELECT address FROM tunnel_addresses WHERE node_id=? AND id='ix'", ids[2]).Scan(&address); e != nil || address != "10.0.0.9" {
-		t.Fatal("public rotation rewrote dedicated address", address, e)
-	}
 }

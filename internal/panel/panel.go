@@ -159,6 +159,10 @@ func Open(ctx context.Context, config Config, deps Dependencies) (*Panel, error)
 		db.Close()
 		return nil, err
 	}
+	if err := p.upgradeEndpointAddresses(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := p.upgradeCheckPorts(ctx); err != nil {
 		db.Close()
 		return nil, err

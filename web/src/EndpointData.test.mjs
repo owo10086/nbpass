@@ -44,43 +44,26 @@ test('健康观测在采样后 10 秒自动过期，后续请求挂起也不能�
   assert.equal(healthIsFresh(undefined, sampled), false);
 });
 
-test('地址表单保留专线稳定 ID，空对外端口明确清空并显示本机监听端口', async () => {
+test('端点表单只提交唯一地址，空对外端口使用本机监听端口', async () => {
   const { endpointPayload, endpointFormValues, effectiveEndpointPort } = await import('./EndpointData.ts');
-  const endpoint = { node_id: 'b', address: 'exit.test', listen_port: 18443, public_port: 2443, dedicated_addresses: [
-    { id: 'stable-ix', name: '沪日 IX', address: '10.0.0.2', public_port: null },
-  ] };
+  const endpoint = { node_id: 'b', address: 'exit.test', listen_port: 18443, public_port: 2443 };
   assert.deepEqual(endpointFormValues(endpoint), endpoint);
   assert.equal(effectiveEndpointPort(endpoint), 2443);
   assert.equal(effectiveEndpointPort({ public_port: null, listen_port: 18443 }), 18443);
-  const values = { ...endpoint, address: ' EXIT.Test. ', public_port: undefined, dedicated_addresses: [
-    { id: 'stable-ix', name: ' 沪日 IX ', address: ' IX.Test. ', public_port: undefined },
-    { name: '新增', address: '10.0.0.3', public_port: 3443 },
-  ] };
-  assert.deepEqual(endpointPayload(values), { address: 'exit.test', listen_port: 18443, transport: 'wss', public_port: null, dedicated_addresses: [
-    { id: 'stable-ix', name: '沪日 IX', address: 'ix.test', public_port: null },
-    { name: '新增', address: '10.0.0.3', public_port: 3443 },
-  ] });
-  assert.deepEqual(endpointPayload({ ...values, dedicated_addresses: [] }).dedicated_addresses, []);
-  assert.deepEqual(endpointFormValues(undefined), { address: '', listen_port: undefined, public_port: null, dedicated_addresses: [] });
+  assert.deepEqual(endpointPayload({ ...endpoint, address: ' EXIT.Test. ', public_port: undefined }), {
+    address: 'exit.test', listen_port: 18443, transport: 'wss', public_port: null,
+  });
+  assert.deepEqual(endpointFormValues(undefined), { address: '', listen_port: undefined, public_port: null });
 });
 
-test('地址提示保留公网、本机端口及全部专线，并分别使用各自有效端口', async () => {
+test('地址提示显示唯一连接地址及本机监听端口', async () => {
   const { endpointAddressDetails } = await import('./EndpointData.ts');
-  assert.deepEqual(endpointAddressDetails({ node_id: 'exit', address: 'public.test', listen_port: 18443, public_port: 2443, dedicated_addresses: [
-    { id: 'ix', name: '沪日 IX', address: 'ix.test', public_port: null },
-    { name: '备用专线', address: '10.0.0.3', public_port: 3443 },
-  ] }), [
-    { label: '公网地址', value: 'public.test:2443' },
+  assert.deepEqual(endpointAddressDetails({ node_id: 'exit', address: 'exit.test', listen_port: 18443, public_port: 2443 }), [
+    { label: '连接地址', value: 'exit.test:2443' },
     { label: '本机监听端口', value: '18443' },
-    { label: '沪日 IX', value: 'ix.test:18443' },
-    { label: '备用专线', value: '10.0.0.3:3443' },
   ]);
-});
-
-test('无专线且未设置公网对外端口时，地址提示使用本机监听端口', async () => {
-  const { endpointAddressDetails } = await import('./EndpointData.ts');
-  assert.deepEqual(endpointAddressDetails({ node_id: 'exit', address: '203.0.113.20', listen_port: 443 }), [
-    { label: '公网地址', value: '203.0.113.20:443' },
+  assert.deepEqual(endpointAddressDetails({ node_id: 'exit', address: '10.0.0.2', listen_port: 443 }), [
+    { label: '连接地址', value: '10.0.0.2:443' },
     { label: '本机监听端口', value: '443' },
   ]);
 });

@@ -23,8 +23,8 @@ func TestForwardChainsAPIHTTPPersistenceIsolationAndHistoricalCompile(t *testing
 	awaitRule(t, c, dr["id"].(string), "正常")
 	// C is a persisted candidate only. The established A->B data plane is real.
 	cid := addNode(c, "第三跳候选")["id"].(string)
-	saved := c.Do("PUT", "/api/nodes/"+cid+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": reserve(), "transport": "wss", "dedicated_addresses": []any{map[string]any{"name": "专线", "address": "ix.example.test", "public_port": 3443}}}, 200)
-	addressID := saved["dedicated_addresses"].([]any)[0].(map[string]any)["id"].(string)
+	c.Do("PUT", "/api/nodes/"+cid+"/tunnel", map[string]any{"address": "ix.example.test", "listen_port": reserve(), "public_port": 3443, "transport": "wss"}, 200)
+	addressID := "public"
 	cg := c.Do("POST", "/api/exit-groups", map[string]any{"name": "第三组", "strategy": "primary_backup", "member_addresses": []any{map[string]any{"node_id": cid, "address_id": addressID}}}, 201)["id"].(string)
 	bg := f.body["exit_group_id"].(string)
 	// A pre-upgrade self-hop is injected at the persistence boundary. New saves

@@ -42,11 +42,9 @@ func loadForwardChains(ctx context.Context, q queryer) ([]forwarding.ForwardChai
 // credential or runtime grant can enter a path preview through this boundary.
 func loadChainGroups(ctx context.Context, q queryer) (map[string]forwarding.ChainGroup, error) {
 	rows, err := q.QueryContext(ctx, `SELECT g.id,g.name,n.id,n.name,m.address_id,
- CASE WHEN m.address_id='public' THEN t.address ELSE a.address END,
- COALESCE(CASE WHEN m.address_id='public' THEN t.public_port ELSE a.public_port END,t.listen_port)
+ t.address, COALESCE(t.public_port,t.listen_port)
  FROM exit_groups g JOIN exit_group_members m ON m.group_id=g.id
  JOIN nodes n ON n.id=m.node_id JOIN tunnel_exits t ON t.node_id=m.node_id
- LEFT JOIN tunnel_addresses a ON a.node_id=m.node_id AND a.id=m.address_id
  ORDER BY g.id,m.position`)
 	if err != nil {
 		return nil, err

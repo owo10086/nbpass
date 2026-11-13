@@ -202,7 +202,7 @@ export function Chains({ focus, onSessionExpired }: { focus?: string; onSessionE
       </div>)}</div> },
       { title: '操作', key: 'actions', width: 120, fixed: 'right', align: 'right', render: (_, row) => <div className="row-actions"><Button type="text" size="small" onClick={() => edit(row)}>编辑</Button><Button type="text" size="small" danger onClick={() => { setDeleteError(''); setDeleting(row); }}>删除</Button></div> },
     ]} />
-    <p className="footnote">地址为该候选在端点组中所选的公网或专线地址，端口为有效拨号端口；主备顺序不表示当前业务选中了该候选。每 5 秒读取观测，采样满 10 秒或服务端标记非新鲜即显示历史。各条证据按端口、来源和配置分别展示；控制在线和本边可达均不能证明完整业务或最终目标可达。</p>
+    <p className="footnote">地址为该候选服务器配置的连接地址，端口为有效拨号端口；主备顺序不表示当前业务选中了该候选。每 5 秒读取观测，采样满 10 秒或服务端标记非新鲜即显示历史。各条证据按端口、来源和配置分别展示；控制在线和本边可达均不能证明完整业务或最终目标可达。</p>
     <Modal title={editing ? '编辑转发链' : '创建转发链'} open={editing !== undefined} onCancel={close} footer={null} width={820} closable={!saving} maskClosable={!saving} keyboard={!saving} destroyOnHidden>
       <Form form={form} layout="vertical" onFinish={save} disabled={saving} requiredMark={false}>
         {saveError && <Alert title={saveError} type="error" showIcon className="message" />}

@@ -5,7 +5,6 @@
 .endpoint-id.ant-typography { display: block; width: 100%; max-width: 100%; }
 .endpoint-name-line { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
 .endpoint-name-line .node-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.endpoint-dedicated-tag { flex: none; }
 .endpoint-page .endpoint-address { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .endpoint-address-details { overflow-wrap: anywhere; }
 .endpoint-page .endpoint-group-drag-cell { padding-inline: 0; }
@@ -58,6 +57,3 @@
   .endpoint-page .filter-field { width: 100%; }
   .endpoint-page .filter-field > :is(.ant-input-affix-wrapper, .ant-select) { flex: 1; min-width: 140px; }
 }
-
-.endpoint-dedicated { padding: var(--space-md); margin-bottom: var(--space-md); border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-sunken); }
-.endpoint-dedicated-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--space-sm); }

@@ -136,8 +136,7 @@ func TestIXMemberReal02NodePublicCompatibilityAndUpgradeConfirmation(t *testing.
 	}
 	bport, cport := reserve(), reserve()
 	saved := c.Do("PUT", "/api/nodes/"+bid+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": bport, "transport": "wss"}, 200)
-	cs := c.Do("PUT", "/api/nodes/"+cid+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": cport, "transport": "wss", "dedicated_addresses": []any{map[string]any{"name": "备用 IX", "address": "localhost"}}}, 200)
-	cix := cs["dedicated_addresses"].([]any)[0].(map[string]any)["id"].(string)
+	c.Do("PUT", "/api/nodes/"+cid+"/tunnel", map[string]any{"address": "localhost", "listen_port": cport, "transport": "wss"}, 200)
 	dir := t.TempDir()
 	ca := filepath.Join(dir, "ca.pem")
 	if err = os.WriteFile(ca, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: h.Control.Certificate().Raw}), 0600); err != nil {
@@ -222,30 +221,21 @@ func TestIXMemberReal02NodePublicCompatibilityAndUpgradeConfirmation(t *testing.
 	if count.Load() == 0 {
 		t.Fatal("真实02节点未走映射代理")
 	}
-	// Same server may use dedicated addresses in other groups, but the real 02 consumer must get no such endpoint.
-	bs := c.Do("PUT", "/api/nodes/"+bid+"/tunnel", map[string]any{"address": "localhost", "listen_port": bport, "public_port": mapped, "transport": "wss", "dedicated_addresses": []any{map[string]any{"name": "主服务器 IX", "address": "127.0.0.1"}}}, 200)
-	bix := bs["dedicated_addresses"].([]any)[0].(map[string]any)["id"]
-	ixGroup := c.Do("POST", "/api/exit-groups", map[string]any{"name": "仅专线", "strategy": "primary_backup", "member_addresses": []any{map[string]any{"node_id": bid, "address_id": bix}}}, 201)["id"].(string)
-	ixBody := directBody(entryGroup(c, aid)["id"].(string), freePort(), "127.0.0.1", body["target_port"].(int))
-	ixBody["kind"], ixBody["exit_group_id"] = "tunnel", ixGroup
-	ixRule := c.Do("POST", "/api/rules", ixBody, 201)["id"].(string)
-	awaitRule(t, c, ixRule, "整条阻塞（需升级服务器）")
-	assertTCPFailure(t, ixBody["listen_port"].(int))
-	tcpExchange(t, port, "02:")
-	c.Do("PUT", "/api/exit-groups/"+g, map[string]any{"name": "主公网备专线", "strategy": "primary_backup", "member_addresses": []any{map[string]any{"node_id": bid, "address_id": "public"}, map[string]any{"node_id": cid, "address_id": cix}}}, 200)
-	view := awaitRule(t, c, rule, "可运行但备用成员能力不足")
-	blockers := view["configuration_blockers"].([]any)
-	if len(blockers) != 1 || blockers[0].(map[string]any)["capability"] != compatibility.IXMemberIdentity || blockers[0].(map[string]any)["address_id"] != cix {
-		t.Fatal("备用 blocker 不准确", view)
-	}
+	// Hold the backup grant before adding it. Candidate authorization still waits
+	// for durable confirmation across a real old-process upgrade.
+	mu.Lock()
+	holdBackup = true
+	mu.Unlock()
+	c.Do("PUT", "/api/exit-groups/"+g, map[string]any{"name": "主备组", "strategy": "primary_backup", "members": []string{bid, cid}}, 200)
+	awaitRule(t, c, rule, "正常")
 	tcpExchange(t, port, "02:")
 	mu.Lock()
 	old := proto.Clone(latest[aid]).(*controlpb.ConfigSnapshot)
 	mu.Unlock()
 	for _, group := range old.ExitGroups {
 		for _, ep := range group.Exits {
-			if ep.AddressId != "" || ep.NodeId != bid {
-				t.Fatal("真实02收到了专线/多地址身份", ep)
+			if ep.AddressId != "" {
+				t.Fatal("真实02收到了新地址身份字段", ep)
 			}
 		}
 	}
@@ -296,9 +286,7 @@ func TestIXMemberReal02NodePublicCompatibilityAndUpgradeConfirmation(t *testing.
 		}
 		time.Sleep(time.Millisecond)
 	}
-	awaitRule(t, c, ixRule, "正常")
-	tcpExchange(t, ixBody["listen_port"].(int), "02:")
-	if saved["server_name"] != bs["server_name"] || !strings.Contains(string(identity), "ix_address_dialing") {
-		t.Fatal("地址选择改变服务器身份")
+	if saved["server_name"] == "" || !strings.Contains(string(identity), "ix_address_dialing") {
+		t.Fatal("地址配置丢失服务器身份")
 	}
 }

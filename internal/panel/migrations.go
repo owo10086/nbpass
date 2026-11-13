@@ -128,6 +128,7 @@ var migrations = []string{
 	outboundIPv4Migration,
 	forwardChainsMigration,
 	chainRulesMigration,
+	singleEndpointAddressMigration,
 }
 
 func (p *Panel) migrate(ctx context.Context) error {

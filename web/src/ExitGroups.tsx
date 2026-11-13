@@ -120,12 +120,12 @@ export function ExitGroups({ focus, onSessionExpired }: { focus?: string; onSess
           <Form.Item name="name" label="端点组名称" rules={[{ required: true, whitespace: true, message: '请输入端点组名称' }]}><Input maxLength={200} placeholder="请输入端点组名称" /></Form.Item>
           <Form.Item label="转发策略" extra="第一项为主端点，其余按顺序备用；恢复后连续探测成功 60 秒再接新连接。"><ColorTag tone="orange">主备 · 按顺序</ColorTag></Form.Item>
         </FormSection>
-        <FormSection title="转发端点" icon={<NodeIndexOutlined />} description="每台服务器选择一个公网或专线地址；更换地址须确认替换，用箭头调整主备顺序。">
+        <FormSection title="转发端点" icon={<NodeIndexOutlined />} description="选择服务器作为转发端点，用箭头调整主备顺序。">
           {!exits.length && <Alert type="info" showIcon title={<>暂无已配置的转发端点，请先前往 <a href="#/endpoints">转发端点</a> 添加。</>} className="message" />}
           <Form.Item name="member_addresses" rules={[{ validator: async (_, members: MemberAddress[]) => {
             if (!members?.length) throw new Error('至少选择一个转发端点');
             if (new Set(members.map(member => member.node_id)).size !== members.length) throw new Error('同一服务器只能出现一次');
-            if (members.some(member => !options.some(option => option.id === memberKey(member)))) throw new Error('存在未配置的地址，请移除后重新选择');
+            if (members.some(member => !options.some(option => option.id === memberKey(member)))) throw new Error('存在未配置的端点，请移除后重新选择');
           } }]}><EndpointMembers disabled={saving} options={options} /></Form.Item>
         </FormSection>
         <div className="endpoint-form-footer"><Button onClick={close}>取消</Button><Button type="primary" htmlType="submit" loading={saving}>保存端点组</Button></div>

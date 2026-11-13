@@ -20,14 +20,13 @@ import (
 )
 
 type tunnelExitView struct {
-	NodeID             string                     `json:"node_id"`
-	Address            string                     `json:"address"`
-	PublicPort         *int                       `json:"public_port"`
-	DedicatedAddresses []dedicatedAddress         `json:"dedicated_addresses"`
-	ListenPort         int                        `json:"listen_port"`
-	Transport          forwarding.TunnelTransport `json:"transport"`
-	ServerName         string                     `json:"server_name"`
-	CertificatePEM     string                     `json:"certificate_pem"`
+	NodeID         string                     `json:"node_id"`
+	Address        string                     `json:"address"`
+	PublicPort     *int                       `json:"public_port"`
+	ListenPort     int                        `json:"listen_port"`
+	Transport      forwarding.TunnelTransport `json:"transport"`
+	ServerName     string                     `json:"server_name"`
+	CertificatePEM string                     `json:"certificate_pem"`
 }
 type exitGroupView struct {
 	ID              string                  `json:"id"`
@@ -70,11 +69,10 @@ func (p *Panel) listTunnelExits(w http.ResponseWriter, r *http.Request) {
 }
 func (p *Panel) saveTunnelExit(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Address            string                     `json:"address"`
-		ListenPort         int                        `json:"listen_port"`
-		Transport          forwarding.TunnelTransport `json:"transport"`
-		PublicPort         json.RawMessage            `json:"public_port"`
-		DedicatedAddresses json.RawMessage            `json:"dedicated_addresses"`
+		Address    string                     `json:"address"`
+		ListenPort int                        `json:"listen_port"`
+		Transport  forwarding.TunnelTransport `json:"transport"`
+		PublicPort json.RawMessage            `json:"public_port"`
 	}
 	if !decode(w, r, &body) {
 		return
@@ -89,22 +87,6 @@ func (p *Panel) saveTunnelExit(w http.ResponseWriter, r *http.Request) {
 		if json.Unmarshal(body.PublicPort, &publicPort) != nil || !validPublicPort(publicPort) {
 			problem(w, 400, "对外端口须为空或 1–65535")
 			return
-		}
-	}
-	var dedicated []dedicatedAddress
-	if len(body.DedicatedAddresses) > 0 {
-		if string(body.DedicatedAddresses) == "null" || json.Unmarshal(body.DedicatedAddresses, &dedicated) != nil {
-			problem(w, 400, "专线地址须为列表，清空请传空列表")
-			return
-		}
-		for i := range dedicated {
-			d := &dedicated[i]
-			d.Name = strings.TrimSpace(d.Name)
-			d.Address = normalizeTunnelAddress(d.Address)
-			if d.Name == "" || len(d.Name) > 200 || forwarding.ValidateTarget(d.Address, true) != nil || !validPublicPort(d.PublicPort) {
-				problem(w, 400, "专线须有 1–200 字节名称、IPv4 或域名和有效对外端口")
-				return
-			}
 		}
 	}
 	id := r.PathValue("id")
@@ -131,43 +113,6 @@ func (p *Panel) saveTunnelExit(w http.ResponseWriter, r *http.Request) {
 		if old != nil && len(body.PublicPort) == 0 {
 			publicPort = old.PublicPort
 		}
-		if len(body.DedicatedAddresses) > 0 {
-			owned := map[string]bool{}
-			if old != nil {
-				for _, d := range old.DedicatedAddresses {
-					owned[d.ID] = true
-				}
-			}
-			seen := map[string]bool{}
-			for i := range dedicated {
-				d := &dedicated[i]
-				if d.ID != "" && (!owned[d.ID] || seen[d.ID]) {
-					return &forwardingError{400, "专线 ID 重复或不属于该服务器"}
-				}
-				if d.ID == "" {
-					d.ID, _, err = p.randomCredential()
-					if err != nil {
-						return err
-					}
-				}
-				seen[d.ID] = true
-			}
-			if old != nil {
-				for _, d := range old.DedicatedAddresses {
-					if seen[d.ID] {
-						continue
-					}
-					var group string
-					err := tx.QueryRowContext(r.Context(), "SELECT g.name FROM exit_groups g JOIN exit_group_members m ON m.group_id=g.id WHERE m.node_id=? AND m.address_id=? ORDER BY g.id LIMIT 1", id, d.ID).Scan(&group)
-					if err == nil {
-						return &forwardingError{409, "专线地址仍被端点组“" + group + "”引用，请先更换组地址"}
-					}
-					if err != sql.ErrNoRows {
-						return err
-					}
-				}
-			}
-		}
 		if old == nil {
 			name, cert, key, err := p.newExitIdentity()
 			if err != nil {
@@ -184,20 +129,6 @@ func (p *Panel) saveTunnelExit(w http.ResponseWriter, r *http.Request) {
 		} else {
 			_, err = tx.ExecContext(r.Context(), "UPDATE tunnel_exits SET address_version=CASE WHEN address!=? OR listen_port!=? OR public_port IS NOT ? THEN '' ELSE address_version END,address=?,listen_port=?,transport=?,public_port=? WHERE node_id=?", body.Address, body.ListenPort, publicPort, body.Address, body.ListenPort, body.Transport, publicPort, id)
 			if err != nil {
-				return err
-			}
-		}
-		if len(body.DedicatedAddresses) > 0 {
-			// Move retained rows aside before assigning new unique positions. Never delete a referenced identity.
-			if _, err = tx.ExecContext(r.Context(), "UPDATE tunnel_addresses SET position=-position-1 WHERE node_id=?", id); err != nil {
-				return err
-			}
-			for position, d := range dedicated {
-				if _, err = tx.ExecContext(r.Context(), `INSERT INTO tunnel_addresses(node_id,id,name,address,public_port,position) VALUES(?,?,?,?,?,?) ON CONFLICT(node_id,id) DO UPDATE SET name=excluded.name,address=excluded.address,public_port=excluded.public_port,position=excluded.position`, id, d.ID, d.Name, d.Address, d.PublicPort, position); err != nil {
-					return err
-				}
-			}
-			if _, err = tx.ExecContext(r.Context(), "DELETE FROM tunnel_addresses WHERE node_id=? AND position<0", id); err != nil {
 				return err
 			}
 		}
@@ -316,8 +247,8 @@ func (p *Panel) saveExitGroup(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for i, m := range addresses {
-			if m.AddressID == "" || m.NodeID == "" || len(body.Members) > 0 && members[i] != m.NodeID {
-				problem(w, 400, "成员与地址列表不一致或地址标识为空")
+			if m.AddressID != "public" || m.NodeID == "" || len(body.Members) > 0 && members[i] != m.NodeID {
+				problem(w, 400, "成员列表不一致或端点地址标识无效")
 				return
 			}
 		}
@@ -353,7 +284,7 @@ func (p *Panel) saveExitGroup(w http.ResponseWriter, r *http.Request) {
 				return &forwardingError{400, "出口成员不能重复"}
 			}
 			seen[member.NodeID] = true
-			if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM tunnel_exits WHERE node_id=? AND (?='public' OR EXISTS(SELECT 1 FROM tunnel_addresses WHERE node_id=? AND id=?))", member.NodeID, member.AddressID, member.NodeID, member.AddressID).Scan(&n); err != nil {
+			if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM tunnel_exits WHERE node_id=?", member.NodeID).Scan(&n); err != nil {
 				return err
 			}
 			if n != 1 {

@@ -25,44 +25,15 @@ func incidentForChainRule(t *testing.T, r *chainRig, rule string, open bool) map
 	t.Fatal("missing chain rule incident", rule, open)
 	return nil
 }
-func TestChainFailoverAddressIsolationLateDigestAndIncidentBoundary(t *testing.T) {
+func TestChainEndpointChangeRejectsLateDigestAndReplacesIncidentBoundary(t *testing.T) {
 	r := newChainRig(t, 1, []int{1, 1}, "primary_backup")
 	r.ready(t, true)
 	r.exchange(t, 0)
-	// Public and dedicated addresses on the same B have independent physical
-	// endpoints; the rule selecting the good dedicated address remains ready.
-	var exit map[string]any
-	for _, raw := range r.c.Do("GET", "/api/tunnel-exits", nil, 200)["exits"].([]any) {
-		v := raw.(map[string]any)
-		if v["node_id"] == r.ids[1] {
-			exit = v
-		}
-	}
-	ix := exit["dedicated_addresses"].([]any)[0].(map[string]any)
-	badPort := r.h.ReserveTCPPort()
-	r.c.Do("PUT", "/api/nodes/"+r.ids[1]+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": r.ports[1], "public_port": badPort, "transport": "wss", "dedicated_addresses": []any{ix}}, 200)
-	bg := r.c.Do("POST", "/api/exit-groups", map[string]any{"name": "bad public B", "members": []string{r.ids[1]}, "strategy": "primary_backup"}, 201)["id"].(string)
-	bc := r.c.Do("POST", "/api/forward-chains", map[string]any{"name": "bad address chain", "exit_group_ids": []string{bg, r.groups[1]}}, 201)["id"].(string)
-	eg := entryGroup(r.c, r.ids[0])["id"].(string)
-	body := directBody(eg, r.h.ReserveTCPPort(), "chain-target.test", r.body["target_port"].(int))
-	body["kind"], body["chain_id"] = "tunnel", bc
-	bad := r.c.Do("POST", "/api/rules", body, 201)["id"].(string)
-	awaitRule(t, r.c, bad, "同步失败")
-	r.ready(t, true)
-	r.exchange(t, 0)
-	if entryState(t, r.c, eg, r.ids[0])["ready"] != false {
-		t.Fatal("bad public borrowed dedicated readiness")
-	}
 	goodView := r.awaitChain(t, func(v map[string]any) bool {
 		return chainEdgeRow(t, v, r.rule, r.ids[0], r.ids[1])["state"] == "ready"
 	})
 	r.assertChainContract(t, goodView, r.rule)
 	goodEdge := chainEdgeRow(t, goodView, r.rule, r.ids[0], r.ids[1])
-	badView := forwardChainRow(t, r.c, bc)
-	badEdge := chainEdgeRow(t, badView, bad, r.ids[0], r.ids[1])
-	if badView["rule_count"] != float64(1) || badEdge["address_id"] != "public" || badEdge["endpoint_config_digest"] == goodEdge["endpoint_config_digest"] || badEdge["state"] == "ready" {
-		t.Fatal("management page borrowed dedicated address evidence for public address", badEdge, goodEdge)
-	}
 	r.links[1][2].block(true)
 	assertTCPFailure(t, int(r.entryPorts[0].Load()))
 	r.ready(t, false)
@@ -77,7 +48,7 @@ func TestChainFailoverAddressIsolationLateDigestAndIncidentBoundary(t *testing.T
 		}
 	}
 	if oldDigest == "" {
-		t.Fatal("missing dedicated endpoint digest")
+		t.Fatal("missing endpoint digest")
 	}
 	r.h.TransformControlReports(func(report *controlpb.NodeReport) {
 		if report.NodeId == r.ids[0] && report.Probe != nil {
@@ -91,8 +62,7 @@ func TestChainFailoverAddressIsolationLateDigestAndIncidentBoundary(t *testing.T
 			}
 		}
 	})
-	ix["address"] = "127.0.0.1"
-	r.c.Do("PUT", "/api/nodes/"+r.ids[1]+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": r.ports[1], "public_port": badPort, "transport": "wss", "dedicated_addresses": []any{ix}}, 200)
+	r.c.Do("PUT", "/api/nodes/"+r.ids[1]+"/tunnel", map[string]any{"address": "127.0.0.1", "listen_port": r.ports[1], "public_port": r.mapped[1], "transport": "wss"}, 200)
 	r.advance(t, 15)
 	old = r.c.Do("GET", "/api/incidents/"+oldID, nil, 200)
 	if old["closure"] != "新版本替代" {
