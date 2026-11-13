@@ -66,6 +66,14 @@ export function effectiveEndpointPort(endpoint: { public_port?: number | null; l
   return endpoint.public_port ?? endpoint.listen_port;
 }
 
+export function endpointAddressDetails(endpoint: EndpointValues): { label: string; value: string }[] {
+  return [
+    { label: '公网地址', value: `${endpoint.address}:${effectiveEndpointPort(endpoint)}` },
+    { label: '本机监听端口', value: String(endpoint.listen_port) },
+    ...(endpoint.dedicated_addresses ?? []).map(address => ({ label: address.name, value: `${address.address}:${address.public_port ?? endpoint.listen_port}` })),
+  ];
+}
+
 export function endpointFormValues(endpoint?: EndpointValues) {
   return endpoint ? { ...endpoint, public_port: endpoint.public_port ?? null, dedicated_addresses: (endpoint.dedicated_addresses ?? []).map(address => ({ ...address })) }
     : { address: '', listen_port: undefined, public_port: null, dedicated_addresses: [] };

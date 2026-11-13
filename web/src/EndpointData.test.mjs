@@ -63,3 +63,24 @@ test('地址表单保留专线稳定 ID，空对外端口明确清空并显示�
   assert.deepEqual(endpointPayload({ ...values, dedicated_addresses: [] }).dedicated_addresses, []);
   assert.deepEqual(endpointFormValues(undefined), { address: '', listen_port: undefined, public_port: null, dedicated_addresses: [] });
 });
+
+test('地址提示保留公网、本机端口及全部专线，并分别使用各自有效端口', async () => {
+  const { endpointAddressDetails } = await import('./EndpointData.ts');
+  assert.deepEqual(endpointAddressDetails({ node_id: 'exit', address: 'public.test', listen_port: 18443, public_port: 2443, dedicated_addresses: [
+    { id: 'ix', name: '沪日 IX', address: 'ix.test', public_port: null },
+    { name: '备用专线', address: '10.0.0.3', public_port: 3443 },
+  ] }), [
+    { label: '公网地址', value: 'public.test:2443' },
+    { label: '本机监听端口', value: '18443' },
+    { label: '沪日 IX', value: 'ix.test:18443' },
+    { label: '备用专线', value: '10.0.0.3:3443' },
+  ]);
+});
+
+test('无专线且未设置公网对外端口时，地址提示使用本机监听端口', async () => {
+  const { endpointAddressDetails } = await import('./EndpointData.ts');
+  assert.deepEqual(endpointAddressDetails({ node_id: 'exit', address: '203.0.113.20', listen_port: 443 }), [
+    { label: '公网地址', value: '203.0.113.20:443' },
+    { label: '本机监听端口', value: '443' },
+  ]);
+});

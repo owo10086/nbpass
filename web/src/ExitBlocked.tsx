@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Button, Modal, Spin, Switch, Typography } from 'antd';
+import { Alert, Modal, Spin, Switch, Typography } from 'antd';
 import { SafetyOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
 import { FormSection } from './FormSection';
@@ -10,8 +10,7 @@ import './Endpoints.css';
 type Entry = { node_id: string; name: string; connected: boolean; applied: boolean; applied_revision: number; handshaken: boolean; handshaken_at: string | null };
 type Progress = { enabled: boolean; address: string; action_id: string; entries: Entry[] };
 
-export function ExitBlocked({ nodeID, onSessionExpired, onChanged }: { nodeID: string; onSessionExpired: () => void; onChanged: () => void }) {
-  const [open, setOpen] = useState(false);
+export function ExitBlocked({ nodeID, open, onClose, onSessionExpired, onChanged }: { nodeID: string; open: boolean; onClose: () => void; onSessionExpired: () => void; onChanged: () => void }) {
   const [state, setState] = useState<Progress>();
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -39,9 +38,7 @@ export function ExitBlocked({ nodeID, onSessionExpired, onChanged }: { nodeID: s
     catch (e) { failed(e); }
     finally { setSaving(false); }
   }
-  return <>
-    <Button type="text" size="small" onClick={() => setOpen(true)}>被墙处理与地址进度</Button>
-    <Modal className="endpoint-modal" title="端点被墙处理与地址进度" open={open} onCancel={() => { setOpen(false); onChanged(); }} footer={null} width={860} closable={!saving} maskClosable={!saving} keyboard={!saving}>
+  return <Modal className="endpoint-modal" title="端点被墙处理与地址进度" open={open} onCancel={() => { onClose(); onChanged(); }} footer={null} width={860} closable={!saving} maskClosable={!saving} keyboard={!saving}>
       {error && <Alert type="error" title={error} showIcon className="message" />}
       <FormSection title="被墙处理" icon={<SafetyOutlined />} description="开启后，端点被认定被墙时申请换 IP。请先在服务器管理配置换 IP 接口、开启自测和服务器自动换 IP 总授权。端点与服务器组共用该服务器的额度、冷却和暂停状态。">
       {!state && !error && <Spin />}
@@ -56,6 +53,5 @@ export function ExitBlocked({ nodeID, onSessionExpired, onChanged }: { nodeID: s
         { title: '新地址握手', render: (_, row) => <StatusDot tone={row.handshaken ? 'ok' : 'warn'}>{row.handshaken ? '已握手' : '待确认'}</StatusDot> },
         { title: '握手确认时间', render: (_, row) => row.handshaken_at ? <span className="mono">{new Date(row.handshaken_at).toLocaleString()}</span> : '—' },
       ]} />
-    </Modal>
-  </>;
+    </Modal>;
 }

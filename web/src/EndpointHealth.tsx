@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { Alert, Empty, Select } from 'antd';
+import { Alert, Button, Empty, Select } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
-import { FilterCard, FilterField } from './FilterCard';
+import { FilterField } from './FilterCard';
 import { StatusDot } from './StatusDot';
 import { TableCard } from './TableCard';
 import { endpointMemberOptions, memberKey, healthIsFresh, healthStatus, type Endpoint, type EndpointHealth as Health, type EndpointNode, type HealthReport } from './EndpointData';
@@ -45,14 +46,18 @@ export function EndpointHealth({ nodes, exits, onSessionExpired }: { nodes: Endp
   const fresh = healthIsFresh(health, now);
   const options = endpointMemberOptions(exits, nodes);
   const identity = (row: Health) => ({ node_id: row.exit_id, address_id: row.address_id || 'public' });
+  const notes = <>
+    {entry && error && <Alert type="error" title={error} showIcon className="message" />}
+    {entry && health && !fresh && <Alert type="warning" title="当前无实时证据，以下为最近观测，不代表当前健康状态。" showIcon className="message" />}
+    <p className="endpoint-health-note">选择入口服务器查看它到各端点的观测，每 5 秒刷新。目标不可达不影响端点健康；控制失联后服务器仍自行探测和切换。
+      {entry && health?.sampled_at && <> 最近观测：<span className="mono">{new Date(health.sampled_at).toLocaleString()}</span></>}
+    </p>
+  </>;
   return <section className="endpoint-health" aria-label="端点链路健康">
-    <div className="endpoint-section-heading"><h2>端点链路健康</h2><p>选择入口服务器查看它到各端点的观测，每 5 秒刷新。目标不可达不影响端点健康；控制失联后服务器仍自行探测和切换。</p></div>
-    <FilterCard onRefresh={entry ? () => setRefreshKey(key => key + 1) : undefined}><FilterField label="观测入口" htmlFor="endpoint-health-entry"><Select id="endpoint-health-entry" showSearch optionFilterProp="label" allowClear placeholder="选择入口服务器" value={entry} onChange={setEntry} options={nodes.map(node => ({ value: node.id, label: node.name }))} /></FilterField>
-      {health?.sampled_at && <span className="muted">最近观测：<span className="mono">{new Date(health.sampled_at).toLocaleString()}</span></span>}
-    </FilterCard>
-    {error && <Alert type="error" title={error} showIcon className="message" />}
-    {health && !fresh && <Alert type="warning" title="当前无实时证据，以下为最近观测，不代表当前健康状态。" showIcon className="message" />}
-    <TableCard<Health> title="健康观测" rowKey={row => memberKey(identity(row))} dataSource={health?.exits ?? []} loading={!!entry && !health && !error} pagination={false} scroll={{ x: 900 }} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={entry ? '尚无端点探测结果' : '请选择入口服务器查看链路健康'} /> }} columns={[
+    <TableCard<Health> title="端点链路健康" actions={<div className="endpoint-health-controls">
+      <FilterField label="观测入口" htmlFor="endpoint-health-entry"><Select id="endpoint-health-entry" showSearch optionFilterProp="label" allowClear placeholder="选择入口服务器" value={entry} onChange={setEntry} options={nodes.map(node => ({ value: node.id, label: node.name }))} /></FilterField>
+      {entry && <Button icon={<ReloadOutlined />} onClick={() => setRefreshKey(key => key + 1)}>刷新</Button>}
+    </div>} rowKey={row => memberKey(identity(row))} dataSource={health?.exits ?? []} loading={!!entry && !health && !error} pagination={false} scroll={{ x: 900 }} footer={() => notes} locale={{ emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="尚无端点探测结果" /> }} columns={[
       { title: '端点', render: (_, row) => <><span className="node-name">{options.find(option => option.id === memberKey(identity(row)))?.name ?? `${nodeName(row.exit_id)} · ${row.address_id || '公网'}`}</span><span className="cell-sub mono">{options.find(option => option.id === memberKey(identity(row)))?.address ?? row.address_id}</span></> },
       { title: '链路状态', render: (_, row) => { const status = healthStatus(fresh, row.state); return <StatusDot tone={status.tone}>{status.label}</StatusDot>; } },
       { title: '连续失败', render: (_, row) => <span className="mono">{row.consecutive_failures ?? 0}</span> },
@@ -60,6 +65,8 @@ export function EndpointHealth({ nodes, exits, onSessionExpired }: { nodes: Endp
       { title: '故障归属', render: (_, row) => ({ entry_exit: '入口→端点', exit_target: '端点→目标', local_resource: '本地资源', configuration_authorization: '配置/授权' } as Record<string, string>)[row.failure_class ?? ''] ?? '—' },
       { title: '恢复观察起点', render: (_, row) => row.recovery_since_unix ? <span className="mono">{new Date(row.recovery_since_unix * 1000).toLocaleTimeString()}</span> : '—' },
       { title: '探测时间', render: (_, row) => row.checked_at_unix ? <span className="mono">{new Date(row.checked_at_unix * 1000).toLocaleTimeString()}</span> : '—' },
-    ]} />
+    ]}>
+      {!entry ? <div className="endpoint-health-placeholder"><p className="endpoint-health-prompt">选择观测入口后显示它到各端点的链路状态</p>{notes}</div> : undefined}
+    </TableCard>
   </section>;
 }

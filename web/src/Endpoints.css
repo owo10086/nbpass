@@ -1,12 +1,29 @@
 .endpoint-page { min-width: 0; }
 .endpoint-page .node-name, .endpoint-page .cell-sub { overflow-wrap: anywhere; }
+.endpoint-count { margin: 0 0 var(--space-xs); color: var(--text-3); font-size: var(--font-description); }
+.endpoint-sequence { color: var(--text-3); white-space: nowrap; }
 .endpoint-id.ant-typography { display: block; width: 100%; max-width: 100%; }
-.endpoint-group-members { overflow-wrap: anywhere; }
-.endpoint-row-actions { flex-wrap: wrap; }
-.endpoint-health { margin-top: var(--space-xl); }
-.endpoint-section-heading { margin-bottom: var(--space-md); }
-.endpoint-section-heading h2 { margin: 0 0 6px; font-size: var(--font-section); font-weight: 600; }
-.endpoint-section-heading p { margin: 0; color: var(--text-2); font-size: var(--font-description); }
+.endpoint-name-line { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
+.endpoint-name-line .node-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.endpoint-dedicated-tag { flex: none; }
+.endpoint-page .endpoint-address { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.endpoint-address-details { overflow-wrap: anywhere; }
+.endpoint-page .endpoint-group-drag-cell { padding-inline: 0; }
+.endpoint-page .endpoint-group-drag-cell .drag-handle { padding: 3px; opacity: 0; }
+.endpoint-page .endpoint-group-record:hover .drag-handle,
+.endpoint-page .endpoint-group-drag-cell:focus-within .drag-handle { opacity: 1; }
+.endpoint-group-members { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; overflow-wrap: anywhere; }
+.endpoint-group-primary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.endpoint-group-backups { flex: none; }
+.endpoint-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0; white-space: nowrap; }
+.endpoint-page .endpoint-row-actions .ant-btn-link { padding-inline: 5px; color: var(--accent); white-space: nowrap; }
+.endpoint-page > .footnote { margin-top: var(--space-xs); }
+.endpoint-health { margin-top: var(--space-lg); }
+.endpoint-health-controls { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-sm); }
+.endpoint-health-note { margin: 0; color: var(--text-3); font-size: var(--font-description); }
+.endpoint-health .ant-table-footer { background: transparent; }
+.endpoint-health-placeholder { padding: var(--space-md); }
+.endpoint-health-prompt { margin: 0 0 var(--space-xs); color: var(--text-2); }
 .endpoint-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md); }
 .endpoint-modal .endpoint-port { width: 100%; }
 .endpoint-certificate { overflow-wrap: anywhere; }
