@@ -18,6 +18,7 @@ export function PortSyncDetails({ rule, entryName, chains, nodes }: { rule: Rule
   return <div className="ports-member-details">
     <p>完整定义路径（各组按配置顺序列出全部候选；链式按主备顺序，不代表当前连接所走的唯一服务器）</p>
     <ol className="ports-path">{rulePathSteps(rule, entryName, chains).map((step, i) => <li key={i}>{step}</li>)}</ol>
+    <p>私网策略：{rule.allow_private ? '允许私网目标' : '仅公网目标'}。</p>
     {rule.chain_id && <p><Button type="link" onClick={() => go('chains', rule.chain_id)}>编辑共享转发链</Button>修改后影响所有引用端口。</p>}
     <p><PortSyncStatus status={rule.sync_status} /> · 备用升级后须重新持久应用并确认，才能重新加入候选。</p>
     <ConfigurationBlockers blockers={rule.configuration_blockers} />

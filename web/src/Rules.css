@@ -2,12 +2,28 @@
 .ports-page .filter-field:nth-child(3) > .ant-select,
 .ports-page .filter-field:nth-child(4) > .ant-select { width: 130px; }
 .ports-page .table-card-actions { align-items: center; width: 100%; }
-.ports-page .table-card-actions > .ant-select { width: 160px; margin-left: auto; }
 .ports-selection { margin-right: auto; color: var(--text-2); font-size: var(--font-description); }
 .ports-selection b { color: var(--accent); font-weight: 600; }
-.ports-page .ports-id { color: var(--text-3); font-size: var(--font-small); white-space: nowrap; }
-.ports-name, .ports-target { overflow-wrap: anywhere; }
-.ports-traffic { white-space: nowrap; }
+.ports-page .ports-table-header > .ant-table-cell,
+.ports-page .ports-record > .ant-table-cell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; overflow-wrap: normal; }
+.ports-page .ports-record > .ant-table-cell { padding-block: 8px; }
+.ports-page .ports-table-header > .ant-table-selection-column,
+.ports-page .ports-record > .ant-table-selection-column { padding-inline: 4px; }
+.ports-page .ports-table-header > .ports-drag-cell,
+.ports-page .ports-record > .ports-drag-cell { padding-inline: 0; }
+.ports-page .ports-drag-cell .drag-handle { padding: 3px; opacity: 0; }
+.ports-page .ports-record:hover .drag-handle,
+.ports-page .ports-drag-cell:focus-within .drag-handle { opacity: 1; }
+.ports-name-cell { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ports-name, .ports-target, .ports-traffic { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ports-page .ports-id { flex: none; color: var(--text-3); font-size: var(--font-small); white-space: nowrap; }
+.ports-page .ports-id .ant-typography-copy { margin-inline-start: 0; }
+.ports-page .ports-record :is(.color-tag, .status, .ant-btn-link) { white-space: nowrap; overflow-wrap: normal; }
+.ports-page .ports-record .ports-chain-link { padding: 0; height: auto; }
+.ports-mode { display: inline-flex; align-items: center; }
+.ports-status { display: inline-flex; align-items: center; gap: 6px; }
+.ports-sync-alert { display: inline-flex; color: var(--warn); font-size: var(--font-small); }
+.ports-sync-alert.danger { color: var(--danger); }
 .ports-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0; white-space: nowrap; }
 .ports-row-actions .ant-btn { padding-inline: 5px; }
 .ports-row-actions .ant-btn-text { color: var(--text-2); }
@@ -37,6 +53,5 @@
 }
 
 .ports-path { overflow-wrap: anywhere; white-space: normal; line-height: 1.7; }
-.ports-page .ant-btn-link { max-width: 100%; height: auto; white-space: normal; overflow-wrap: anywhere; }
 .ports-member-details > p { margin-top: 16px; }
 .ports-member-details > .ant-space { margin-bottom: 12px; }

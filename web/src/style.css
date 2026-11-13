@@ -68,7 +68,8 @@ body { margin: 0; min-width: 320px; }
 .filter-field { display: flex; align-items: center; gap: var(--space-xs); min-width: 0; }
 .filter-field label { flex: none; color: var(--text-2); }
 .filter-field > :is(.ant-input-affix-wrapper, .ant-input, .ant-select) { width: 180px; }
-.table-card { min-width: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg-elev); overflow: hidden; margin-bottom: var(--space-md); }
+/* 固定列阴影伪元素略宽，hidden 会在「更多」菜单回焦时被 scrollIntoView 横移约 29px、切掉勾选列；clip 保留裁剪与圆角且不可滚动。 */
+.table-card { min-width: 0; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--bg-elev); overflow: clip; margin-bottom: var(--space-md); }
 .table-card-head { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; padding: 14px var(--space-md); border-bottom: 1px solid var(--line); }
 .table-card-head h2 { margin: 0; font-size: var(--font-size); font-weight: 600; }
 .table-card-actions { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-left: auto; }
