@@ -60,6 +60,9 @@ func (h *Harness) StartNode(ticket string, options ...func(*node.Config, *node.D
 	n.deps.Forwarding.Listen = h.ListenTCP
 	// 测试台始终替换外部公网 IP 查询，不访问公网；地区用例按需注入地址。
 	n.deps.PublicIPv4 = func(context.Context) (string, error) { return "", errors.New("测试台未配置公网 IP") }
+	n.deps.Forwarding.PublicIPv4From = func(context.Context, string) (string, error) {
+		return "", errors.New("测试台未配置 NAT 出口查询")
+	}
 	n.deps.Probe = emptyProbe{}
 	n.deps.SelfCheckLookup = func(context.Context, string) ([]string, error) {
 		return nil, errors.New("测试台未配置自测解析器")

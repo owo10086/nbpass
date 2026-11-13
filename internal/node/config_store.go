@@ -46,7 +46,7 @@ func openConfigCache(ctx context.Context, credential Credentials, deps *Dependen
 	default:
 		return errors.New("节点配置缓存格式或身份不匹配")
 	}
-	return engine.Restore(cache.State)
+	return engine.RestoreContext(ctx, cache.State)
 }
 
 func persistConfigCache(ctx context.Context, credential Credentials, store ConfigStore, state forwarding.State) error {

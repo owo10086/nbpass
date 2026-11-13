@@ -254,7 +254,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
           {editing && <Form.Item label="公网 IPv4" extra="地址确认及域名绑定在「受管记录与地址」中管理。"><Input readOnly value={editing.public_ipv4 || '尚未查询到 IP'} /></Form.Item>}
         </FormSection>
         {editing && <FormSection title="服务器设置" icon={<GlobalOutlined />} description="出站 IP、地区、国内检测点和监听端口分别保存；关闭弹窗后仍可在更多操作中管理。" collapsible>
-          <Form.Item label="出站 IP" extra="可选 IPv4，仅连接最终目标时绑定。地址须已配置在本机接口；留空使用系统路由。">
+          <Form.Item label="出站 IP" extra="可填本机 IPv4 或商家 NAT 公网 IPv4。公网 IP 不在网卡上时，节点核验出口映射并绑定对应的本机地址；核验失败时，连接最终目标的配置会报错。留空使用系统路由。">
             <Space.Compact block><Input value={outbound} onChange={e => { setOutbound(e.target.value); setOutboundStatus(''); }} placeholder="留空使用系统路由" aria-label="出站 IP" disabled={outboundSaving} /><Button onClick={() => void saveOutbound()} loading={outboundSaving} disabled={saving}>保存出站 IP</Button></Space.Compact>
             {outboundStatus && <Typography.Text type="secondary" role="status">{outboundStatus}</Typography.Text>}
           </Form.Item>

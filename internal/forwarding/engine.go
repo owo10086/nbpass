@@ -30,11 +30,13 @@ type Dependencies struct {
 	// DialTargetFrom 仅用于有源地址的最终目标拨号，不能回退到 DialTarget。
 	DialTargetFrom func(context.Context, string, string) (net.Conn, error)
 	// LocalIPv4 枚举本机接口地址，应用和缓存恢复均重新读取。
-	LocalIPv4  func() ([]netip.Addr, error)
-	Listen     func(string, string) (net.Listener, error)
-	DialTunnel func(context.Context, string) (net.Conn, error)
-	Now        func() time.Time
-	Persist    func(State) error
+	LocalIPv4 func() ([]netip.Addr, error)
+	// PublicIPv4From 查询绑定本机地址后的公网出口，仅用于核验 NAT 映射。
+	PublicIPv4From func(context.Context, string) (string, error)
+	Listen         func(string, string) (net.Listener, error)
+	DialTunnel     func(context.Context, string) (net.Conn, error)
+	Now            func() time.Time
+	Persist        func(State) error
 }
 
 type Engine struct {
@@ -98,6 +100,9 @@ func NewEngine(deps Dependencies) *Engine {
 	if deps.LocalIPv4 == nil {
 		deps.LocalIPv4 = localIPv4Addresses
 	}
+	if deps.PublicIPv4From == nil {
+		deps.PublicIPv4From = queryOutboundIPv4
+	}
 	if deps.DialTargetFrom == nil {
 		deps.DialTargetFrom = func(ctx context.Context, address, source string) (net.Conn, error) {
 			return (&net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP(source)}}).DialContext(ctx, "tcp4", address)
@@ -130,8 +135,9 @@ func (e *Engine) ApplyContext(ctx context.Context, s *controlpb.ConfigSnapshot) 
 	if s.Revision < e.highest || s.Revision == e.highest && s.Digest != e.highestDigest {
 		return errors.New("拒绝旧版本或同版本不同内容的快照")
 	}
-	binding := e.validateOutbound(s.OutboundIpv4)
-	sourceChanged := e.outboundBinding().source != binding.source
+	binding := e.validateOutboundContext(ctx, s.OutboundIpv4)
+	previous := e.outboundBinding()
+	sourceChanged := previous.source != binding.source || previous.bindSource != binding.bindSource
 	endpoints, groups := tunnelEndpoints(s.ExitGroups)
 	desired := map[string]*controlpb.ForwardRule{}
 	for _, r := range s.Rules {
@@ -422,7 +428,11 @@ func (r *listenerRule) serve(client net.Conn) {
 
 // 每个新连接最多尝试三个不同 IPv4，总预算 10 秒；只在交付业务数据前重试。
 func (e *Engine) dialTarget(ctx context.Context, r *controlpb.ForwardRule) (net.Conn, error) {
-	return e.dialTargetWithin(ctx, r, 10*time.Second, e.outboundBinding().source)
+	binding := e.outboundBinding()
+	if binding.err != nil {
+		return nil, binding.err
+	}
+	return e.dialTargetWithin(ctx, r, 10*time.Second, binding.bindSource)
 }
 
 func (e *Engine) dialTargetWithin(ctx context.Context, r *controlpb.ForwardRule, budget time.Duration, source string) (net.Conn, error) {

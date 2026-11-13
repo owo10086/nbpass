@@ -40,7 +40,11 @@ func (r *listenerRule) serveDirect(client net.Conn, lease *resourceLease) {
 	defer cancel()
 	input := newDirectInput(ctx, client, cancel, r.engine.deps.Clock)
 	defer func() { cancel(); client.Close(); <-input.done }()
-	target, err := r.engine.dialTargetWithin(ctx, r.config, r.engine.resources.limits.DialTimeout, r.engine.outboundBinding().source)
+	binding := r.engine.outboundBinding()
+	if binding.err != nil {
+		return
+	}
+	target, err := r.engine.dialTargetWithin(ctx, r.config, r.engine.resources.limits.DialTimeout, binding.bindSource)
 	lease.dialDone()
 	if err != nil {
 		return

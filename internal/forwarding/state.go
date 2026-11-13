@@ -1,6 +1,7 @@
 package forwarding
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -86,6 +87,10 @@ func (e *Engine) persist(s State) error {
 
 // Restore 在连接面板前重新 bind 实际规则；失败的规则只保留错误，不重试旧期望。
 func (e *Engine) Restore(s State) error {
+	return e.RestoreContext(context.Background(), s)
+}
+
+func (e *Engine) RestoreContext(ctx context.Context, s State) error {
 	if s.HighestRevision == 0 || len(s.HighestDigest) != 64 || s.AppliedRevision > s.HighestRevision || s.AppliedRevision > 0 && len(s.AppliedDigest) != 64 {
 		return errors.New("配置缓存版本无效")
 	}
@@ -131,7 +136,7 @@ func (e *Engine) Restore(s State) error {
 			return errors.New("链式实际授权缺少缓存结果")
 		}
 	}
-	binding := e.validateOutbound(s.OutboundIPv4)
+	binding := e.validateOutboundContext(ctx, s.OutboundIPv4)
 	e.outbound.Store(binding)
 	e.setChainRules(snapshot)
 	e.highest, e.highestDigest = s.HighestRevision, s.HighestDigest

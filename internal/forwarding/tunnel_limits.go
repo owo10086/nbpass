@@ -192,7 +192,7 @@ func (s *tunnelServer) serveLimitedStream(parent context.Context, stream net.Con
 	if grant.NextExitGroupId != "" {
 		target, err = s.engine.relaySelection(grant, request.selectedNext).dial(dialCtx, cleanup)
 	} else {
-		target, err = s.engine.dialTargetWithin(dialCtx, rule, s.engine.resources.limits.DialTimeout, binding.source)
+		target, err = s.engine.dialTargetWithin(dialCtx, rule, s.engine.resources.limits.DialTimeout, binding.bindSource)
 	}
 	if lease != nil {
 		cleanup.after(lease.dialDone)
