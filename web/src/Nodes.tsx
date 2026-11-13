@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, App, Button, Dropdown, Form, Input, Modal, Select, Space, Tooltip, Typography } from 'antd';
-import { CodeOutlined, GlobalOutlined, InfoCircleOutlined, MoreOutlined, PlusOutlined, SearchOutlined, SettingOutlined, SortAscendingOutlined } from '@ant-design/icons';
+import { CodeOutlined, DownOutlined, GlobalOutlined, InfoCircleOutlined, PlusOutlined, SearchOutlined, SettingOutlined } from '@ant-design/icons';
 import { api, APIError } from './api';
 import { NodeManagedRecord } from './NodeManagedRecord';
 import { NodeRegion } from './NodeRegion';
@@ -18,7 +18,7 @@ import { TableCard } from './TableCard';
 import { StatusDot } from './StatusDot';
 import { ColorTag } from './ColorTag';
 import { FormSection } from './FormSection';
-import { CpuCell, MemoryCell, NetworkCell, memoryPercent, networkRate, uptime } from './NodeMetrics';
+import { CpuCell, MemoryCell, NetworkCell, networkRate, uptime } from './NodeMetrics';
 import { byMetric, byText, useDragOrder } from './ListOrder';
 import './servers.css';
 
@@ -27,16 +27,6 @@ const filters: { value: Filter; label: string }[] = [
   { value: 'all', label: '全部状态' }, { value: 'online', label: '在线' }, { value: 'offline', label: '离线' },
   { value: 'maintenance', label: '维护' }, { value: 'pending', label: '待接入' },
 ];
-const extraMetrics = [
-  { key: 'memory', label: '内存', compare: byMetric<ServerRow>(row => memoryPercent(row.probe)) },
-  { key: 'connections', label: '业务连接数', compare: byMetric<ServerRow>(row => row.probe?.business_connections) },
-  { key: 'region', label: '地区', compare: byText<ServerRow>(row => row.region.name) },
-  { key: 'last-seen', label: '最近活性', compare: byMetric<ServerRow>(row => row.last_seen_at ? Date.parse(row.last_seen_at) : null) },
-];
-const extraSorts = extraMetrics.flatMap(metric => (['descend', 'ascend'] as const).map(direction => ({
-  value: `${metric.key}:${direction}`, label: `${metric.label} · ${direction === 'descend' ? '降序' : '升序'}`, compare: metric.compare, direction,
-})));
-
 // 状态列升序为在线优先、离线最后；控制连接中断的在线服务器排在正常在线之后。
 function statusRank(row: ServerRow) {
   if (row.status === 'online') return row.connected ? 0 : 1;
@@ -56,8 +46,8 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [groupID, setGroupID] = useState('all');
-  const [extraSort, setExtraSort] = useState<string>();
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const [editing, setEditing] = useState<ServerRow | null>();
   const [saving, setSaving] = useState(false);
   const [outbound, setOutbound] = useState('');
@@ -94,7 +84,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
     finally { setLoading(false); }
   }
 
-  const order = useDragOrder(rows, setRows, '/nodes', { filtered: filter !== 'all' || groupID !== 'all' || !!query.trim() || !!extraSort, onError: failed, reload: load });
+  const order = useDragOrder(rows, setRows, '/nodes', { filtered: filter !== 'all' || groupID !== 'all' || !!query.trim(), onError: failed, reload: load });
   useEffect(() => {
     void load();
     const timer = window.setInterval(() => { if (!order.busy()) void load(); }, 10_000);
@@ -103,10 +93,10 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   // 通知定位的服务器可能不在第一页，先切到对应页再由 useFocusRow 高亮滚动。
   useEffect(() => {
     if (focus && loaded) {
-      setQuery(''); setFilter('all'); setGroupID('all'); setExtraSort(undefined);
+      setQuery(''); setFilter('all'); setGroupID('all');
       order.onChange(undefined, undefined, {});
       const index = rows.findIndex(row => row.id === focus);
-      if (index >= 0) setPage(Math.floor(index / 20) + 1);
+      if (index >= 0) setPage(Math.floor(index / pageSize) + 1);
     }
   }, [focus, loaded]);
 
@@ -181,12 +171,10 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
   }
 
   const visible = rows.filter(row => matchesServer(row, groups, { query, status: filter, groupID }));
-  const activeExtraSort = extraSorts.find(sort => sort.value === extraSort);
-  if (activeExtraSort) visible.sort((a, b) => activeExtraSort.compare(a, b, activeExtraSort.direction) * (activeExtraSort.direction === 'descend' ? -1 : 1));
   const validationNode = rows.find(row => row.id === validation?.id);
   const detailNode = rows.find(row => row.id === details?.id);
-  const currentPage = Math.min(page, Math.max(1, Math.ceil(visible.length / 20)));
-  const rowClassName = useFocusRow(focus, loaded && (!focus || visible.slice((currentPage - 1) * 20, currentPage * 20).some(row => row.id === focus)));
+  const currentPage = Math.min(page, Math.max(1, Math.ceil(visible.length / pageSize)));
+  const rowClassName = useFocusRow(focus, loaded && (!focus || visible.slice((currentPage - 1) * pageSize, currentPage * pageSize).some(row => row.id === focus)));
 
   return <div className="servers-page">
     <PageHeader title={pageTitles.servers} description="管理入口服务器、安装状态与实时资源。每 10 秒自动刷新。">
@@ -200,20 +188,21 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
       <FilterField label="服务器组" htmlFor="servers-group"><Select id="servers-group" showSearch optionFilterProp="label" value={groupID} onChange={value => { setGroupID(value); setPage(1); }} options={[{ value: 'all', label: '全部分组' }, { value: 'ungrouped', label: '未分组' }, ...groups.map(group => ({ value: group.id, label: group.name }))]} /></FilterField>
       <Button onClick={() => { setQuery(''); setFilter('all'); setGroupID('all'); setPage(1); }}>重置</Button>
     </FilterCard>
-    <TableCard<ServerRow> title={`服务器列表 · ${visible.length} / ${rows.length}`} actions={<>
-      {selectedIDs.length > 0 && <><span className="servers-selection">已选 <span className="num">{selectedIDs.length}</span> 台</span>
+    <p className="servers-count">显示 <span className="num">{visible.length} / {rows.length}</span> 条</p>
+    <TableCard<ServerRow> actions={selectedIDs.length > 0 || order.restore ? <>
+      {selectedIDs.length > 0 && <><span className="servers-selection">已选 <b className="num">{selectedIDs.length}</b> 台</span>
         <Button size="small" loading={batching === true} disabled={batching !== undefined} onClick={() => void batchMaintenance(true)}>维护 10 分钟</Button>
         <Button size="small" loading={batching === false} disabled={batching !== undefined} onClick={() => void batchMaintenance(false)}>结束维护</Button>
         <Button size="small" type="text" onClick={() => setSelectedIDs([])}>取消选择</Button></>}
-      <Dropdown trigger={['click']} menu={{ selectedKeys: extraSort ? [extraSort] : [], items: extraSorts.map(sort => ({ key: sort.value, label: sort.label })), onClick: ({ key }) => { order.onChange(undefined, undefined, {}); setExtraSort(key); setPage(1); } }}><Button size="small" icon={<SortAscendingOutlined />}>{activeExtraSort?.label || '更多排序'}</Button></Dropdown>
-      {activeExtraSort ? <Button size="small" onClick={() => setExtraSort(undefined)}>恢复自定义顺序</Button> : order.restore}
-    </>} rowKey="id" dataSource={visible} loading={!loaded && !error}
-      rowSelection={{ fixed: true, columnWidth: 30, selectedRowKeys: selectedIDs, onChange: keys => setSelectedIDs(keys.map(String)) }} onChange={(pagination, filters, sorter, extra) => { if (extra.action === 'sort') { setExtraSort(undefined); setPage(1); } order.onChange(pagination, filters, sorter); }} onRow={order.onRow}
-      rowClassName={row => `${rowClassName(row.id)} ${order.rowClass(row.id)}`}
-      pagination={{ current: currentPage, pageSize: 20, showSizeChanger: false, onChange: setPage }} scroll={{ x: 1080 }}
+      {order.restore}
+    </> : undefined} rowKey="id" dataSource={visible} loading={!loaded && !error}
+      rowSelection={{ fixed: true, columnWidth: 30, selectedRowKeys: selectedIDs, preserveSelectedRowKeys: true, onChange: keys => setSelectedIDs(keys.map(String)) }}
+      onChange={(pagination, tableFilters, sorter, extra) => { setPage(extra.action === 'sort' || pagination.pageSize !== pageSize ? 1 : pagination.current ?? 1); setPageSize(pagination.pageSize ?? 20); order.onChange(pagination, tableFilters, sorter); }} onRow={order.onRow}
+      rowClassName={row => `servers-record ${rowClassName(row.id)} ${order.rowClass(row.id)}`}
+      pagination={{ current: currentPage, pageSize, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100] }} scroll={{ x: 1080 }}
       locale={{ emptyText: rows.length ? '没有符合条件的服务器' : '暂无服务器。添加服务器后，将安装命令复制到目标机器执行。' }} columns={[
-        { ...order.handle, width: 28 },
-        { title: 'ID', fixed: 'left', width: 88, ...order.sorted('id'), sorter: byText(row => row.id), render: (_, row) => <Tooltip title={row.id}><Button size="small" type="text" className="servers-id mono" aria-label={`查看 ${row.name} 的完整 ID`} onClick={() => action(row, 'details')}>{row.id.slice(0, 8)}</Button></Tooltip> },
+        { ...order.handle, width: 24, className: 'servers-drag-cell', onCell: () => ({ tabIndex: 0, 'aria-label': '拖动调整顺序' }) },
+        { title: 'ID', key: 'sequence', fixed: 'left', width: 56, render: (_, _row, index) => <span className="servers-id mono">{(currentPage - 1) * pageSize + index + 1}</span> },
         { title: '显示名称 / 入口地址', fixed: 'left', width: 146, ...order.sorted('name'), sorter: byText(row => row.name), render: (_, row) => <>
           <Button type="link" className="servers-name" onClick={() => action(row, 'details')}>{row.name}</Button>
           <span className="cell-sub mono">{row.managed_record?.hostname || row.confirmed_ipv4 || row.public_ipv4 || '尚未查询到 IP'}</span>
@@ -236,7 +225,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
           <span className="mono">{row.software_version || '尚未接入'}</span>
           <Button type="link" size="small" className="servers-version" onClick={() => action(row, 'upgrade')}>{row.upgrade ? '查看升级进度' : row.version_mismatch ? '有版本差异' : '版本与升级'}</Button>
         </> },
-        { title: '操作', key: 'actions', fixed: 'right', width: 104, align: 'right', render: (_, row) => <div className="row-actions">
+        { title: '操作', key: 'actions', fixed: 'right', width: 120, align: 'right', render: (_, row) => <div className="row-actions servers-row-actions">
           <Button size="small" type="link" onClick={() => edit(row)}>编辑</Button>
           <Dropdown trigger={['click']} placement="bottomRight" menu={{ onClick: ({ key }) => action(row, key), items: [
             { key: 'details', label: '服务器详情' }, { key: 'install', label: '安装脚本' }, { key: 'upgrade', label: '升级与版本' },
@@ -245,7 +234,7 @@ export function Nodes({ focus, onSessionExpired }: { focus?: string; onSessionEx
             { key: 'self-check', label: '自检与被墙认定' }, { key: 'probe', label: '探针指标详情' }, { key: 'region', label: '地区与检测点' },
             { key: 'rotation', label: '换 IP / 自动轮换' }, { key: 'record', label: '受管记录与地址' }, { key: 'ports', label: '监听端口设置' },
             { type: 'divider' }, { key: 'revoke', label: '吊销凭据', danger: true }, { key: 'delete', label: '删除服务器', danger: true },
-          ] }}><Button size="small" type="text" icon={<MoreOutlined />} aria-label={`${row.name} 的更多操作`} /></Dropdown>
+          ] }}><Button size="small" type="link" aria-label={`${row.name} 的更多操作`}>更多 <DownOutlined /></Button></Dropdown>
         </div> },
       ]} />
     {selfCheckSettings && <SelfCheckSettings onClose={() => setSelfCheckSettings(false)} onError={failed} />}

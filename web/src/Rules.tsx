@@ -191,7 +191,7 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
       rowSelection={{ fixed: true, columnWidth: 30, selectedRowKeys: selectedIDs, preserveSelectedRowKeys: true, onChange: keys => setSelectedIDs(keys.map(String)), getCheckboxProps: () => ({ disabled: mutating }) }}
       onChange={(pagination, tableFilters, sorter) => { setPage(pagination.current ?? 1); setPageSize(pagination.pageSize ?? 20); order.onChange(pagination, tableFilters, sorter); }}
       onRow={order.onRow} classNames={{ header: { row: 'ports-table-header' } }} rowClassName={row => `ports-record ${order.rowClass(row.id)}`} loading={!loaded && !error}
-      pagination={{ current: Math.max(1, Math.min(page, Math.ceil(visibleRows.length / pageSize))), pageSize, showSizeChanger: true, pageSizeOptions: [20, 50, 100] }}
+      pagination={{ current: Math.max(1, Math.min(page, Math.ceil(visibleRows.length / pageSize))), pageSize, showSizeChanger: true, pageSizeOptions: [10, 20, 50, 100] }}
       scroll={{ x: 968 }} locale={{ emptyText: filtered || focus ? '没有符合条件的端口。' : '暂无端口，请先接入服务器，再添加端口转发。' }}
       expandable={{ showExpandColumn: false, expandedRowKeys: expandedIDs, onExpandedRowsChange: keys => setExpandedIDs([...keys]), expandedRowRender: row => <PortSyncDetails rule={row} entryName={entryName(row)} chains={chains} nodes={nodes} /> }} columns={[
         { ...order.handle, width: 24, className: 'ports-drag-cell', onCell: () => ({ tabIndex: 0, 'aria-label': '拖动调整顺序' }) },

@@ -1,7 +1,13 @@
 .servers-page .filter-field:first-child > .ant-input-affix-wrapper { width: 240px; }
-.servers-page .table-card-actions { align-items: center; }
-.servers-selection { color: var(--text-2); font-size: 13px; margin-right: 4px; }
-.servers-page .servers-id { padding-inline: 0; color: var(--text-3); }
+.servers-page .table-card-actions { align-items: center; width: 100%; }
+.servers-count { margin: 0 0 var(--space-xs); color: var(--text-3); font-size: var(--font-description); }
+.servers-selection { margin-right: auto; color: var(--text-2); font-size: var(--font-description); }
+.servers-selection b { color: var(--accent); font-weight: 600; }
+.servers-page .servers-drag-cell { padding-inline: 0; }
+.servers-page .servers-drag-cell .drag-handle { padding: 3px; opacity: 0; }
+.servers-page .servers-record:hover .drag-handle,
+.servers-page .servers-drag-cell:focus-within .drag-handle { opacity: 1; }
+.servers-page .servers-id { color: var(--text-3); white-space: nowrap; }
 .servers-page .servers-name { display: block; height: auto; max-width: 100%; padding: 0; white-space: normal; text-align: left; overflow-wrap: anywhere; font-weight: 600; color: var(--text); }
 .servers-page .servers-name:hover { color: var(--accent); }
 .servers-page .cell-sub { overflow-wrap: anywhere; }
@@ -13,7 +19,8 @@
 .servers-resources .usage { gap: 6px; }
 .servers-resources .usage-value { font-size: 12px; }
 .servers-page .servers-version { display: block; height: auto; padding: 0; font-size: 12px; }
-.servers-page .row-actions .ant-btn-link { color: var(--accent); }
+.servers-row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 0; white-space: nowrap; }
+.servers-page .servers-row-actions .ant-btn-link { padding-inline: 5px; color: var(--accent); white-space: nowrap; }
 .servers-modal .ant-modal-body { padding-top: 12px; }
 .servers-modal .ant-form-item-extra { margin-top: 5px; color: var(--text-3); font-size: 12px; }
 .servers-modal .ant-input-number { width: 100%; }
