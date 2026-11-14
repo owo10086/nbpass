@@ -65,7 +65,7 @@ export function AppShell({ page, counts, busy, onLogout, children }: {
 
   return <div className="shell">
     {!mobile && <aside className="sidebar">{navigation}</aside>}
-    <Drawer title="主导航" placement="left" open={mobile && drawerOpen} onClose={() => setDrawerOpen(false)} size="min(280px, 88vw)" className="navigation-drawer" styles={{ body: { padding: 0 } }}>
+    <Drawer title="主导航" placement="left" open={mobile && drawerOpen} onClose={() => setDrawerOpen(false)} mask={{ closable: true }} size="min(280px, 88vw)" className="navigation-drawer" styles={{ body: { padding: 0 } }}>
       {mobile && navigation}
     </Drawer>
     <div className="main">

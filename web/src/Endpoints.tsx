@@ -121,7 +121,7 @@ export function Endpoints({ focus, onSessionExpired }: { focus?: string; onSessi
     <EndpointHealth exits={exits} nodes={nodes} onSessionExpired={onSessionExpired} />
     {rowAction?.kind === 'rotation' && <TunnelRotation nodeID={rowAction.nodeID} open onClose={() => setRowAction(undefined)} onSessionExpired={onSessionExpired} onChanged={() => void load()} />}
     {rowAction?.kind === 'blocked' && <ExitBlocked nodeID={rowAction.nodeID} open onClose={() => setRowAction(undefined)} onSessionExpired={onSessionExpired} onChanged={() => void load()} />}
-    <Modal title={editing ? '编辑转发端点' : '添加转发端点'} open={editing !== undefined} onCancel={close} footer={null} width={760} closable={!saving} maskClosable={!saving} keyboard={!saving} forceRender className="endpoint-modal">
+    <Modal title={editing ? '编辑转发端点' : '添加转发端点'} open={editing !== undefined} onCancel={close} footer={null} width={760} closable={!saving} keyboard={!saving} forceRender className="endpoint-modal">
       <Form form={form} layout="vertical" onFinish={save} disabled={saving} requiredMark={false}>
         {saveError && <Alert title={saveError} type="error" showIcon className="message" />}
         <FormSection title="端点配置" icon={<CloudServerOutlined />}>

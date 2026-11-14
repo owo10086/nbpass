@@ -74,6 +74,7 @@
 - 页面按「页头 → 筛选卡片 → 表格卡片」排列；批量操作放入 `TableCard.actions`，配合 AntD `rowSelection`；分页保持右下角。
 - 橙色用于主操作、链接、当前导航与普通控件的聚焦环；导航聚焦使用灰色描边。语义色只用于对应状态或分类。业务静态卡片无阴影，登录卡片和浮层使用统一 `shadow-popup`。
 - 表单使用 AntD Modal / Drawer + Form，区块复用 `FormSection`；字段说明放入 `Form.Item extra`，用次级文字。
+- 弹窗与业务抽屉不可点击遮罩关闭，只能通过 ×、取消/完成按钮和 Esc 关闭；保存中禁止关闭；移动端主导航抽屉除外。
 - 表格头为 `bg-head`、行底为 `bg-elev`、悬停为 `bg-hover`；行定位使用 `accent-soft`，保持约 2.4 秒后移除。
 - 既有 AntD 状态 Tag 通过兼容 CSS 转为圆点 + 文字；新增状态展示使用 `StatusDot`。分类标签使用 `ColorTag`，避免被兼容样式影响。
 - 智能 DNS、延迟监控总览使用 `PlannedPage`。转发链管理使用实际 `Chains` 页面；转发端点与端点组分别使用 `Endpoints` 和 `ExitGroups`，保留原路由兼容跳转。
