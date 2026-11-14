@@ -1,4 +1,4 @@
-Status: ready-for-agent
+Status: resolved
 Blocked by: none
 
 # 01 全局禁止点遮罩关闭弹窗与业务抽屉
@@ -18,3 +18,5 @@ Blocked by: none
 - `cd web && npm run build` 通过；`npm test` 与 `web/src/*.test.mjs`、`web/*.test.mjs` 现有测试通过。
 
 ## Comments
+
+- 2026-11-14：由 Codex 在提交 60dabb6 实现；build、npm test 与全部 .test.mjs 通过；Codex 只读审查（规格符合度、代码规范）无问题。
