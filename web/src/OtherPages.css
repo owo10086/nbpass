@@ -9,7 +9,7 @@
 .zf-other-filters .ant-form-item-label > label { color: var(--text-2); }
 .zf-other-filters .ant-select { width: 160px; }
 .zf-other-filters .ant-input { max-width: 220px; }
-.zf-other-filters .ant-input[type="datetime-local"] { color-scheme: dark; color: var(--text); background: var(--bg-elev); border-color: var(--line-strong); }
+.zf-other-filters .ant-input[type="datetime-local"] { color-scheme: var(--color-scheme); color: var(--text); background: var(--bg-elev); border-color: var(--line-strong); }
 .zf-other-filters .ant-input[type="datetime-local"]:hover { border-color: var(--accent-hover); }
 .zf-other-filters .ant-input[type="datetime-local"]:focus { border-color: var(--accent); }
 .zf-other-table-footer { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-sm); flex-wrap: wrap; }

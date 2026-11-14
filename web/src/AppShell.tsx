@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { Breadcrumb, Button, Drawer, Dropdown } from 'antd';
 import { DashboardOutlined, DownOutlined, MenuOutlined, SettingOutlined, SwapOutlined, AlertOutlined, UserOutlined } from '@ant-design/icons';
 import { pageTitles, type Page } from './route';
+import { ThemeSwitcher } from './ThemeSwitcher';
 
 type Counts = { nodes: number; entry: number; exit: number; rules: number; alerts: number };
 const groups: { title: string; icon: ReactNode; pages: Page[] }[] = [
@@ -72,6 +73,8 @@ export function AppShell({ page, counts, busy, onLogout, children }: {
       <header className="topbar">
         {mobile && <Button type="text" icon={<MenuOutlined />} aria-label="打开导航" onClick={() => setDrawerOpen(true)} />}
         <Breadcrumb items={[...(group ? [{ title: group.title }] : []), { title: pageTitles[page] }]} />
+        <div className="topbar-actions">
+        <ThemeSwitcher />
         <Dropdown trigger={['click']} placement="bottomRight" menu={{ items: [
           { key: 'note', type: 'group', label: '会话空闲 24 小时或登录满 7 天后需重新登录' },
           { key: 'logout', label: '退出登录', onClick: () => onLogout() },
@@ -79,6 +82,7 @@ export function AppShell({ page, counts, busy, onLogout, children }: {
         ] }}>
           <button type="button" className="account-button" aria-label="账户菜单" disabled={busy}><span className="avatar"><UserOutlined /></span><span className="account-label">管理员</span><DownOutlined /></button>
         </Dropdown>
+        </div>
       </header>
       <main className="page" key={page}>{children}</main>
     </div>

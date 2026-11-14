@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useSyncExternalStore } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Alert, App as AntApp, Button, ConfigProvider, Form, Input, Spin } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
@@ -22,7 +22,8 @@ import { useOperations } from './Operations';
 import { useRoute } from './route';
 import { AppShell } from './AppShell';
 import { PlannedPage } from './PlannedPage';
-import { applyTheme, themeConfig } from './theme';
+import { applyTheme, themeConfigs } from './theme';
+import { ThemeSwitcher, themePreferenceStore } from './ThemeSwitcher';
 import { LockOutlined } from '@ant-design/icons';
 import { PageHeader } from './PageHeader';
 import { FormSection } from './FormSection';
@@ -112,6 +113,7 @@ function App() {
   const setup = status.setup_required;
   return (
     <main className="auth-page zf-auth-page">
+      <div className="auth-theme-switcher"><ThemeSwitcher /></div>
       <div className="auth-box">
         <div className="auth-brand"><span className="brand-mark">n</span>nbpass</div>
         <section className="auth-card">
@@ -134,8 +136,14 @@ function App() {
   );
 }
 
-applyTheme();
+function ThemedApp() {
+  const { theme } = useSyncExternalStore(themePreferenceStore.subscribe, themePreferenceStore.getSnapshot);
+  useLayoutEffect(() => { applyTheme(theme); }, [theme]);
+  return <ConfigProvider locale={zhCN} theme={themeConfigs[theme]} button={{ autoInsertSpace: false }} modal={{ mask: { closable: false } }} drawer={{ mask: { closable: false } }}><AntApp><App /></AntApp></ConfigProvider>;
+}
+
+applyTheme(themePreferenceStore.getSnapshot().theme);
 
 createRoot(document.getElementById('root')!).render(
-  <React.StrictMode><ConfigProvider locale={zhCN} theme={themeConfig} button={{ autoInsertSpace: false }} modal={{ mask: { closable: false } }} drawer={{ mask: { closable: false } }}><AntApp><App /></AntApp></ConfigProvider></React.StrictMode>,
+  <React.StrictMode><ThemedApp /></React.StrictMode>,
 );

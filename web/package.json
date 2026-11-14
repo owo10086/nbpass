@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
-    "test": "node --experimental-strip-types --test route.test.mjs"
+    "test": "node --experimental-strip-types --test route.test.mjs server-groups.test.mjs src/*.test.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "6.3.4",
