@@ -112,7 +112,7 @@ export function ExitGroups({ focus, onSessionExpired }: { focus?: string; onSess
       </div> },
     ]} />
     <p className="footnote">可拖动列表手柄调整端点组的显示顺序；跨页排序时可把每页条数调大。组内第一项为主端点，其余按顺序备用；故障恢复后连续探测成功 60 秒才重新接新连接。</p>
-    <Modal title={editing ? '编辑端点组' : '创建端点组'} open={editing !== undefined} onCancel={close} footer={null} width={1060} closable={!saving} maskClosable={!saving} keyboard={!saving} forceRender className="endpoint-modal">
+    <Modal title={editing ? '编辑端点组' : '创建端点组'} open={editing !== undefined} onCancel={close} footer={null} width={1060} closable={!saving} keyboard={!saving} forceRender className="endpoint-modal">
       <Form form={form} layout="vertical" onFinish={save} disabled={saving} requiredMark={false}>
         {saveError && <Alert title={saveError} type="error" showIcon className="message" />}
         <FormSection title="基本信息" icon={<ClusterOutlined />}>

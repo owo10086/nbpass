@@ -38,7 +38,7 @@ export function ExitBlocked({ nodeID, open, onClose, onSessionExpired, onChanged
     catch (e) { failed(e); }
     finally { setSaving(false); }
   }
-  return <Modal className="endpoint-modal" title="端点被墙处理与地址进度" open={open} onCancel={() => { onClose(); onChanged(); }} footer={null} width={860} closable={!saving} maskClosable={!saving} keyboard={!saving}>
+  return <Modal className="endpoint-modal" title="端点被墙处理与地址进度" open={open} onCancel={() => { onClose(); onChanged(); }} footer={null} width={860} closable={!saving} keyboard={!saving}>
       {error && <Alert type="error" title={error} showIcon className="message" />}
       <FormSection title="被墙处理" icon={<SafetyOutlined />} description="开启后，端点被认定被墙时申请换 IP。请先在服务器管理配置换 IP 接口、开启自测和服务器自动换 IP 总授权。端点与服务器组共用该服务器的额度、冷却和暂停状态。">
       {!state && !error && <Spin />}

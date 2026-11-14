@@ -137,5 +137,5 @@ function App() {
 applyTheme();
 
 createRoot(document.getElementById('root')!).render(
-  <React.StrictMode><ConfigProvider locale={zhCN} theme={themeConfig} button={{ autoInsertSpace: false }}><AntApp><App /></AntApp></ConfigProvider></React.StrictMode>,
+  <React.StrictMode><ConfigProvider locale={zhCN} theme={themeConfig} button={{ autoInsertSpace: false }} modal={{ mask: { closable: false } }} drawer={{ mask: { closable: false } }}><AntApp><App /></AntApp></ConfigProvider></React.StrictMode>,
 );

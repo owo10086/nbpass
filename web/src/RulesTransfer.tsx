@@ -48,7 +48,7 @@ export function RulesTransfer({ selectedIDs, onChanged, onSessionExpired }: { se
     <Button icon={<DownloadOutlined />} loading={busy && !open} disabled={busy} onClick={() => void download()}>{selectedIDs.length ? `导出所选 ${selectedIDs.length} 条` : '导出全部 JSON'}</Button>
     <Button icon={<ImportOutlined />} onClick={() => { resetPreview(); setSource(''); setOpen(true); }}>导入 JSON</Button>
     {!open && error && <Typography.Text type="danger">{error}</Typography.Text>}
-    <Modal className="ports-transfer-modal" title="批量导入端口转发" open={open} width={850} onCancel={() => { if (!busy) setOpen(false); }} closable={!busy} maskClosable={!busy} keyboard={!busy} footer={<Space wrap>
+    <Modal className="ports-transfer-modal" title="批量导入端口转发" open={open} width={850} onCancel={() => { if (!busy) setOpen(false); }} closable={!busy} keyboard={!busy} footer={<Space wrap>
       <Button disabled={busy} onClick={() => setOpen(false)}>关闭</Button>
       <Button loading={busy} disabled={!source || imported} onClick={() => void submit(true)}>整体预检</Button>
       <Button type="primary" loading={busy} disabled={!result?.valid || imported} onClick={() => void submit(false)}>确认{mode === 'create' ? '新增' : '覆盖'}全部端口</Button>
