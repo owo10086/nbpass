@@ -47,7 +47,7 @@ export function TunnelRotation({ nodeID, open, onClose, onSessionExpired, onChan
     } finally { setSaving(false); }
   }
   const active = !state || (state.phase !== 'idle' && state.phase !== 'complete');
-  return <Modal className="endpoint-modal" title="端点证书与转发凭据轮换" open={open} onCancel={() => { onClose(); onChanged(); }} footer={null} closable={!saving} maskClosable={!saving} keyboard={!saving} width={720}>
+  return <Modal className="endpoint-modal" title="端点证书与转发凭据轮换" open={open} onCancel={() => { onClose(); onChanged(); }} footer={null} closable={!saving} keyboard={!saving} width={720}>
       {error && <Alert type="error" title={error} showIcon className="message" />}
       <FormSection title="轮换进度" icon={<SafetyCertificateOutlined />} description="轮换先准备端点，再等待所有相关入口确认，随后撤下旧材料。已有业务连接继续转发。满 7 天仍未确认时保留旧材料并提示。">
       {!state && !error && <Spin />}

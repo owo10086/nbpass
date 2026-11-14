@@ -203,7 +203,7 @@ export function Chains({ focus, onSessionExpired }: { focus?: string; onSessionE
       { title: '操作', key: 'actions', width: 120, fixed: 'right', align: 'right', render: (_, row) => <div className="row-actions"><Button type="text" size="small" onClick={() => edit(row)}>编辑</Button><Button type="text" size="small" danger onClick={() => { setDeleteError(''); setDeleting(row); }}>删除</Button></div> },
     ]} />
     <p className="footnote">地址为该候选服务器配置的连接地址，端口为有效拨号端口；主备顺序不表示当前业务选中了该候选。每 5 秒读取观测，采样满 10 秒或服务端标记非新鲜即显示历史。各条证据按端口、来源和配置分别展示；控制在线和本边可达均不能证明完整业务或最终目标可达。</p>
-    <Modal title={editing ? '编辑转发链' : '创建转发链'} open={editing !== undefined} onCancel={close} footer={null} width={820} closable={!saving} maskClosable={!saving} keyboard={!saving} destroyOnHidden>
+    <Modal title={editing ? '编辑转发链' : '创建转发链'} open={editing !== undefined} onCancel={close} footer={null} width={820} closable={!saving} keyboard={!saving} destroyOnHidden>
       <Form form={form} layout="vertical" onFinish={save} disabled={saving} requiredMark={false}>
         {saveError && <Alert title={saveError} type="error" showIcon className="message" />}
         {editing && <Alert type="warning" showIcon title={`此链当前被 ${rows.find(row => row.id === editing.id)?.rule_count ?? editing.rule_count} 个端口引用。保存名称或路径顺序会影响所有引用端口。`} description="链 ID 保持不变；服务器会校验全部受影响路径。保存失败时保留当前输入，请根据具体错误修正。" className="message" />}
@@ -224,7 +224,7 @@ export function Chains({ focus, onSessionExpired }: { focus?: string; onSessionE
         <div className="chain-form-footer"><Button onClick={close}>取消</Button><Button type="primary" htmlType="submit" loading={saving}>保存转发链</Button></div>
       </Form>
     </Modal>
-    <Modal title="删除转发链？" open={!!deleting} okText="删除转发链" okButtonProps={{ danger: true }} confirmLoading={removing} closable={!removing} maskClosable={!removing} keyboard={!removing} cancelButtonProps={{ disabled: removing }} onCancel={() => setDeleting(undefined)} onOk={() => void remove()}>
+    <Modal title="删除转发链？" open={!!deleting} okText="删除转发链" okButtonProps={{ danger: true }} confirmLoading={removing} closable={!removing} keyboard={!removing} cancelButtonProps={{ disabled: removing }} onCancel={() => setDeleting(undefined)} onOk={() => void remove()}>
       {deleteError && <Alert title={deleteError} type="error" showIcon className="message" />}
       <p className="chain-name">{deleting?.name}</p><p>当前引用端口数：{deleting ? rows.find(row => row.id === deleting.id)?.rule_count ?? deleting.rule_count : 0}。被引用的链不能删除，请先移除所有端口引用；停用端口仍保留引用。</p>
     </Modal>

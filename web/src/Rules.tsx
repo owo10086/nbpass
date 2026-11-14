@@ -225,7 +225,7 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
       <p>流量仅计入口侧业务字节，合计显示，悬停查看上下行；上行为用户到目标，下行为目标到用户。离线或样本过期时连接数显示「缺测」。清除排序、筛选和关联定位后，悬停行左侧出现拖动手柄，可拖动保存自定义顺序。</p>
     </div>
 
-    <Modal className="ports-editor" title={editing ? '编辑端口转发' : '添加端口转发'} open={editing !== undefined} width={760} onCancel={closeEditor} closable={!saving} maskClosable={!saving} keyboard={!saving} forceRender
+    <Modal className="ports-editor" title={editing ? '编辑端口转发' : '添加端口转发'} open={editing !== undefined} width={760} onCancel={closeEditor} closable={!saving} keyboard={!saving} forceRender
       footer={<><Button disabled={saving} onClick={closeEditor}>取消</Button><Button type="primary" loading={saving} onClick={() => form.submit()}>保存端口</Button></>}>
       <Form form={form} layout="horizontal" labelCol={{ flex: '120px' }} wrapperCol={{ flex: 1 }} labelWrap colon={false} onFinish={save} disabled={saving}>
         {formError && <Alert title={formError} type="error" showIcon className="message" />}

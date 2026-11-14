@@ -168,7 +168,7 @@ export function EntryGroups({ focus, onSessionExpired }: { focus?: string; onSes
       ]} />
     {selected && <EntryDNSStatus key={selected.id} group={selected} nodes={nodes} onRefresh={load} loading={loading}
       observing={observing.includes(selected.id)} onObserve={enabled => observe(selected, enabled)} onClose={() => { setStatusID(undefined); void load(); }} onSessionExpired={onSessionExpired} />}
-    <Modal title={editing ? '编辑服务器组' : '创建服务器组'} className="sg-modal" open={editing !== undefined} width={1000} onCancel={closeEditor} footer={null} forceRender closable={!saving} maskClosable={!saving} keyboard={!saving}>
+    <Modal title={editing ? '编辑服务器组' : '创建服务器组'} className="sg-modal" open={editing !== undefined} width={1000} onCancel={closeEditor} footer={null} forceRender closable={!saving} keyboard={!saving}>
       <Form form={form} layout="vertical" onFinish={save} disabled={saving}>
         {formError && <Alert title={formError} type="error" showIcon className="message" />}
         <FormSection title="基本信息" icon={<InfoCircleOutlined />}>
