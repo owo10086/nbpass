@@ -159,7 +159,7 @@ export function Rules({ focus, onSessionExpired }: { focus?: string; onSessionEx
 
   return <div className="ports-page">
     <PageHeader title={pageTitles.ports} description="管理线路、服务端口与转发目标；运行数据每 5 秒刷新。">
-      <RulesTransfer selectedIDs={selectedIDs} onChanged={load} onSessionExpired={onSessionExpired} />
+      <RulesTransfer selectedIDs={selectedIDs} nodes={nodes} groups={groups} exitGroups={exitGroups} chains={chains} onChanged={load} onSessionExpired={onSessionExpired} />
       <Dropdown trigger={['click']} disabled={!selectedIDs.length || mutating} menu={{
         items: [
           { key: 'enable', label: '批量启用', icon: <PlayCircleOutlined /> },
