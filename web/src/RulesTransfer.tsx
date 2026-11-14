@@ -67,13 +67,14 @@ export function RulesTransfer({ selectedIDs, nodes, groups, exitGroups, chains, 
       showResult(response);
       if (!preflight) { setImported(true); await onChanged(); }
     } catch (e) {
+      // 逐条结果已说明失败原因，不再重复显示整体错误。
       if (e instanceof APIError && Array.isArray(e.details.results)) showResult(e.details as ImportResult);
-      failed(e);
+      else failed(e);
     } finally { setBusy(false); }
   }
   return <>
     <Button icon={<DownloadOutlined />} loading={busy && !open} disabled={busy} onClick={() => void download()}>{selectedIDs.length ? `导出所选 ${selectedIDs.length} 条` : '导出全部 JSON'}</Button>
-    <Button icon={<ImportOutlined />} disabled={busy} onClick={() => { resetPreview(); setSource(''); setTextSource(''); setTab('json'); setShared({ line: '', mode: 'direct', allow_private: false }); setOpen(true); }}>导入 JSON</Button>
+    <Button icon={<ImportOutlined />} disabled={busy} onClick={() => { resetPreview(); setSource(''); setTextSource(''); setTab('json'); setShared({ line: '', mode: 'direct', allow_private: false }); setOpen(true); }}>批量导入</Button>
     {!open && error && <Typography.Text type="danger">{error}</Typography.Text>}
     <Modal className="ports-transfer-modal" title="批量导入端口转发" open={open} width={850} onCancel={() => { if (!busy) setOpen(false); }} closable={!busy} maskClosable={!busy} keyboard={!busy} footer={<Space wrap>
       <Button disabled={busy} onClick={() => setOpen(false)}>关闭</Button>
